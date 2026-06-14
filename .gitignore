@@ -3,11 +3,22 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Model checkpoints (root level only)
-/checkpoints/
+# Model checkpoints (root level only, keep directory structure)
+/checkpoints/*
+!/checkpoints/.gitkeep
+!/checkpoints/runs/
+/checkpoints/runs/*
+!/checkpoints/runs/.gitkeep
 
-# Training data
-data/
+# Training data (keep directory structure)
+data/*
+!data/.gitkeep
+!data/raw/
+data/raw/*
+!data/raw/.gitkeep
+!data/splits/
+data/splits/*
+!data/splits/.gitkeep
 
 # Images (training curves, etc.)
 images/
@@ -15,6 +26,8 @@ images/
 # Temporary files
 temp_*
 infer_result.txt
+预告.txt
+1781464722066.jpg
 
 # Development plans (internal, not for public repo)
 Xfind-Mini-大模型开发计划-v1.1.md
