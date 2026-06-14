@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Model checkpoints (root level only)
+/checkpoints/
+
+# Training data
+data/
+
+# Images (training curves, etc.)
+images/
+
+# Temporary files
+temp_*
+infer_result.txt
+
+# Development plans (internal, not for public repo)
+Xfind-Mini-大模型开发计划-v1.1.md
+XFIND-0.6B-开发计划.md
+
+# Debugging log
+排坑记录.md
+
+# Research notes
+STAG-LR-单参数学习率调度器设计.md
+第6章 大语言模型.md
+
+# Test tokenizer (only the test files, keep production bpe_32k)
+tokenizer/checkpoints/test_bpe.model
+tokenizer/checkpoints/test_bpe.vocab
+
+# Internal debug tools
+tools/_read_tb.py
+tools/check_ckpt.py
+tools/make_small_data.py
+tools/quick_run.py
