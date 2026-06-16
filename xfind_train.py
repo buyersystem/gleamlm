@@ -63,7 +63,7 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, device
         target_ids = target_ids.to(device)
 
         # AMP 前向
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast(device_type=device.type):
             logits, _ = model(input_ids)
             loss = criterion(
                 logits.view(-1, logits.size(-1)),
@@ -104,14 +104,11 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, device
 
 
 @torch.no_grad()
-def evaluate(model, val_loader, device, pad_token_id=0):
-    """验证集评估，返回 loss 和 PPL"""
+def evaluate(model, val_loader, eval_criterion, device, pad_token_id=0, world_size=1):
+    """验证集评估，返回 loss 和 PPL。DDP 下自动汇总所有 rank 的 loss"""
     model.eval()
     total_loss = 0
-    num_batches = 0
-
-    # 验证用标准 CE（无 label_smoothing）确保 PPL 准确
-    eval_criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
+    total_tokens = 0
 
     for input_ids, target_ids in val_loader:
         input_ids = input_ids.to(device)
@@ -124,9 +121,18 @@ def evaluate(model, val_loader, device, pad_token_id=0):
         )
 
         total_loss += loss.item()
-        num_batches += 1
+        total_tokens += (target_ids != pad_token_id).sum().item()
 
-    avg_loss = total_loss / max(1, num_batches)
+    # DDP: 汇总所有 rank 的 loss 和 token 数
+    if world_size > 1 and dist.is_initialized():
+        loss_tensor = torch.tensor(total_loss, device=device)
+        tokens_tensor = torch.tensor(total_tokens, device=device)
+        dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+        dist.all_reduce(tokens_tensor, op=dist.ReduceOp.SUM)
+        total_loss = loss_tensor.item()
+        total_tokens = int(tokens_tensor.item())
+
+    avg_loss = total_loss / max(1, total_tokens)
     ppl = math.exp(avg_loss)
 
     return avg_loss, ppl
@@ -191,9 +197,11 @@ def main():
     # DataLoader
     if args.world_size > 1:
         train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size, rank=args.rank)
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, collate_fn=collate_fn)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler,
+                                  collate_fn=collate_fn, pin_memory=True)
         val_sampler = DistributedSampler(val_dataset, num_replicas=args.world_size, rank=args.rank)
-        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler, collate_fn=collate_fn)
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler,
+                                collate_fn=collate_fn, pin_memory=True)
     else:
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
                                    collate_fn=collate_fn, num_workers=0, pin_memory=True)
@@ -228,6 +236,8 @@ def main():
         label_smoothing=args.label_smoothing
     )
 
+    eval_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, reduction='sum')
+
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
@@ -236,15 +246,15 @@ def main():
         weight_decay=args.weight_decay
     )
 
-    # 总步数 = epochs * batches_per_epoch / accumulate_grad
-    total_steps = len(train_loader) * args.epochs // args.accumulate_grad
+    # 总步数 = epochs * ceil(batches_per_epoch / accumulate_grad)
+    total_steps = math.ceil(len(train_loader) / args.accumulate_grad) * args.epochs
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
         lambda step: get_lr_cosine(step, total_steps, args.warmup_ratio)
     )
 
     # AMP 梯度缩放器
-    scaler = torch.amp.GradScaler('cuda')
+    scaler = torch.amp.GradScaler(device.type)
 
     start_epoch = 0
     global_step = 0
@@ -295,13 +305,13 @@ def main():
             epoch, args, global_step, writer, scaler
         )
 
-        # 验证
-        if args.local_rank == 0:
-            val_loss, val_ppl = evaluate(
-                model.module if args.world_size > 1 else model,
-                val_loader, device, tokenizer.pad_id
-            ) if len(val_loader) > 0 else (0.0, 1.0)
+        # 验证（所有 rank 参与，DDP 下自动汇总）
+        val_loss, val_ppl = evaluate(
+            model.module if args.world_size > 1 else model,
+            val_loader, eval_criterion, device, tokenizer.pad_id, args.world_size
+        )
 
+        if args.local_rank == 0:
             print(f"Epoch {epoch}: "
                   f"train_loss={train_loss:.4f}, "
                   f"val_loss={val_loss:.4f}, "
@@ -314,9 +324,10 @@ def main():
                 writer.add_scalar('Eval/Train_Loss', train_loss, epoch)
 
             # 保存最佳模型
-            if val_loss < best_val_loss:
+            if val_loss > 0 and val_loss < best_val_loss:
                 best_val_loss = val_loss
-                save_path = os.path.join(args.checkpoint_dir, "best_model.pt")
+
+                ckpt_path = os.path.join(args.checkpoint_dir, "best_model.pt")
                 torch.save({
                     'epoch': epoch,
                     'global_step': global_step,
@@ -328,7 +339,7 @@ def main():
                     'val_loss': val_loss,
                     'val_ppl': val_ppl,
                     'args': args,
-                }, save_path)
+                }, ckpt_path)
                 print(f"  Saved best model (val_loss={val_loss:.4f}, val_ppl={val_ppl:.2f})")
 
             # 每个 epoch 保存 checkpoint（方便对比各 epoch 生成质量）
@@ -350,7 +361,7 @@ def main():
     if args.local_rank == 0:
         print("=" * 60)
         print("Training completed!")
-        print(f"Best val_loss: {best_val_loss:.4f}")
+        print(f"Best val_loss: {best_val_loss:.4f}, best val_ppl: {math.exp(best_val_loss):.2f}")
         print(f"Model saved to: {args.checkpoint_dir}")
         print(f"View TensorBoard: tensorboard --logdir {os.path.join(args.checkpoint_dir, 'runs')}")
         print("=" * 60)

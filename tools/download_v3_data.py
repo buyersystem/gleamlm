@@ -92,8 +92,7 @@ def download_news(output_txt):
                 if extracted.endswith('.json'):
                     print("  压缩为 gz...")
                     with open(extracted, 'rb') as fin, gzip.open(archive_file, 'wb') as fout:
-                        import shutil as _shutil
-                        _shutil.copyfileobj(fin, fout)
+                        shutil.copyfileobj(fin, fout)
                     os.remove(extracted)
             else:
                 print("  zip 内未找到 JSON 文件")
@@ -254,10 +253,9 @@ def download_qa(output_txt):
                 # 如果解压出来的是 .json，gzip 一下统一格式
                 extracted = os.path.join(RAW_DIR, target)
                 if extracted.endswith('.json'):
-                    import shutil as _shutil
                     print("  压缩中...")
                     with open(extracted, 'rb') as fin, gzip.open(archive_file, 'wb') as fout:
-                        _shutil.copyfileobj(fin, fout)
+                        shutil.copyfileobj(fin, fout)
                     os.remove(extracted)
                     print(f"  压缩完成: {archive_file}")
             else:
@@ -267,8 +265,7 @@ def download_qa(output_txt):
                     if n.endswith('.json'):
                         extracted = os.path.join(RAW_DIR, n)
                         with open(extracted, 'rb') as fin, gzip.open(archive_file, 'wb') as fout:
-                            import shutil as _shutil
-                            _shutil.copyfileobj(fin, fout)
+                            shutil.copyfileobj(fin, fout)
                         os.remove(extracted)
                         break
         os.remove(zip_file)  # 清理 zip
@@ -283,17 +280,16 @@ def download_qa(output_txt):
                 'terrychanorg/webtext2019zhjsonwebtext2019zh'
             )
             # 查找 gz 或 json 文件，复制到 raw 目录
-            import shutil as _shutil
             for f in os.listdir(kaggle_path):
                 if f.endswith('.gz') or f.endswith('.json'):
                     src = os.path.join(kaggle_path, f)
                     if f.endswith('.gz'):
-                        _shutil.copy2(src, archive_file)
+                        shutil.copy2(src, archive_file)
                         print(f"  [webtext2019zh] 下载完成: {archive_file}")
                         break
                     elif f.endswith('.json') and not f.startswith('web_text_zh_test'):
                         # 非 test 文件，可能是 train，复制并 gzip
-                        _shutil.copy2(src, archive_file)
+                        shutil.copy2(src, archive_file)
                         print(f"  [webtext2019zh] 下载完成: {archive_file}")
                         break
             else:
@@ -301,7 +297,7 @@ def download_qa(output_txt):
                 for f in sorted(os.listdir(kaggle_path)):
                     if f.endswith('.json'):
                         src = os.path.join(kaggle_path, f)
-                        _shutil.copy2(src, archive_file)
+                        shutil.copy2(src, archive_file)
                         print(f"  [webtext2019zh] 下载完成 (fallback): {archive_file}")
                         break
         except Exception as e:

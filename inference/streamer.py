@@ -75,7 +75,7 @@ class TextStreamer:
                 text = self.tokenizer.decode(generated_ids, skip_special=True)
                 yield text
 
-        # 最后解码剩余 token
-        if generated_ids:
+        # 最后解码剩余 token（如果上次 yield 后还有新增）
+        if generated_ids and len(generated_ids) % 4 != 0:
             text = self.tokenizer.decode(generated_ids, skip_special=True)
             yield text

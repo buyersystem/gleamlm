@@ -11,7 +11,7 @@ files = {
     '社区问答': ('data/raw/qa_clean.txt', 0.12),
 }
 
-total_target_chars = 1.2 * 1e9 * 1.4
+total_target_chars = 1.2 * 1e9 / 1.4
 
 totals = {}
 actual_chars = 0

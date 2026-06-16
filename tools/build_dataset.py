@@ -29,7 +29,7 @@ def build_dataset(input_paths, output_dir, train_ratio=0.9, valid_ratio=0.05,
     os.makedirs(output_dir, exist_ok=True)
 
     # 字符到 token 的估算系数（中文 BPE 约 1 字符 ≈ 1.4 tokens）
-    CHAR_TO_TOKEN = 1.4
+    CHAR_TO_TOKEN = 1.0 / 1.4  # 1 token ≈ 1.4 字符，所以 1 字符 ≈ 0.71 token
 
     all_lines = []
     source_names = []

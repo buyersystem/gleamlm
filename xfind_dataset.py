@@ -82,7 +82,7 @@ class LMDataset(Dataset):
             print(f"  Saved to {ids_file}")
 
         # 计算样本数
-        self.num_samples = max(0, (self.total_tokens - self.max_seq_len) // self.stride)
+        self.num_samples = max(0, (self.total_tokens - self.max_seq_len - 1) // self.stride + 1)
         print(f"Created {self.num_samples} samples for {split}")
 
     def __len__(self):

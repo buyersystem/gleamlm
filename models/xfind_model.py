@@ -31,22 +31,22 @@ def precompute_freqs_cis(dim, max_seq_len, theta=10000.0):
     return cos, sin
 
 
-def apply_rotary_emb(xq, xk, cos, sin):
+def apply_rotary_emb(xq, xk, cos, sin, offset=0):
     """对 Q/K 施加旋转位置编码"""
     seq_len = xq.size(2)
-    cos = cos[:seq_len].unsqueeze(0).unsqueeze(0)
-    sin = sin[:seq_len].unsqueeze(0).unsqueeze(0)
+    cos = cos[offset:offset+seq_len].unsqueeze(0).unsqueeze(0)
+    sin = sin[offset:offset+seq_len].unsqueeze(0).unsqueeze(0)
     xq_out = xq * cos + _rotate_half(xq) * sin
     xk_out = xk * cos + _rotate_half(xk) * sin
     return xq_out, xk_out
 
 
 def _rotate_half(x):
-    """将每对相邻维度交换并取负：(-x2, x1, -x4, x3, ...)"""
-    x1 = x[..., ::2]   # 偶位置
-    x2 = x[..., 1::2]  # 奇位置
-    x = torch.stack([-x2, x1], dim=-1).flatten(-2)
-    return x
+    """将前一半和后一半维度配对旋转：dim k 与 dim k+d/2 互换并取负"""
+    d2 = x.shape[-1] // 2
+    x1 = x[..., :d2]
+    x2 = x[..., d2:]
+    return torch.cat([-x2, x1], dim=-1)
 
 
 class GroupedQueryAttention(nn.Module):
@@ -89,7 +89,10 @@ class GroupedQueryAttention(nn.Module):
         Q = self.W_q(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         K = self.W_k(x).view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         V = self.W_v(x).view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
-        Q, K = apply_rotary_emb(Q, K, self.rope_cos, self.rope_sin)
+
+        # KV cache 时，新 token 的实际位置是已有 cache 的长度
+        offset = past_kv[0].size(2) if past_kv is not None else 0
+        Q, K = apply_rotary_emb(Q, K, self.rope_cos, self.rope_sin, offset)
 
         if past_kv is not None:
             past_k, past_v = past_kv

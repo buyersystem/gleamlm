@@ -72,9 +72,9 @@ def get_args():
 class XfindConfig:
     """默认配置，约 39M 参数"""
     seed = 42
-    epochs = 5
-    batch_size = 16
-    accumulate_grad = 4
+    epochs = 8
+    batch_size = 8
+    accumulate_grad = 8
 
     lr = 3e-4
     warmup_ratio = 0.01

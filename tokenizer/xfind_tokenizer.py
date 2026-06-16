@@ -2,7 +2,6 @@
 
 import sentencepiece as spm
 import os
-import tempfile
 
 
 class XfindTokenizer:
@@ -42,47 +41,37 @@ class XfindTokenizer:
 
         print(f"Training BPE tokenizer (vocab_size={vocab_size})...")
 
-        # 将所有文本合并到一个临时文件
-        temp_file = tempfile.NamedTemporaryFile(
-            mode='w', delete=False, encoding='utf-8', suffix='.txt'
+        # 检查文件存在
+        valid_files = [f for f in text_files if os.path.exists(f)]
+        missing = set(text_files) - set(valid_files)
+        for f in missing:
+            print(f"  Warning: {f} not found, skipping")
+        if not valid_files:
+            raise FileNotFoundError("No valid input files found")
+
+        for f in valid_files:
+            print(f"  Processing: {f}")
+
+        # SentencePiece 原生支持逗号分隔的文件列表，无需复制
+        spm.SentencePieceTrainer.train(
+            input=','.join(valid_files),
+            vocab_size=vocab_size,
+            model_prefix=model_prefix,
+            character_coverage=1.0,       # 覆盖所有字符（中英混合需要）
+            model_type='bpe',
+            pad_id=self.pad_id,
+            unk_id=self.unk_id,
+            bos_id=self.bos_id,
+            eos_id=self.eos_id,
+            normalization_rule_name='nmt_nfkc',
+            input_sentence_size=2000000,   # 最多使用 200 万句训练
+            max_sentence_length=16384,     # 允许长行
+            shuffle_input_sentence=True,
         )
 
-        try:
-            for file_path in text_files:
-                if not os.path.exists(file_path):
-                    print(f"  Warning: {file_path} not found, skipping")
-                    continue
-                print(f"  Processing: {file_path}")
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        text = line.strip()
-                        if text:
-                            temp_file.write(text + "\n")
-            temp_file.close()
-
-            # 训练 BPE 模型
-            spm.SentencePieceTrainer.train(
-                input=temp_file.name,
-                vocab_size=vocab_size,
-                model_prefix=model_prefix,
-                character_coverage=1.0,       # 覆盖所有字符（中英混合需要）
-                model_type='bpe',
-                pad_id=self.pad_id,
-                unk_id=self.unk_id,
-                bos_id=self.bos_id,
-                eos_id=self.eos_id,
-                normalization_rule_name='nmt_nfkc',
-                input_sentence_size=2000000,   # 最多使用 200 万句训练
-                max_sentence_length=16384,     # 允许长行
-                shuffle_input_sentence=True,
-            )
-
-            self.sp = spm.SentencePieceProcessor()
-            self.sp.Load(model_prefix + ".model")
-            print(f"BPE model trained: vocab_size={self.sp.get_piece_size()}")
-
-        finally:
-            os.unlink(temp_file.name)
+        self.sp = spm.SentencePieceProcessor()
+        self.sp.Load(model_prefix + ".model")
+        print(f"BPE model trained: vocab_size={self.sp.get_piece_size()}")
 
     def encode(self, text, add_bos=False, add_eos=True):
         """文本 → token ID 序列"""

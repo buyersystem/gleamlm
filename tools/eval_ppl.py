@@ -9,12 +9,12 @@ from torch.utils.data import DataLoader
 import math
 
 @torch.no_grad()
-def compute_ppl_fast(model, data_loader, device, max_batches=None):
+def compute_ppl_fast(model, data_loader, device, max_batches=None, pad_token_id=0):
     """快速计算困惑度，可限制批次数"""
     model.eval()
     total_loss = 0
     total_tokens = 0
-    criterion = torch.nn.CrossEntropyLoss(reduction='sum')
+    criterion = torch.nn.CrossEntropyLoss(reduction='sum', ignore_index=pad_token_id)
 
     for i, (input_ids, target_ids) in enumerate(data_loader):
         if max_batches and i >= max_batches:
@@ -30,7 +30,7 @@ def compute_ppl_fast(model, data_loader, device, max_batches=None):
         )
 
         total_loss += loss.item()
-        total_tokens += (target_ids != 0).sum().item()
+        total_tokens += (target_ids != pad_token_id).sum().item()
 
     if total_tokens == 0:
         return 0, 1
@@ -61,7 +61,7 @@ def main():
     print(f"Vocab: {len(tokenizer)}")
 
     for split in ['valid', 'test']:
-        txt_path = f'data/splits/{split}.txt'
+        txt_path = f'./data/splits/{split}.txt'
         if not os.path.exists(txt_path):
             print(f"  Skip {split}: no data file")
             continue

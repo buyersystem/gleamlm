@@ -9,7 +9,10 @@ def load_model_for_inference(model_path, device='cuda', checkpoint=None):
     import torch
 
     if checkpoint is None:
-        checkpoint = torch.load(model_path, map_location=device)
+        try:
+            checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        except TypeError:
+            checkpoint = torch.load(model_path, map_location=device)
 
     # 从 checkpoint 获取配置
     if 'args' in checkpoint:
@@ -47,7 +50,11 @@ def load_model_for_inference(model_path, device='cuda', checkpoint=None):
     if 'model_state_dict' in checkpoint:
         state_dict = checkpoint['model_state_dict']
         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
-        model.load_state_dict(state_dict, strict=False)
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"Warning: missing keys in checkpoint: {missing}")
+        if unexpected:
+            print(f"Warning: unexpected keys in checkpoint: {unexpected}")
 
     model.eval()
 

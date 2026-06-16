@@ -22,7 +22,10 @@ from inference.streamer import TextStreamer
 def load_model(model_path, device='cuda'):
     """加载模型和分词器"""
     print(f"Loading model: {model_path}")
-    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    try:
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(model_path, map_location=device)
 
     # 从 checkpoint 提取分词器路径
     if 'args' in checkpoint:
