@@ -1,4 +1,4 @@
-"""Xfind-Mini 量化导出。FP32 → FP16 减半体积"""
+"""XFIND-LLM 量化导出。FP32 → FP16 减半体积"""
 
 import torch
 import os
@@ -72,7 +72,7 @@ def quantize_to_fp16(input_path, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Xfind-Mini FP16 量化导出')
+    parser = argparse.ArgumentParser(description='XFIND-LLM FP16 量化导出')
     parser.add_argument('--input', type=str, default='checkpoints/best_model.pt',
                         help='输入模型路径')
     parser.add_argument('--output', type=str, default='checkpoints/model_fp16.pt',

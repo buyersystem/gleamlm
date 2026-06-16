@@ -1,4 +1,4 @@
-"""Xfind-Mini 采样策略：temperature / top_k / top_p"""
+"""XFIND-LLM 采样策略：temperature / top_k / top_p"""
 
 import torch
 import torch.nn.functional as F

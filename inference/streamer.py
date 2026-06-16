@@ -1,4 +1,4 @@
-"""Xfind-Mini 流式文本生成器。KV Cache + 采样，逐 token 输出"""
+"""XFIND-LLM 流式文本生成器。KV Cache + 采样，逐 token 输出"""
 
 import torch
 import torch.nn.functional as F

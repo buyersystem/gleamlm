@@ -1,4 +1,4 @@
-"""Xfind-Mini 全局配置。约 39M 参数，适配 RTX 4070 Ti 12GB"""
+"""XFIND-LLM 全局配置"""
 
 import argparse
 import os
@@ -6,13 +6,13 @@ import os
 
 def get_args():
     """获取命令行参数，可通过 python xfind_train.py --d_model 512 覆盖默认值"""
-    parser = argparse.ArgumentParser(description='Xfind-Mini 大模型训练配置')
+    parser = argparse.ArgumentParser(description='XFIND-LLM 大模型训练配置')
 
     # 随机种子
     parser.add_argument("--seed", type=int, default=42, help='随机种子')
 
     # 训练参数
-    parser.add_argument("--epochs", type=int, default=8, help='训练轮数')
+    parser.add_argument("--epochs", type=int, default=5, help='训练轮数')
     parser.add_argument("--batch_size", type=int, default=8, help='Micro-batch 大小')
     parser.add_argument("--accumulate_grad", type=int, default=8,
                         help='梯度累积步数，有效batch=batch_size×accumulate_grad')
@@ -22,7 +22,7 @@ def get_args():
     parser.add_argument("--warmup_ratio", type=float, default=0.01,
                         help='Warmup 占总步数比例')
 
-    # 模型结构（固定为 Xfind-Mini 约 35M 参数规格）
+    # 模型结构（固定为 XFIND-LLM 约 35M 参数规格）
     parser.add_argument("--vocab_size", type=int, default=32000,
                         help='词表大小')
     parser.add_argument("--d_model", type=int, default=512,
@@ -72,7 +72,7 @@ def get_args():
 class XfindConfig:
     """默认配置，约 39M 参数"""
     seed = 42
-    epochs = 8
+    epochs = 5
     batch_size = 8
     accumulate_grad = 8
 

@@ -1,4 +1,4 @@
-"""Xfind-Mini 训练脚本。支持 AMP + CosineAnnealing + AdamW + DDP + 断点续训"""
+"""XFIND-LLM 训练脚本。支持 AMP + CosineAnnealing + AdamW + DDP + 断点续训"""
 
 import torch
 import torch.nn as nn
@@ -63,7 +63,7 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, device
         target_ids = target_ids.to(device)
 
         # AMP 前向
-        with torch.amp.autocast(device_type=device.type):
+        with torch.amp.autocast('cuda'):
             logits, _ = model(input_ids)
             loss = criterion(
                 logits.view(-1, logits.size(-1)),
@@ -160,7 +160,7 @@ def main():
 
     if args.local_rank == 0:
         print("=" * 60)
-        print("Xfind-Mini 大模型训练")
+        print("XFIND-LLM 大模型训练")
         print("=" * 60)
         print(f"World size: {args.world_size} GPU(s)")
         print(f"Config: d_model={args.d_model}, layers={args.num_layers}, "
@@ -254,7 +254,7 @@ def main():
     )
 
     # AMP 梯度缩放器
-    scaler = torch.amp.GradScaler(device.type)
+    scaler = torch.amp.GradScaler('cuda')
 
     start_epoch = 0
     global_step = 0

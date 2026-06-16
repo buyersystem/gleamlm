@@ -1,4 +1,4 @@
-"""Xfind-Mini 分词器。基于 SentencePiece BPE，32K 词表"""
+"""XFIND-LLM 分词器。基于 SentencePiece BPE，32K 词表"""
 
 import sentencepiece as spm
 import os

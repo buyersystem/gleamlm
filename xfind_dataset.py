@@ -1,4 +1,4 @@
-"""Xfind-Mini 数据集。滑动窗口切分 + BPE 分词 + 动态 padding + numpy memmap。"""
+"""XFIND-LLM 数据集。滑动窗口切分 + BPE 分词 + 动态 padding + numpy memmap。"""
 
 import torch
 from torch.utils.data import Dataset

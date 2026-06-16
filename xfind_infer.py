@@ -1,4 +1,4 @@
-"""Xfind-Mini 推理脚本，支持交互式生成和多种采样策略"""
+"""XFIND-LLM 推理脚本，支持交互式生成和多种采样策略"""
 
 import torch
 import argparse
@@ -80,7 +80,7 @@ def interactive(model, tokenizer, max_new_tokens=256,
                 temperature=1.0, top_k=50, top_p=0.9, device='cuda'):
     """交互式对话模式"""
     print("\n" + "=" * 60)
-    print("Xfind-Mini 交互式文本生成")
+    print("XFIND-LLM 交互式文本生成")
     print("输入 'quit' 或 'exit' 退出")
     print("=" * 60)
 
@@ -103,7 +103,7 @@ def interactive(model, tokenizer, max_new_tokens=256,
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Xfind-Mini 推理')
+    parser = argparse.ArgumentParser(description='XFIND-LLM 推理')
     parser.add_argument('--model', type=str, default='checkpoints/best_model.pt',
                         help='模型路径')
     parser.add_argument('--prompt', type=str, default=None,

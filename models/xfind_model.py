@@ -1,4 +1,4 @@
-"""Xfind-Mini Decoder-only LLM 模型实现"""
+"""XFIND-LLM Decoder-only 模型实现"""
 
 import math
 import torch
@@ -245,7 +245,7 @@ class XfindModel(nn.Module):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("构建 Xfind-Mini 模型（约 39M 参数）")
+    print("构建 XFIND-LLM 模型（约 39M 参数）")
     print("=" * 60)
 
     model = XfindModel(
