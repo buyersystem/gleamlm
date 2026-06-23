@@ -1,4 +1,4 @@
-"""XFIND-LLM 推理脚本，支持交互式生成和多种采样策略"""
+"""烁珑GleamLM 推理脚本，支持交互式生成和多种采样策略"""
 
 import torch
 import argparse
@@ -15,7 +15,8 @@ if sys.platform == 'win32':
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from models import load_model_for_inference
-from tokenizer.xfind_tokenizer import XfindTokenizer
+from models.gleamlm_config import DEFAULT_TOKENIZER_PATH, DEFAULT_CHECKPOINT_DIR
+from tokenizer.bbpe_tokenizer import BBPETokenizer
 from inference.streamer import TextStreamer
 
 
@@ -30,21 +31,21 @@ def load_model(model_path, device='cuda'):
     # 从 checkpoint 提取分词器路径
     if 'args' in checkpoint:
         args = checkpoint['args']
-        tokenizer_path = getattr(args, 'tokenizer_path', './tokenizer/checkpoints/bpe_32k')
+        tokenizer_path = getattr(args, 'tokenizer_path', DEFAULT_TOKENIZER_PATH)
     elif 'config' in checkpoint:
-        tokenizer_path = './tokenizer/checkpoints/bpe_32k'
+        tokenizer_path = DEFAULT_TOKENIZER_PATH
     else:
-        tokenizer_path = './tokenizer/checkpoints/bpe_32k'
+        tokenizer_path = DEFAULT_TOKENIZER_PATH
 
     # 使用共享函数加载模型（传入已加载的 checkpoint 避免重复磁盘读取）
     model, config = load_model_for_inference(model_path, device, checkpoint=checkpoint)
 
     # 加载分词器
-    tokenizer = XfindTokenizer(tokenizer_path)
+    tokenizer = BBPETokenizer.load(tokenizer_path)
 
     total, _ = model.get_num_params()
     print(f"Model: {total / 1e6:.2f}M params, device: {device}")
-    print(f"Tokenizer vocab: {len(tokenizer)}")
+    print(f"Tokenizer vocab: {tokenizer.get_vocab_size()}")
 
     return model, tokenizer, config
 
@@ -59,19 +60,21 @@ def generate(model, tokenizer, prompt, max_new_tokens=256,
     print(f"{'='*60}")
     print("Generated: ", end='', flush=True)
 
-    full_text = prompt
+    prev_len = 0
+    last_chunk = prompt
     for chunk in streamer.generate_text(
         model, prompt, max_new_tokens,
         temperature, top_k, top_p
     ):
-        # 增量输出
-        new_text = chunk[len(full_text) - len(prompt):] if len(full_text) > len(prompt) else chunk
+        new_text = chunk[prev_len:]
+        prev_len = len(chunk)
+        last_chunk = chunk
         try:
             print(new_text, end='', flush=True)
         except UnicodeEncodeError:
             print(new_text.encode('utf-8', errors='replace').decode('utf-8', errors='replace'), end='', flush=True)
-        full_text = prompt + chunk
 
+    full_text = prompt + last_chunk if last_chunk != prompt else prompt
     print("\n")
     return full_text
 
@@ -80,7 +83,7 @@ def interactive(model, tokenizer, max_new_tokens=256,
                 temperature=1.0, top_k=50, top_p=0.9, device='cuda'):
     """交互式对话模式"""
     print("\n" + "=" * 60)
-    print("XFIND-LLM 交互式文本生成")
+    print("烁珑GleamLM 交互式文本生成")
     print("输入 'quit' 或 'exit' 退出")
     print("=" * 60)
 
@@ -103,8 +106,8 @@ def interactive(model, tokenizer, max_new_tokens=256,
 
 
 def main():
-    parser = argparse.ArgumentParser(description='XFIND-LLM 推理')
-    parser.add_argument('--model', type=str, default='checkpoints/best_model.pt',
+    parser = argparse.ArgumentParser(description='烁珑GleamLM 推理')
+    parser.add_argument('--model', type=str, default=f'{DEFAULT_CHECKPOINT_DIR}/best_model.pt',
                         help='模型路径')
     parser.add_argument('--prompt', type=str, default=None,
                         help='提示文本（不提供则进入交互模式）')

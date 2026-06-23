@@ -1,4 +1,4 @@
-"""XFIND-LLM 采样策略：temperature / top_k / top_p"""
+"""烁珑GleamLM 采样策略：temperature / top_k / top_p"""
 
 import torch
 import torch.nn.functional as F

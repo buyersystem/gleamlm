@@ -15,7 +15,7 @@ if sys.platform == 'win32':
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import load_model_for_inference
-from tokenizer.xfind_tokenizer import XfindTokenizer
+from tokenizer.bbpe_tokenizer import BBPETokenizer
 from inference.streamer import TextStreamer
 
 
@@ -68,8 +68,8 @@ def main():
     model, config = load_model_for_inference(args.model, device)
 
     # 分词器
-    tokenizer_path = './tokenizer/checkpoints/bpe_32k'
-    tokenizer = XfindTokenizer(tokenizer_path)
+    tokenizer_path = './tokenizer/checkpoints/bbpe_12k'
+    tokenizer = BBPETokenizer.load(tokenizer_path)
 
     # 预设评估 prompts
     prompts = [

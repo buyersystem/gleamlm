@@ -1,4 +1,4 @@
-"""XFIND-LLM 量化导出。FP32 → FP16 减半体积"""
+"""烁珑GleamLM 量化导出。FP32 → FP16 减半体积"""
 
 import torch
 import os
@@ -7,7 +7,7 @@ import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from models.xfind_model import XfindModel
+from models.gleamlm_model import GleamLMModel
 
 
 def quantize_to_fp16(input_path, output_path):
@@ -25,9 +25,9 @@ def quantize_to_fp16(input_path, output_path):
     if 'args' in checkpoint:
         args = checkpoint['args']
         config = {
-            'vocab_size': getattr(args, 'vocab_size', 32000),
+            'vocab_size': getattr(args, 'vocab_size', 12003),
             'd_model': getattr(args, 'd_model', 512),
-            'num_layers': getattr(args, 'num_layers', 8),
+            'num_layers': getattr(args, 'num_layers', 12),
             'num_heads': getattr(args, 'num_heads', 8),
             'num_kv_heads': getattr(args, 'num_kv_heads', 4),
             'd_ff': getattr(args, 'd_ff', 1365),
@@ -38,14 +38,14 @@ def quantize_to_fp16(input_path, output_path):
         }
     else:
         config = {
-            'vocab_size': 32000, 'd_model': 512, 'num_layers': 8,
+            'vocab_size': 12003, 'd_model': 512, 'num_layers': 12,
             'num_heads': 8, 'num_kv_heads': 4, 'd_ff': 1365,
             'dropout': 0.0, 'max_seq_len': 1024, 'pad_token_id': 0,
             'tie_weights': False
         }
 
     # 构建模型并加载权重
-    model = XfindModel(**config)
+    model = GleamLMModel(**config)
     state_dict = checkpoint['model_state_dict']
     state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict, strict=False)
@@ -72,7 +72,7 @@ def quantize_to_fp16(input_path, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='XFIND-LLM FP16 量化导出')
+    parser = argparse.ArgumentParser(description='烁珑GleamLM FP16 量化导出')
     parser.add_argument('--input', type=str, default='checkpoints/best_model.pt',
                         help='输入模型路径')
     parser.add_argument('--output', type=str, default='checkpoints/model_fp16.pt',

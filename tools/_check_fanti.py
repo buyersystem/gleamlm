@@ -23,7 +23,7 @@ fanti_to_jianti = {
 fanti_chars = set(fanti_to_jianti.keys())
 
 files = {
-    'wiki': 'data/raw/wiki_clean_v3.txt',
+    'wiki': 'data/raw/wiki_clean.txt',
     'news': 'data/raw/news_clean.txt',
     'baike': 'data/raw/baike_clean.txt',
     'qa': 'data/raw/qa_clean.txt',

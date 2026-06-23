@@ -1,4 +1,4 @@
-"""XFIND-LLM 流式文本生成器。KV Cache + 采样，逐 token 输出"""
+"""烁珑GleamLM 流式文本生成器。KV Cache + 采样，逐 token 输出"""
 
 import torch
 import torch.nn.functional as F
@@ -24,18 +24,18 @@ class TextStreamer:
 
         with torch.no_grad():
             logits, past_kv = model(input_ids)
-            next_token_logits = logits[:, -1, :]
-
-        next_token = sample_token(
-            next_token_logits,
-            temperature=temperature,
-            top_k=top_k,
-            top_p=top_p,
-            repetition_penalty=repetition_penalty,
-            generated_ids=generated_ids
-        )
 
         for _ in range(max_new_tokens):
+            next_token_logits = logits[:, -1, :]
+            next_token = sample_token(
+                next_token_logits,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                generated_ids=generated_ids
+            )
+
             token_id = next_token.item()
             if token_id == eos_id:
                 return
@@ -47,16 +47,6 @@ class TextStreamer:
                     next_token.unsqueeze(0),  # [1, 1]
                     past_kv_list=past_kv
                 )
-                next_token_logits = logits[:, -1, :]
-
-            next_token = sample_token(
-                next_token_logits,
-                temperature=temperature,
-                top_k=top_k,
-                top_p=top_p,
-                repetition_penalty=repetition_penalty,
-                generated_ids=generated_ids
-            )
 
     def generate_text(self, model, prompt, max_new_tokens=256,
                       temperature=1.0, top_k=50, top_p=0.9,

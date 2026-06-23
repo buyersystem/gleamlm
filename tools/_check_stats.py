@@ -5,7 +5,7 @@ import random
 random.seed(42)
 
 files = {
-    '中文维基': ('data/raw/wiki_clean_v3.txt', 0.38),
+    '中文维基': ('data/raw/wiki_clean.txt', 0.38),
     '中文新闻': ('data/raw/news_clean.txt', 0.29),
     '百度百科': ('data/raw/baike_clean.txt', 0.21),
     '社区问答': ('data/raw/qa_clean.txt', 0.12),

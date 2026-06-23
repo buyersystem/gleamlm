@@ -3,8 +3,8 @@ import torch, sys, os, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import load_model_for_inference
-from xfind_dataset import LMDataset, collate_fn
-from tokenizer.xfind_tokenizer import XfindTokenizer
+from gleamlm_dataset import LMDataset, collate_fn
+from tokenizer.bbpe_tokenizer import BBPETokenizer
 from torch.utils.data import DataLoader
 import math
 
@@ -57,7 +57,7 @@ def main():
     print(f"Model: {total/1e6:.2f}M params")
 
     # Tokenizer
-    tokenizer = XfindTokenizer('./tokenizer/checkpoints/bpe_32k')
+    tokenizer = BBPETokenizer.load('./tokenizer/checkpoints/bbpe_12k')
     print(f"Vocab: {len(tokenizer)}")
 
     for split in ['valid', 'test']:
@@ -69,12 +69,12 @@ def main():
         print(f"\nEvaluating {split} set...")
         ds = LMDataset('./data/splits', tokenizer, 1024, split)
         dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
-                       collate_fn=collate_fn, num_workers=0)
+                       collate_fn=lambda b: collate_fn(b, pad_id=tokenizer.pad_id), num_workers=0)
 
         n_batches = min(args.max_batches, len(dl)) if args.max_batches else len(dl)
         print(f"  Samples: {len(ds)}, Batches: {n_batches}")
 
-        loss, ppl = compute_ppl_fast(model, dl, device, args.max_batches)
+        loss, ppl = compute_ppl_fast(model, dl, device, args.max_batches, pad_token_id=tokenizer.pad_id)
         print(f"  {split.upper()} -> Loss: {loss:.4f}, PPL: {ppl:.2f}")
 
 

@@ -1,7 +1,7 @@
-"""XFIND-LLM DPO 偏好对齐脚本。基于 sft_best.pt 策略模型 + 冻结参考模型。
+"""烁珑GleamLM DPO 偏好对齐脚本。基于 sft_best.pt 策略模型 + 冻结参考模型。
 
 用法：
-    python xfind_dpo.py --data_path ./data/dpo_data.jsonl \
+    python gleamlm_dpo.py --data_path ./data/dpo_data.jsonl \
                         --model_path ./checkpoints/sft/sft_best.pt
 """
 import argparse
@@ -9,13 +9,13 @@ import json
 import math
 import os
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from models.xfind_model import XfindModel
-from tokenizer.xfind_tokenizer import build_tokenizer
+from models.gleamlm_model import GleamLMModel
+from models.gleamlm_config import DEFAULT_TOKENIZER_PATH, DEFAULT_CHECKPOINT_DIR
+from tokenizer.bbpe_tokenizer import BBPETokenizer
 from inference.sampler import sample_token
 
 
@@ -75,23 +75,18 @@ class DPODataset(Dataset):
         chosen = s["chosen"]
         rejected = s["rejected"]
 
-        prompt_text = f"Q: {instruction}\nA:"
-        prompt_ids = self.tokenizer.sp.encode(prompt_text, out_type=int)
+        prompt_text = f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n"
+        prompt_ids = self.tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
 
         # 完整序列（含 prompt + answer + eos）
-        chosen_text = f"Q: {instruction}\nA: {chosen}<|endoftext|>"
-        rejected_text = f"Q: {instruction}\nA: {rejected}<|endoftext|>"
+        chosen_text = f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{chosen}<|im_end|>"
+        rejected_text = f"<|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{rejected}<|im_end|>"
 
-        chosen_ids = self.tokenizer.sp.encode(chosen_text, out_type=int)[:self.max_seq_len]
-        rejected_ids = self.tokenizer.sp.encode(rejected_text, out_type=int)[:self.max_seq_len]
+        chosen_ids = self.tokenizer.encode(chosen_text, add_bos=False, add_eos=False)
+        rejected_ids = self.tokenizer.encode(rejected_text, add_bos=False, add_eos=False)
 
-        # 取 min 长度以对齐 batch
-        L = min(len(chosen_ids), len(rejected_ids))
-        chosen_ids = chosen_ids[:L]
-        rejected_ids = rejected_ids[:L]
-
-        # 截断到 self.max_seq_len
-        L = min(L, self.max_seq_len)
+        # 取 min 长度以对齐 batch + 截断到 max_seq_len
+        L = min(len(chosen_ids), len(rejected_ids), self.max_seq_len)
         chosen_ids = chosen_ids[:L]
         rejected_ids = rejected_ids[:L]
 
@@ -115,6 +110,15 @@ class DPODataset(Dataset):
 # ============================================================
 # DPO Loss
 # ============================================================
+
+def get_lr_cosine(step, total_steps, warmup_ratio=0.01, min_lr_ratio=0.05):
+    """Cosine Annealing + Warmup"""
+    warmup_steps = int(total_steps * warmup_ratio)
+    if step < warmup_steps:
+        return step / max(1, warmup_steps)
+    else:
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
 
 def compute_log_probs(logits, input_ids, mask):
     """计算每个 token 的 log 概率，仅 mask 部分计入"""
@@ -152,14 +156,15 @@ def get_reference_logps(ref_model, chosen_ids, rejected_ids, chosen_mask, reject
     return ref_cho, ref_rej
 
 
-def train_one_epoch(model, ref_model, dataloader, optimizer, scaler, beta, device):
+def train_one_epoch(model, ref_model, dataloader, optimizer, scheduler,
+                    scaler, beta, device, args):
     model.train()
     ref_model.eval()
     total_loss = 0.0
     n_batches = 0
 
     pbar = tqdm(dataloader, desc="DPO")
-    for batch in pbar:
+    for batch_idx, batch in enumerate(pbar):
         chosen_ids = batch["chosen_ids"].to(device)
         rejected_ids = batch["rejected_ids"].to(device)
         chosen_mask = batch["chosen_mask"].to(device)
@@ -179,14 +184,24 @@ def train_one_epoch(model, ref_model, dataloader, optimizer, scaler, beta, devic
 
         loss = dpo_loss(policy_cho, policy_rej, ref_cho.detach(), ref_rej.detach(), beta)
 
+        # 梯度累积
+        loss = loss / args.accumulate_grad
         scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
 
-        total_loss += loss.item()
+        if (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(dataloader):
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
+
+        total_loss += loss.item() * args.accumulate_grad
         n_batches += 1
-        pbar.set_postfix(loss=f"{loss.item():.4f}")
+
+        if (batch_idx + 1) % args.accumulate_grad == 0:
+            lr = scheduler.get_last_lr()[0]
+            pbar.set_postfix(loss=f"{loss.item() * args.accumulate_grad:.4f}", lr=f"{lr:.2e}")
 
     return total_loss / max(n_batches, 1)
 
@@ -194,11 +209,12 @@ def train_one_epoch(model, ref_model, dataloader, optimizer, scaler, beta, devic
 @torch.no_grad()
 def generate_response(model, tokenizer, instruction, max_new_tokens=256,
                       temperature=0.8, top_k=50, top_p=0.9):
-    """生成对话回复，遇到 <|endoftext|> 自动截断"""
+    """生成对话回复，遇到 <|im_end|> 或 <|endoftext|> 自动截断"""
     model.eval()
     device = next(model.parameters()).device
-    prompt_text = f"Q: {instruction}\nA:"
-    prompt_ids = tokenizer.sp.encode(prompt_text, out_type=int)
+    prompt_text = (f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                   f"<|im_start|>assistant\n")
+    prompt_ids = tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
     prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
     generated_ids = prompt_ids.copy()
     stopped = False
@@ -214,9 +230,12 @@ def generate_response(model, tokenizer, instruction, max_new_tokens=256,
             generated_ids=generated_ids,
         )
         token_id = next_token.item()
+        # 停止条件：特殊 token
         if token_id == tokenizer.eos_id:
             break
         if token_id == tokenizer.pad_id:
+            break
+        if token_id == tokenizer.special_tokens.get("<|im_end|>"):
             break
         generated_ids.append(token_id)
 
@@ -263,24 +282,25 @@ def evaluate_dpo(model, tokenizer):
 # ============================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="XFIND-LLM DPO")
+    parser = argparse.ArgumentParser(description="烁珑GleamLM DPO")
     parser.add_argument("--data_path", default="./data/dpo_data.jsonl")
-    parser.add_argument("--model_path", default="./checkpoints/sft/sft_best.pt")
-    parser.add_argument("--tokenizer_path", default="./tokenizer/checkpoints/bpe_32k")
-    parser.add_argument("--vocab_size", type=int, default=32000)
+    parser.add_argument("--model_path", default=f"{DEFAULT_CHECKPOINT_DIR}/sft/sft_best.pt")
+    parser.add_argument("--tokenizer_path", default=DEFAULT_TOKENIZER_PATH)
+    parser.add_argument("--vocab_size", type=int, default=12003)
     parser.add_argument("--d_model", type=int, default=512)
     parser.add_argument("--max_seq_len", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--accumulate_grad", type=int, default=2)
+    parser.add_argument("--clip_grad", type=float, default=1.0)
     parser.add_argument("--lr", type=float, default=1e-7)
     parser.add_argument("--beta", type=float, default=0.1, help="DPO temperature")
     parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--output_dir", default="./checkpoints/dpo")
+    parser.add_argument("--output_dir", default=f"{DEFAULT_CHECKPOINT_DIR}/dpo")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("=" * 60)
-    print("XFIND-LLM DPO 偏好对齐")
+    print("烁珑GleamLM DPO 偏好对齐")
     print("=" * 60)
     print(f"Device: {device}")
     print(f"Data: {args.data_path}")
@@ -288,14 +308,13 @@ def main():
     print(f"LR: {args.lr:.1e}, Beta: {args.beta}, Epochs: {args.epochs}")
 
     # 1. 分词器
-    tokenizer = build_tokenizer(
-        text_files=[], vocab_size=args.vocab_size, model_prefix=args.tokenizer_path)
-    print(f"Tokenizer vocab: {len(tokenizer)}")
+    tokenizer = BBPETokenizer.load(args.tokenizer_path)
+    print(f"Tokenizer vocab: {tokenizer.get_vocab_size()}")
 
     # 2. 加载 SFT 模型作为策略模型 + 参考模型
     sft_ckpt = torch.load(args.model_path, map_location=device)
 
-    policy_model = XfindModel(
+    policy_model = GleamLMModel(
         vocab_size=args.vocab_size, d_model=args.d_model,
         max_seq_len=args.max_seq_len,
     ).to(device)
@@ -303,7 +322,7 @@ def main():
     print(f"Policy model: {sum(p.numel() for p in policy_model.parameters())/1e6:.2f}M params")
 
     # 参考模型：独立加载并冻结
-    ref_model = XfindModel(
+    ref_model = GleamLMModel(
         vocab_size=args.vocab_size, d_model=args.d_model,
         max_seq_len=args.max_seq_len,
     ).to(device)
@@ -322,8 +341,14 @@ def main():
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
                             collate_fn=dpad_collate)
 
-    # 4. 优化器
+    # 4. 优化器 & 调度器
     optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.01)
+
+    total_steps = math.ceil(len(dataloader) / args.accumulate_grad) * args.epochs
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lambda step: get_lr_cosine(step, total_steps, warmup_ratio=0.01),
+    )
     scaler = torch.amp.GradScaler('cuda')
 
     # 5. DPO 前基线
@@ -333,7 +358,8 @@ def main():
     # 6. 训练
     for epoch in range(args.epochs):
         avg_loss = train_one_epoch(
-            policy_model, ref_model, dataloader, optimizer, scaler, args.beta, device)
+            policy_model, ref_model, dataloader, optimizer, scheduler,
+            scaler, args.beta, device, args)
         print(f"\nDPO Epoch {epoch}: loss={avg_loss:.4f}")
 
     # 7. 保存

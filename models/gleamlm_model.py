@@ -1,4 +1,4 @@
-"""XFIND-LLM Decoder-only 模型实现"""
+"""烁珑GleamLM Decoder-only 模型实现"""
 
 import math
 import torch
@@ -50,7 +50,7 @@ def _rotate_half(x):
 
 
 class GroupedQueryAttention(nn.Module):
-    """GQA：8 查询头共享 4 组 KV"""
+    """GQA + QK-Norm：8 查询头共享 4 组 KV，Q/K 额外 RMSNorm（LLaMA3 标配）"""
     def __init__(self, d_model, num_heads, num_kv_heads, dropout=0.0, max_seq_len=1024):
         super().__init__()
         assert d_model % num_heads == 0, "d_model 必须能被 num_heads 整除"
@@ -71,6 +71,10 @@ class GroupedQueryAttention(nn.Module):
         # 输出投影
         self.W_o = nn.Linear(num_heads * self.head_dim, d_model, bias=False)
 
+        # QK-Norm：注意力计算前对 Q/K 额外 RMSNorm，稳定训练
+        self.q_norm = RMSNorm(self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
+
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
 
         # 预计算 RoPE 频率（缓存，不参与梯度）
@@ -89,6 +93,10 @@ class GroupedQueryAttention(nn.Module):
         Q = self.W_q(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         K = self.W_k(x).view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         V = self.W_v(x).view(batch_size, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        # QK-Norm：稳定注意力分布，降低训练震荡
+        Q = self.q_norm(Q)
+        K = self.k_norm(K)
 
         # KV cache 时，新 token 的实际位置是已有 cache 的长度
         offset = past_kv[0].size(2) if past_kv is not None else 0
@@ -154,9 +162,9 @@ class DecoderBlock(nn.Module):
         return x, current_kv
 
 
-class XfindModel(nn.Module):
-    """Decoder-only 语言模型（约 39M 参数，8 层，512d，8Q/4KV GQA）"""
-    def __init__(self, vocab_size=32000, d_model=512, num_layers=8,
+class GleamLMModel(nn.Module):
+    """V4 Deep-Narrow：12层×512dim + BBPE 12K + QK-Norm（~39M 参数）"""
+    def __init__(self, vocab_size=12003, d_model=512, num_layers=12,
                  num_heads=8, num_kv_heads=4, d_ff=1365,
                  dropout=0.1, max_seq_len=1024, pad_token_id=0,
                  tie_weights=True):
@@ -245,13 +253,13 @@ class XfindModel(nn.Module):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("构建 XFIND-LLM 模型（约 39M 参数）")
+    print("构建 烁珑GleamLM V4 模型（12层×512dim + QK-Norm）")
     print("=" * 60)
 
-    model = XfindModel(
-        vocab_size=32000,
+    model = GleamLMModel(
+        vocab_size=12003,
         d_model=512,
-        num_layers=8,
+        num_layers=12,
         num_heads=8,
         num_kv_heads=4,
         d_ff=1365,
@@ -265,15 +273,15 @@ if __name__ == "__main__":
     print(f"可训练参数: {trainable / 1e6:.2f}M")
 
     print("\n[1] forward() — 训练模式")
-    input_ids = torch.randint(0, 32000, (4, 128))
+    input_ids = torch.randint(0, 12003, (4, 128))
     logits, kv_list = model(input_ids)
     print(f"    输入: input_ids {input_ids.shape}")
-    print(f"    输出: logits {logits.shape}  ← 应为 [4, 128, 32000]")
+    print(f"    输出: logits {logits.shape}  ← 应为 [4, 128, 12003]")
     print(f"    KV Cache 层数: {len(kv_list)}")
 
     print("\n[2] backward() — 反向传播验证")
     loss = F.cross_entropy(
-        logits[:, :-1].reshape(-1, 32000),
+        logits[:, :-1].reshape(-1, 12003),
         input_ids[:, 1:].reshape(-1),
         ignore_index=0
     )
@@ -291,7 +299,7 @@ if __name__ == "__main__":
     print("    反向传播: OK (无 NaN)")
 
     print("\n[3] forward() — 推理模式（KV Cache）")
-    prompt = torch.randint(0, 32000, (1, 10))
+    prompt = torch.randint(0, 12003, (1, 10))
     logits, kv_cache = model(prompt)
     print(f"    预填充: prompt {prompt.shape} → logits {logits.shape}")
     print(f"    KV Cache 长度: {kv_cache[0][0].size(2)} (应为 10)")
@@ -305,12 +313,12 @@ if __name__ == "__main__":
     print("    KV Cache 推理: OK")
 
     print("\n[4] 超长序列 - RoPE 外推测试")
-    input_ids_long = torch.randint(0, 32000, (2, 256))
+    input_ids_long = torch.randint(0, 12003, (2, 256))
     logits_long, _ = model(input_ids_long)
     print(f"    输入: {input_ids_long.shape}")
-    print(f"    输出: {logits_long.shape}  ← 应为 [2, 256, 32000]")
+    print(f"    输出: {logits_long.shape}  ← 应为 [2, 256, 12003]")
     loss_long = F.cross_entropy(
-        logits_long[:, :-1].reshape(-1, 32000),
+        logits_long[:, :-1].reshape(-1, 12003),
         input_ids_long[:, 1:].reshape(-1),
         ignore_index=0
     )

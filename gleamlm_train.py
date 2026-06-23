@@ -1,4 +1,4 @@
-"""XFIND-LLM 训练脚本。支持 AMP + CosineAnnealing + AdamW + DDP + 断点续训"""
+"""烁珑GleamLM 训练脚本。支持 AMP + CosineAnnealing + AdamW + DDP + 断点续训"""
 
 import torch
 import torch.nn as nn
@@ -23,10 +23,10 @@ from tqdm import tqdm
 # 添加当前目录到路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from models.xfind_config import get_args
-from models.xfind_model import XfindModel
-from xfind_dataset import LMDataset, collate_fn
-from tokenizer.xfind_tokenizer import build_tokenizer
+from models.gleamlm_config import get_args
+from models.gleamlm_model import GleamLMModel
+from gleamlm_dataset import LMDataset, collate_fn
+from tokenizer.bbpe_tokenizer import BBPETokenizer
 
 
 def set_seed(seed):
@@ -48,11 +48,16 @@ def get_lr_cosine(step, total_steps, warmup_ratio=0.01, min_lr_ratio=0.1):
         return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
 
 
-def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, device,
-                    epoch, args, global_step, writer, scaler):
-    """训练一个 epoch，支持 AMP + 梯度累积"""
+def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, raw_criterion,
+                    device, epoch, args, global_step, writer, scaler):
+    """训练一个 epoch，支持 AMP + 梯度累积。
+    
+    criterion: 带 label_smoothing 的 loss（用于反向传播）
+    raw_criterion: 无平滑的 loss（用于日志，与 eval 可比）
+    """
     model.train()
-    total_loss = 0
+    total_smoothed = 0
+    total_raw = 0
     num_batches = 0
     accumulate_grad = args.accumulate_grad
 
@@ -62,13 +67,20 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, device
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
 
-        # AMP 前向
-        with torch.amp.autocast('cuda'):
+        # AMP 前向（兼容 PyTorch 1.x / 2.x）
+        autocast_ctx = torch.amp.autocast('cuda') if hasattr(torch.amp, 'autocast') else torch.cuda.amp.autocast()
+        with autocast_ctx:
             logits, _ = model(input_ids)
             loss = criterion(
                 logits.view(-1, logits.size(-1)),
                 target_ids.view(-1)
             )
+            # 无平滑 raw loss（仅用于日志，不参与反向传播）
+            with torch.no_grad():
+                raw_loss = raw_criterion(
+                    logits.view(-1, logits.size(-1)),
+                    target_ids.view(-1)
+                )
 
         loss = loss / accumulate_grad
         scaler.scale(loss).backward()
@@ -83,24 +95,25 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, criterion, device
             optimizer.zero_grad()
 
             if args.local_rank == 0 and writer is not None:
-                current_loss = loss.item() * accumulate_grad
+                current_loss = raw_loss.item()
                 current_lr = scheduler.get_last_lr()[0]
                 writer.add_scalar('Train/Loss', current_loss, global_step)
                 writer.add_scalar('Train/Learning_Rate', current_lr, global_step)
 
             global_step += 1
 
-        total_loss += loss.item() * accumulate_grad
+        total_smoothed += loss.item() * accumulate_grad
+        total_raw += raw_loss.item()
         num_batches += 1
 
         if args.local_rank == 0 and batch_idx % args.log_interval == 0:
             lr = scheduler.get_last_lr()[0]
             pbar.set_postfix({
-                "loss": f"{loss.item() * accumulate_grad:.4f}",
+                "loss": f"{raw_loss.item():.4f}",
                 "lr": f"{lr:.6f}"
             })
 
-    return total_loss / num_batches, global_step
+    return total_raw / num_batches, global_step
 
 
 @torch.no_grad()
@@ -156,11 +169,14 @@ def main():
         torch.cuda.set_device(args.local_rank)
 
     device = torch.device(f"cuda:{args.local_rank}" if torch.cuda.is_available() else "cpu")
+    if device.type == 'cpu' and args.local_rank == 0:
+        print("WARNING: CUDA not available. Training on CPU will be extremely slow.")
+        print("Install PyTorch with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu124")
     set_seed(args.seed)
 
     if args.local_rank == 0:
         print("=" * 60)
-        print("XFIND-LLM 大模型训练")
+        print("烁珑GleamLM 大模型训练")
         print("=" * 60)
         print(f"World size: {args.world_size} GPU(s)")
         print(f"Config: d_model={args.d_model}, layers={args.num_layers}, "
@@ -177,38 +193,31 @@ def main():
             f"Please prepare data first. For quick test, create a small text file."
         )
 
-    text_files = []
-    for f in [train_txt, valid_txt]:
-        if os.path.exists(f):
-            text_files.append(f)
-
-    tokenizer = build_tokenizer(
-        text_files,
-        vocab_size=args.vocab_size,
-        model_prefix=args.tokenizer_path
-    )
+    # 加载 BBPE 分词器
+    tokenizer = BBPETokenizer.load(args.tokenizer_path)
 
     if args.local_rank == 0:
-        print(f"Tokenizer vocab size: {len(tokenizer)}")
+        print(f"Tokenizer vocab size: {tokenizer.get_vocab_size()}")
 
-    train_dataset = LMDataset(args.data_dir, tokenizer, args.max_seq_len, "train")
+    train_dataset = LMDataset(args.data_dir, tokenizer, args.max_seq_len, "train",
+                               max_chars=args.max_train_chars)
     val_dataset = LMDataset(args.data_dir, tokenizer, args.max_seq_len, "valid")
 
     # DataLoader
     if args.world_size > 1:
         train_sampler = DistributedSampler(train_dataset, num_replicas=args.world_size, rank=args.rank)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler,
-                                  collate_fn=collate_fn, pin_memory=True)
+                                  collate_fn=lambda b: collate_fn(b, pad_id=tokenizer.pad_id), pin_memory=True)
         val_sampler = DistributedSampler(val_dataset, num_replicas=args.world_size, rank=args.rank)
         val_loader = DataLoader(val_dataset, batch_size=args.batch_size, sampler=val_sampler,
-                                collate_fn=collate_fn, pin_memory=True)
+                                collate_fn=lambda b: collate_fn(b, pad_id=tokenizer.pad_id), pin_memory=True)
     else:
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                                   collate_fn=collate_fn, num_workers=0, pin_memory=True)
+                                   collate_fn=lambda b: collate_fn(b, pad_id=tokenizer.pad_id), num_workers=0, pin_memory=True)
         val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
-                                 collate_fn=collate_fn, num_workers=0, pin_memory=True)
+                                 collate_fn=lambda b: collate_fn(b, pad_id=tokenizer.pad_id), num_workers=0, pin_memory=True)
 
-    model = XfindModel(
+    model = GleamLMModel(
         vocab_size=args.vocab_size,
         d_model=args.d_model,
         num_layers=args.num_layers,
@@ -236,6 +245,9 @@ def main():
         label_smoothing=args.label_smoothing
     )
 
+    # 无平滑 loss，用于日志显示，与 eval 直接可比
+    raw_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id)
+
     eval_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, reduction='sum')
 
     optimizer = torch.optim.AdamW(
@@ -253,8 +265,11 @@ def main():
         lambda step: get_lr_cosine(step, total_steps, args.warmup_ratio)
     )
 
-    # AMP 梯度缩放器
-    scaler = torch.amp.GradScaler('cuda')
+    # AMP 梯度缩放器（兼容 PyTorch 1.x / 2.x）
+    if hasattr(torch.amp, 'GradScaler'):
+        scaler = torch.amp.GradScaler('cuda')
+    else:
+        scaler = torch.cuda.amp.GradScaler()
 
     start_epoch = 0
     global_step = 0
@@ -301,8 +316,8 @@ def main():
 
         # 训练一个 epoch
         train_loss, global_step = train_one_epoch(
-            model, train_loader, optimizer, scheduler, criterion, device,
-            epoch, args, global_step, writer, scaler
+            model, train_loader, optimizer, scheduler, criterion, raw_criterion,
+            device, epoch, args, global_step, writer, scaler
         )
 
         # 验证（所有 rank 参与，DDP 下自动汇总）

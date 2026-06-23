@@ -1,7 +1,7 @@
-"""XFIND-LLM SFT 指令微调脚本。基于 best_model.pt，纯文本 Q:/A: 格式 + loss mask
+"""烁珑GleamLM SFT 指令微调脚本。基于 best_model.pt，ChatML 格式 + loss mask
 
 用法：
-    python xfind_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt
+    python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt
 """
 
 import torch
@@ -17,8 +17,9 @@ import argparse
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from models.xfind_model import XfindModel
-from tokenizer.xfind_tokenizer import build_tokenizer
+from models.gleamlm_model import GleamLMModel
+from models.gleamlm_config import DEFAULT_TOKENIZER_PATH, DEFAULT_CHECKPOINT_DIR
+from tokenizer.bbpe_tokenizer import BBPETokenizer
 from inference.sampler import sample_token
 
 # ---- 系统消息池 ----
@@ -42,14 +43,21 @@ def set_seed(seed):
 # ============================================================
 
 class SFTDataset(Dataset):
-    """SFT 数据集：JSONL → 纯文本 Q:/A: 格式 → loss mask
+    """SFT 数据集：JSONL → ChatML 格式 → loss mask
 
-    格式：
-      无系统消息: "Q: {instruction}\nA: {output}<|endoftext|>"
-      有系统消息: "system: {system_prompt}\nQ: {instruction}\nA: {output}<|endoftext|>"
+    ChatML 格式：
+      <|im_start|>user\n{instruction}<|im_end|>\n<|im_start|>assistant\n{output}<|im_end|>
 
-    loss mask：Q: 和 system: 部分 label=-100，只对 A: 部分计算损失
-     """
+    有系统消息时：
+      <|im_start|>system
+{system_prompt}<|im_end|>
+<|im_start|>user
+{instruction}<|im_end|>
+<|im_start|>assistant
+{output}<|im_end|>
+
+    loss mask：user/system 部分 label=-100，只对 assistant 部分计算损失
+    """
 
     def __init__(self, data_path, tokenizer, max_seq_len=512,
                  inject_system_ratio=0.2):
@@ -62,48 +70,65 @@ class SFTDataset(Dataset):
 
         # 加载 JSONL 数据
         self.data = []
+        required_keys = {'instruction', 'output'}
         with open(data_path, 'r', encoding='utf-8') as f:
-            for line in f:
+            for i, line in enumerate(f):
                 line = line.strip()
                 if not line:
                     continue
                 item = json.loads(line)
+                missing = required_keys - set(item.keys())
+                if missing:
+                    raise ValueError(f"Line {i}: missing required keys {missing} in {data_path}")
                 self.data.append({
                     'instruction': item['instruction'],
                     'output': item['output'],
                 })
         print(f"Loaded {len(self.data)} SFT samples from {data_path}")
 
+        # 预生成 system prompt，用固定种子保证可复现
+        rng = random.Random(42)
+        self._system_prompts = []
+        for _ in range(len(self.data)):
+            if rng.random() < inject_system_ratio:
+                self._system_prompts.append(rng.choice(SYSTEM_PROMPTS))
+            else:
+                self._system_prompts.append("")
+
     def __len__(self):
         return len(self.data)
 
     def _encode(self, text):
-        """编码文本为 token ID 列表（不自动添加 BOS/EOS）"""
-        return self.tokenizer.sp.encode(text, out_type=int)
+        """编码文本为 token ID 列表（不添加 BOS/EOS）"""
+        return self.tokenizer.encode(text, add_bos=False, add_eos=False)
 
     def _build_prompt(self, instruction, system_prompt=""):
-        """构建 prompt 文本（到 \nA: 为止，不含回答）"""
+        """构建 prompt 文本（到 assistant 开头，不含回答）"""
         if system_prompt:
-            return f"system: {system_prompt}\nQ: {instruction}\nA:"
+            return (f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+                    f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                    f"<|im_start|>assistant\n")
         else:
-            return f"Q: {instruction}\nA:"
+            return (f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                    f"<|im_start|>assistant\n")
 
     def _build_full(self, instruction, output, system_prompt=""):
-        """构建完整文本（含回答）"""
+        """构建完整 ChatML 文本（含回答）"""
         if system_prompt:
-            return f"system: {system_prompt}\nQ: {instruction}\nA: {output}<|endoftext|>"
+            return (f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
+                    f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                    f"<|im_start|>assistant\n{output}<|im_end|>")
         else:
-            return f"Q: {instruction}\nA: {output}<|endoftext|>"
+            return (f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                    f"<|im_start|>assistant\n{output}<|im_end|>")
 
     def __getitem__(self, idx):
         item = self.data[idx]
         instruction = item['instruction']
         output = item['output']
 
-        # 20% 概率注入系统消息
-        system_prompt = ""
-        if random.random() < self.inject_system_ratio:
-            system_prompt = random.choice(SYSTEM_PROMPTS)
+        # 使用预生成的 system prompt（固定种子，可复现）
+        system_prompt = self._system_prompts[idx]
 
         # 编码：prompt + 完整文本
         prompt_text = self._build_prompt(instruction, system_prompt)
@@ -220,17 +245,19 @@ def train_one_epoch(model, train_loader, optimizer, scheduler, device,
 @torch.no_grad()
 def generate_response(model, tokenizer, instruction, max_new_tokens=256,
                       temperature=0.8, top_k=50, top_p=0.9):
-    """SFT 后生成对话回复，遇到 <|endoftext|> 自动截断"""
+    """SFT 后生成对话回复，遇到 <|im_end|> 或 <|endoftext|> 自动截断"""
     model.eval()
     device = next(model.parameters()).device
 
-    # 构建 prompt
-    prompt_text = f"Q: {instruction}\nA:"
-    prompt_ids = tokenizer.sp.encode(prompt_text, out_type=int)
+    # 构建 ChatML prompt（以 <|im_start|>assistant\n 结尾引导模型生成）
+    prompt_text = (f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                   f"<|im_start|>assistant\n")
+    prompt_ids = tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
     prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
 
     generated_ids = prompt_ids.copy()
     stopped = False
+    im_end_id = tokenizer.special_tokens.get("<|im_end|>")
 
     # 预填充 KV Cache
     with torch.amp.autocast('cuda'):
@@ -245,14 +272,17 @@ def generate_response(model, tokenizer, instruction, max_new_tokens=256,
         )
         token_id = next_token.item()
 
+        # 停止条件：特殊 token
         if token_id == tokenizer.eos_id:
             break
         if token_id == tokenizer.pad_id:
             break
+        if im_end_id is not None and token_id == im_end_id:
+            break
 
         generated_ids.append(token_id)
 
-        # 每 4 个 token 解码检查 <|endoftext|>
+        # 每 4 个 token 解码检查 <|endoftext|>（兜底，防止 BPE 合成该串）
         if not stopped and (i + 1) % 4 == 0:
             draft = tokenizer.decode(generated_ids[len(prompt_ids):], skip_special=True)
             if "<|endoftext|>" in draft:
@@ -293,18 +323,18 @@ def evaluate_sft(model, tokenizer, test_prompts):
 # ============================================================
 
 def get_sft_args():
-    parser = argparse.ArgumentParser(description='XFIND-LLM SFT 指令微调')
+    parser = argparse.ArgumentParser(description='烁珑GleamLM SFT 指令微调')
 
     # 数据与模型路径
     parser.add_argument("--data_path", type=str, required=True,
                         help='SFT JSONL 数据路径')
     parser.add_argument("--model_path", type=str,
-                        default="./checkpoints/best_model.pt",
+                        default=f"{DEFAULT_CHECKPOINT_DIR}/best_model.pt",
                         help='预训练模型路径')
     parser.add_argument("--tokenizer_path", type=str,
-                        default="./tokenizer/checkpoints/bpe_32k",
-                        help='分词器模型前缀')
-    parser.add_argument("--save_dir", type=str, default="./checkpoints/sft",
+                        default=DEFAULT_TOKENIZER_PATH,
+                        help='BBPE 分词器目录路径')
+    parser.add_argument("--save_dir", type=str, default=f"{DEFAULT_CHECKPOINT_DIR}/sft",
                         help='SFT 模型保存目录')
 
     # 训练参数
@@ -324,9 +354,9 @@ def get_sft_args():
                         help='系统消息随机注入比例')
 
     # 模型架构（需与 best_model.pt 一致）
-    parser.add_argument("--vocab_size", type=int, default=32000)
+    parser.add_argument("--vocab_size", type=int, default=12003)
     parser.add_argument("--d_model", type=int, default=512)
-    parser.add_argument("--num_layers", type=int, default=8)
+    parser.add_argument("--num_layers", type=int, default=12)
     parser.add_argument("--num_heads", type=int, default=8)
     parser.add_argument("--num_kv_heads", type=int, default=4)
     parser.add_argument("--d_ff", type=int, default=1365)
@@ -341,23 +371,19 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("=" * 60)
-    print("XFIND-LLM SFT 指令微调")
+    print("烁珑GleamLM SFT 指令微调")
     print("=" * 60)
     print(f"Device: {device}")
     print(f"Data: {args.data_path}")
     print(f"Model: {args.model_path}")
     print(f"LR: {args.lr:.1e}, Epochs: {args.epochs}, Batch: {args.batch_size}")
 
-    # 1. 加载分词器
-    tokenizer = build_tokenizer(
-        text_files=[],  # 空列表，直接加载已有模型
-        vocab_size=args.vocab_size,
-        model_prefix=args.tokenizer_path,
-    )
-    print(f"Tokenizer vocab size: {len(tokenizer)}")
+    # 1. 加载 BBPE 分词器
+    tokenizer = BBPETokenizer.load(args.tokenizer_path)
+    print(f"Tokenizer vocab size: {tokenizer.get_vocab_size()}")
 
     # 2. 加载预训练模型
-    model = XfindModel(
+    model = GleamLMModel(
         vocab_size=args.vocab_size,
         d_model=args.d_model,
         num_layers=args.num_layers,

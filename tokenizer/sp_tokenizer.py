@@ -1,10 +1,12 @@
-"""XFIND-LLM 分词器。基于 SentencePiece BPE，32K 词表"""
+"""V3 旧版分词器（SentencePiece BPE 32K）。
+V4+ 已由 bbpe_tokenizer.py 取代，本文件仅保留供参考。
+"""
 
 import sentencepiece as spm
 import os
 
 
-class XfindTokenizer:
+class GleamLMTokenizer:
     """BPE 分词器，32K 词表，中英混合"""
 
     def __init__(self, model_prefix=None):
@@ -112,7 +114,7 @@ class XfindTokenizer:
 
 def build_tokenizer(text_files, vocab_size=32000, model_prefix="./bpe_32k"):
     """构建分词器，首次运行自动训练 BPE，后续复用"""
-    tokenizer = XfindTokenizer(model_prefix)
+    tokenizer = GleamLMTokenizer(model_prefix)
     tokenizer.train(text_files, vocab_size, model_prefix)
     return tokenizer
 

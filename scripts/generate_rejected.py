@@ -6,8 +6,8 @@ import torch
 import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from tokenizer.xfind_tokenizer import build_tokenizer
-from models.xfind_model import XfindModel
+from tokenizer.bbpe_tokenizer import BBPETokenizer
+from models.gleamlm_model import GleamLMModel
 from inference.sampler import sample_token
 
 
@@ -17,8 +17,9 @@ def generate_rejected(model, tokenizer, instruction, max_new_tokens=256,
     """用预训练基座生成'差的'回答（作为 DPO rejected）"""
     model.eval()
     device = next(model.parameters()).device
-    prompt_text = f"Q: {instruction}\nA:"
-    prompt_ids = tokenizer.sp.encode(prompt_text, out_type=int)
+    prompt_text = (f"<|im_start|>user\n{instruction}<|im_end|>\n"
+                       f"<|im_start|>assistant\n")
+    prompt_ids = tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
     prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
     generated_ids = prompt_ids.copy()
     stopped = False
@@ -67,15 +68,11 @@ def main():
     args = parser.parse_args()
 
     print(f"Loading pretrained model: {args.model_path}")
-    tokenizer = build_tokenizer(
-        text_files=[],
-        vocab_size=32000,
-        model_prefix="./tokenizer/checkpoints/bpe_32k",
-    )
-    print(f"Tokenizer vocab: {len(tokenizer)}")
+    tokenizer = BBPETokenizer.load("./tokenizer/checkpoints/bbpe_12k")
+    print(f"Tokenizer vocab: {tokenizer.get_vocab_size()}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = XfindModel(vocab_size=32000)
+    model = GleamLMModel(vocab_size=12003)
     ckpt = torch.load(args.model_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)

@@ -1,5 +1,5 @@
-from .xfind_model import XfindModel
-from .xfind_config import XfindConfig, get_args
+from .gleamlm_model import GleamLMModel
+from .gleamlm_config import get_args
 
 
 def load_model_for_inference(model_path, device='cuda', checkpoint=None):
@@ -18,9 +18,9 @@ def load_model_for_inference(model_path, device='cuda', checkpoint=None):
     if 'args' in checkpoint:
         args = checkpoint['args']
         config = {
-            'vocab_size': getattr(args, 'vocab_size', 32000),
+            'vocab_size': getattr(args, 'vocab_size', 12003),
             'd_model': getattr(args, 'd_model', 512),
-            'num_layers': getattr(args, 'num_layers', 8),
+            'num_layers': getattr(args, 'num_layers', 12),
             'num_heads': getattr(args, 'num_heads', 8),
             'num_kv_heads': getattr(args, 'num_kv_heads', 4),
             'd_ff': getattr(args, 'd_ff', 1365),
@@ -33,7 +33,7 @@ def load_model_for_inference(model_path, device='cuda', checkpoint=None):
         config = checkpoint['config']
     else:
         config = {
-            'vocab_size': 32000, 'd_model': 512, 'num_layers': 8,
+            'vocab_size': 12003, 'd_model': 512, 'num_layers': 12,
             'num_heads': 8, 'num_kv_heads': 4, 'd_ff': 1365,
             'dropout': 0.0, 'max_seq_len': 1024, 'pad_token_id': 0,
             'tie_weights': False,
@@ -44,7 +44,7 @@ def load_model_for_inference(model_path, device='cuda', checkpoint=None):
     config['tie_weights'] = False
 
     # 构建模型
-    model = XfindModel(**config).to(device)
+    model = GleamLMModel(**config).to(device)
 
     # 加载权重
     if 'model_state_dict' in checkpoint:

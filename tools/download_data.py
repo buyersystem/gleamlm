@@ -1,5 +1,5 @@
 """
-V3 多源数据下载脚本
+多源数据下载脚本
 
 下载三个数据源并提取为纯文本（每行一篇文档）：
 1. news2016zh - 中文新闻（250万篇，~0.35B tokens）
@@ -18,10 +18,10 @@ V3 多源数据下载脚本
     data/raw/qa_raw.txt
 
 用法：
-    python tools/download_v3_data.py              # 下载全部
-    python tools/download_v3_data.py --source news   # 只下新闻
-    python tools/download_v3_data.py --source baike  # 只下百科
-    python tools/download_v3_data.py --source qa     # 只下问答
+    python tools/download_data.py              # 下载全部
+    python tools/download_data.py --source news   # 只下新闻
+    python tools/download_data.py --source baike  # 只下百科
+    python tools/download_data.py --source qa     # 只下问答
 """
 
 import os
@@ -110,7 +110,7 @@ def download_news(output_txt):
         print(f"  百度网盘: https://pan.baidu.com/s/1MLLM-CdM6BhJkj8D0u3atA")
         print(f"  提取码: k265")
         print(f"  下载后将 news2016zh.json.gz 放到: {RAW_DIR}")
-        print(f"  然后重新运行: python tools/download_v3_data.py --source news")
+        print(f"  然后重新运行: python tools/download_data.py --source news")
         return False
 
     return _extract_news(archive_file, output_txt)
@@ -162,7 +162,7 @@ def download_baike(output_txt):
         print(f"  百度网盘: https://pan.baidu.com/s/1jIpCHnWLTNYabftavo3DVw?pwd=bwvb")
         print(f"  提取码: bwvb")
         print(f"  下载 563w_baidubaike.json.7z 放到: {RAW_DIR}")
-        print(f"  然后重新运行: python tools/download_v3_data.py --source baike")
+        print(f"  然后重新运行: python tools/download_data.py --source baike")
         return False
 
     # 解压 7z
@@ -313,7 +313,7 @@ def download_qa(output_txt):
         print(f"  Kaggle: https://www.kaggle.com/datasets/terrychanorg/webtext2019zhjsonwebtext2019zh")
         print(f"  或 Google Drive: https://drive.google.com/open?id=1u2yW_XohbYL2YAK6Bzc5XrngHstQTf0v")
         print(f"  下载后将 webtext2019zh.json.gz 放到: {RAW_DIR}")
-        print(f"  然后重新运行: python tools/download_v3_data.py --source qa")
+        print(f"  然后重新运行: python tools/download_data.py --source qa")
         print()
         print(f"  备选数据源 - baike2018qa (150万百科问答，百度网盘可用):")
         print(f"  百度网盘: https://pan.baidu.com/s/12TCEwC_Q3He65HtPKN17cA")
@@ -342,7 +342,7 @@ def download_qa_alt(output_txt):
         print(f"  百度网盘: https://pan.baidu.com/s/12TCEwC_Q3He65HtPKN17cA")
         print(f"  提取码: fu45")
         print(f"  下载后将 baike2018qa.json.gz 放到: {RAW_DIR}")
-        print(f"  然后重新运行: python tools/download_v3_data.py --source qa_alt")
+        print(f"  然后重新运行: python tools/download_data.py --source qa_alt")
         return False
 
     return _extract_qa_alt(archive_file, output_txt)
@@ -425,7 +425,7 @@ def _extract_qa_alt(archive_file, output_txt):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='V3 多源数据下载与提取')
+    parser = argparse.ArgumentParser(description='多源数据下载与提取')
     parser.add_argument('--source', type=str, default='all',
                         choices=['all', 'news', 'baike', 'qa', 'qa_alt'],
                         help='下载指定数据源')
@@ -457,7 +457,7 @@ def main():
     print("  python tools/clean_text.py --input data/raw/qa_raw.txt --output data/raw/qa_clean.txt --convert_zh")
     print()
     print("  # 2. 合并 4 源数据 + 构建 train/valid/test 切分")
-    print("  python tools/build_dataset.py --input data/raw/news_clean.txt data/raw/baike_clean.txt data/raw/qa_clean.txt data/raw/wiki_clean.txt --output_dir data/v3_splits")
+    print("  python tools/build_dataset.py --input data/raw/news_clean.txt data/raw/baike_clean.txt data/raw/qa_clean.txt data/raw/wiki_clean.txt --output_dir data/splits")
 
 
 if __name__ == '__main__':
