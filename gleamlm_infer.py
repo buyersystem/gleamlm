@@ -51,9 +51,16 @@ def load_model(model_path, device='cuda'):
 
 
 def generate(model, tokenizer, prompt, max_new_tokens=256,
-             temperature=1.0, top_k=50, top_p=0.9, repetition_penalty=1.0, device='cuda'):
+             temperature=1.0, top_k=50, top_p=0.9, repetition_penalty=1.0,
+             device='cuda', sft_mode=False, stop_token=None):
     """生成文本并实时打印"""
     streamer = TextStreamer(tokenizer)
+
+    # SFT 模式：ChatML 包装
+    if sft_mode:
+        prompt = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+        if stop_token is None:
+            stop_token = "<|im_end|>"
 
     print(f"\n{'='*60}")
     print(f"Prompt: {prompt}")
@@ -69,6 +76,14 @@ def generate(model, tokenizer, prompt, max_new_tokens=256,
         new_text = chunk[prev_len:]
         prev_len = len(chunk)
         last_chunk = chunk
+        # SFT 模式：遇到 stop_token 截断
+        if sft_mode and stop_token and stop_token in new_text:
+            new_text = new_text.split(stop_token)[0] + stop_token
+            try:
+                print(new_text, end='', flush=True)
+            except UnicodeEncodeError:
+                print(new_text.encode('utf-8', errors='replace').decode('utf-8', errors='replace'), end='', flush=True)
+            break
         try:
             print(new_text, end='', flush=True)
         except UnicodeEncodeError:
@@ -80,10 +95,13 @@ def generate(model, tokenizer, prompt, max_new_tokens=256,
 
 
 def interactive(model, tokenizer, max_new_tokens=256,
-                temperature=1.0, top_k=50, top_p=0.9, repetition_penalty=1.0, device='cuda'):
+                temperature=1.0, top_k=50, top_p=0.9, repetition_penalty=1.0,
+                device='cuda', sft_mode=False):
     """交互式对话模式"""
     print("\n" + "=" * 60)
     print("烁珑GleamLM 交互式文本生成")
+    if sft_mode:
+        print("SFT 对话模式（ChatML 格式）")
     print("输入 'quit' 或 'exit' 退出")
     print("=" * 60)
 
@@ -102,7 +120,8 @@ def interactive(model, tokenizer, max_new_tokens=256,
             continue
 
         generate(model, tokenizer, prompt, max_new_tokens,
-                 temperature, top_k, top_p, repetition_penalty, device)
+                 temperature, top_k, top_p, repetition_penalty,
+                 device, sft_mode)
 
 
 def main():
@@ -121,6 +140,8 @@ def main():
                         help='Top-P 采样参数')
     parser.add_argument('--repetition_penalty', type=float, default=1.0,
                         help='重复惩罚（>1.0 抑制重复，如 1.15）')
+    parser.add_argument('--sft', action='store_true',
+                        help='SFT 对话模式（ChatML 包装 prompt，遇 <|im_end|> 截断）')
     parser.add_argument('--device', type=str, default='cuda',
                         help='设备 (cuda/cpu)')
     args = parser.parse_args()
@@ -136,10 +157,12 @@ def main():
 
     if args.prompt:
         generate(model, tokenizer, args.prompt, args.max_new_tokens,
-                 args.temperature, args.top_k, args.top_p, args.repetition_penalty, device)
+                 args.temperature, args.top_k, args.top_p, args.repetition_penalty,
+                 device, sft_mode=args.sft)
     else:
         interactive(model, tokenizer, args.max_new_tokens,
-                    args.temperature, args.top_k, args.top_p, args.repetition_penalty, device)
+                    args.temperature, args.top_k, args.top_p, args.repetition_penalty,
+                    device, sft_mode=args.sft)
 
 
 if __name__ == "__main__":

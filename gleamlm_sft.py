@@ -338,11 +338,11 @@ def get_sft_args():
                         help='SFT 模型保存目录')
 
     # 训练参数
-    parser.add_argument("--epochs", type=int, default=2)
+    parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--accumulate_grad", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=5e-7,
-                        help='SFT 学习率（预训练 LR 的 1/600）')
+    parser.add_argument("--lr", type=float, default=5e-6,
+                        help='SFT 学习率')
     parser.add_argument("--warmup_ratio", type=float, default=0.02)
     parser.add_argument("--clip_grad", type=float, default=1.0)
     parser.add_argument("--weight_decay", type=float, default=0.01)
@@ -353,8 +353,12 @@ def get_sft_args():
     parser.add_argument("--inject_system_ratio", type=float, default=0.2,
                         help='系统消息随机注入比例')
 
+    # 断点续训
+    parser.add_argument("--resume", type=str, default=None,
+                        help='从指定 checkpoint 续训（如 ./checkpoints/sft/sft_epoch_1.pt）')
+
     # 模型架构（需与 best_model.pt 一致）
-    parser.add_argument("--vocab_size", type=int, default=12003)
+    parser.add_argument("--vocab_size", type=int, default=12001)
     parser.add_argument("--d_model", type=int, default=512)
     parser.add_argument("--num_layers", type=int, default=12)
     parser.add_argument("--num_heads", type=int, default=8)
@@ -434,6 +438,22 @@ def main():
     )
     scaler = torch.amp.GradScaler('cuda')
 
+    # ---- 断点续训 ----
+    start_epoch = 0
+    best_loss = float('inf')
+
+    if args.resume:
+        print(f"\nResuming from: {args.resume}")
+        resume_ckpt = torch.load(args.resume, map_location=device)
+        model.load_state_dict(resume_ckpt['model_state_dict'])
+        optimizer.load_state_dict(resume_ckpt['optimizer_state_dict'])
+        scheduler.load_state_dict(resume_ckpt['scheduler_state_dict'])
+        scaler.load_state_dict(resume_ckpt['scaler_state_dict'])
+        start_epoch = resume_ckpt['epoch'] + 1
+        global_step = resume_ckpt.get('global_step', 0)
+        best_loss = resume_ckpt.get('train_loss', float('inf'))
+        print(f"  Resumed at epoch {start_epoch}, global_step={global_step}, best_loss={best_loss:.4f}")
+
     # 5. 评估提示词
     eval_prompts = [
         "你好，请介绍一下你自己。",
@@ -449,10 +469,10 @@ def main():
 
     # 7. 训练循环
     os.makedirs(args.save_dir, exist_ok=True)
-    global_step = 0
-    best_loss = float('inf')
+    if not args.resume:
+        global_step = 0
 
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         train_loss, global_step = train_one_epoch(
             model, train_loader, optimizer, scheduler, device,
             epoch, args, global_step, scaler,
@@ -484,6 +504,7 @@ def main():
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
+                'args': args,
             }, best_path)
             print(f"  Saved best SFT model (loss={train_loss:.4f}) -> {best_path}")
 

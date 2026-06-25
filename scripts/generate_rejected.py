@@ -72,7 +72,7 @@ def main():
     print(f"Tokenizer vocab: {tokenizer.get_vocab_size()}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = GleamLMModel(vocab_size=12003)
+    model = GleamLMModel(vocab_size=12001)
     ckpt = torch.load(args.model_path, map_location=device)
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device)

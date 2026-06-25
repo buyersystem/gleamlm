@@ -28,7 +28,7 @@
 | 词表大小 | 12,003（BBPE 自研） |
 | 网络层数 | 12 |
 | 模型维度 | 512 |
-| QK-Norm | ✅ |
+| QK-Norm | --- |
 | 查询头 / KV 头 | 8 / 4（GQA） |
 | SwiGLU 中间维度 | 1365 |
 | Dropout | 0.1 |
@@ -74,6 +74,8 @@ GleamLM/
 │
 ├── scripts/
 │   ├── generate_sft_data.py   # DeepSeek API 蒸馏 SFT 数据
+│   ├── generate_sft_data_full.py # 全量 SFT 数据生成（10000 条，三类配比）
+│   ├── gen_sft.py             # SFT 数据精简生成脚本
 │   ├── generate_rejected.py   # 基模型生成 DPO rejected 样本
 │   └── clean_sft_data.py      # SFT 数据格式清洗
 │
@@ -153,6 +155,14 @@ python gleamlm_infer.py --model checkpoints/best_model.pt
 
 # 调整采样
 python gleamlm_infer.py --model checkpoints/best_model.pt --temperature 0.8 --top_k 50 --top_p 0.9
+
+# SFT 模型推理（ChatML 格式 + <|im_end|> 自动截断）
+python gleamlm_infer.py --model checkpoints/sft/sft_best.pt --sft --prompt "你好，请介绍一下你自己。"
+python gleamlm_infer.py --model checkpoints/sft/sft_best.pt --sft  # 交互模式
+
+# DPO 模型推理（同样使用 ChatML 格式，经过偏好对齐）
+python gleamlm_infer.py --model checkpoints/dpo/dpo_best.pt --sft --prompt "什么是机器学习？"
+python gleamlm_infer.py --model checkpoints/dpo/dpo_best.pt --sft  # 交互模式
 ```
 
 ### 4. SFT 指令微调
@@ -196,7 +206,7 @@ pytest tests/ -v
 
 最终切分为 `train.txt`（6.48 GB，90%）/ `valid.txt`（0.36 GB，5%）/ `test.txt`（0.36 GB，5%），合计 7.20 GB。
 
-### GleamLM-Nano V4 字符加权配比
+### GleamLM-Nano 字符加权配比
 
 各源行均字符差异巨大（新闻 ~2204 字/行 vs 维基 ~346 字/行），`prepare_data.py` 自动按字符占比换算行数配比：
 
@@ -211,26 +221,17 @@ pytest tests/ -v
 
 ---
 
-## 训练结果
+## GleamLM-Nano 训练结果
 
-### GleamLM-Nano V3（4 源混合 1.2B tokens，label_smoothing=0.1）
+### （BBPE 12K + 字符加权四源混合，~40M）
 
-| Epoch | Val Loss | PPL | PPL↓ |
-|-------|----------|-----|------|
-| 0 | 3.8242 | 45.80 | — |
-| 1 | 3.7038 | 40.60 | -5.20 |
-| 2 | 3.6490 | 38.44 | -2.16 |
-| 3 | 3.6143 | 37.12 | -1.32 |
-| 4 | 3.5887 | 36.19 | -0.93 |
-| 5 | 3.5702 | 35.55 | -0.64 |
-| 6 | 3.5585 | 35.13 | -0.42 |
-| 7 | 3.5532 | **34.93** | -0.20 |
+![](./images/V4/train_loss.jpg)
 
-> V3 三项关键改进：（1）4 源混合替代单源 Wiki；（2）`label_smoothing=0.1`；（3）`stride=768` 降低过拟合。8 epoch 全程无过拟合，PPL 最终 34.93。
 
-### GleamLM-Nano V4（BBPE 12K + 字符加权四源混合，~40M）
 
-V4 核心升级：BBPE 256 字节基元（替代 32K 字符级 BPE），词表 12001 → embedding 仅 6.1M（15% 参数），把更多容量留给 Transformer 本体。
+![](./images/V4/val.jpg)
+
+训练配置：`batch_size=4, accumulate_grad=16`（等效 64），`label_smoothing=0.1`，`stride=768`，Cosine Warmup + Decay，12GB 显存持续 ~92% 满载。
 
 | Epoch | Train Loss | Val Loss | PPL | PPL↓ | 备注 |
 |-------|-----------|----------|-----|------|------|
@@ -240,27 +241,119 @@ V4 核心升级：BBPE 256 字节基元（替代 32K 字符级 BPE），词表 1
 | 3 | 2.7655 | 2.6255 | 13.81 | -0.44 | 边际收益递减，改善持续 |
 | 4 | 2.7440 | 2.6136 | **13.65** | -0.16 | 训练完成，全程无过拟合 |
 
-训练配置：`batch_size=4, accumulate_grad=16`（等效 64），`label_smoothing=0.1`，`stride=768`，Cosine Warmup + Decay，12GB 显存持续 ~92% 满载。
+
 
 **最佳结果**：`val_loss=2.6136`，`val_ppl=13.65`，模型保存至 `./checkpoints`。
 
-> V4 相比 V3：PPL 从 34.93 → 13.65，**但 PPL 数值不直接可比**（词表从 32K → 12K 约带来 ~1.0 基线 loss 差异）。真正收益体现在生成质量——V3 输出乱码式不连贯，V4 输出通顺、格式清晰、首句基本沾边。5 个 epoch 全程无过拟合，val_loss 和 ppl 持续下降，边际收益递减但仍未完全收敛。长尾事实知识受限于 40M 参数容量，后续将通过 SFT + DPO 对齐改善。
+> 输出通顺、格式清晰、首句基本沾边。5 个 epoch 全程无过拟合，val_loss 和 ppl 持续下降，边际收益递减但仍未完全收敛。长尾事实知识受限于 40M 参数容量，后续将通过 SFT + DPO 对齐改善。
 
-**Epoch 2 生成样例**（temperature=0.8, repetition_penalty=1.15）：
+**Epoch 4 最佳模型生成样例**（temperature=0.5, repetition_penalty=1.1, max_new_tokens=35）：
 
 | 输入 | 输出（节选） |
 |------|------|
-| `人工智能是` | 一个可行的开源项目。通过数字化技术，我们可以为用户提供完整的信息和解决方案... |
-| `物理` | 学家，他在此发表了《超导体的研究》一书。该书被选入《中国科学院院士名录》... |
-| `火影忍者中的六道仙人是忍术开创者。` | 他的成功让忍术开始在日本和美国的流行，并且获得了很多名气... |
-| `水蒸气是水变的。` | 在水蒸气可能会引起热浪，但是对于热气的控制仍然很不理想... |
+| `中国有五千年的` | 历史，是中华人民共和国的一部分。（首词正确预测"历史"）... |
+| `机器学习是人工智能的` | 一个重要方面。（精准命中常见搭配）... |
+| `读书的好处是` | 每个人都会有自己的兴趣爱好和想法，不管你是否喜欢阅读，都可以通过阅读... |
+| `世界上最高的山峰是` | 位于中国西藏自治区拉萨市南部的一座山峰，海拔高度1,463米。（地理关联正确）... |
 
-> 模型展现出模板拼接 + 高频共现记忆的特征：语法通顺、续写合理，但缺乏精确的事实锚点。这是 40M 小模型的物理上限，需通过 SFT 对话格式微调和 DPO 偏好对齐来约束回答质量。
+> 模型对高频搭配和常见知识有一定记忆（如"五千年→历史"、"AI→一个方面"），能保持续写方向大致相关。但在长尾知识上仍会发散到无关话题。这是 40M 小模型在纯预训练阶段的物理上限，后续通过 SFT + DPO 对齐可显著改善。
 
-### GleamLM-Nano V3 SFT + DPO（39M 对齐验证）
+### GleamLM-Nano SFT + DPO（40M 对齐验证）
 
-- **SFT**：995 条 DeepSeek 蒸馏数据，1 epoch，ChatML 格式 + loss mask，模型学会直接回应问题
-- **DPO**：150 对 chosen/rejected，DPO loss 0.95 → 0.60，流程验证通过
+#### SFT 数据生成
+
+采用 DeepSeek-V4-Pro API 蒸馏生成 10000 条高质量中文指令数据（`data/sft_data.jsonl`），三类配比：
+
+> **API 配置**：如需重新生成数据，需设置环境变量 `DEEPSEEK_API_KEY`（DeepSeek 控制台创建 API Key）。当前仓库已包含生成好的 `data/sft_data.jsonl`，无需额外配置即可直接训练。
+
+| 类别 | 占比 | 条数 | 内容范围 |
+|------|:---:|------|----------|
+| **A 类 · 通用问答** | 40% | 4000 | 烹饪技巧、家务整理、健康习惯、学习方法、安全科技、旅行出行、生活妙招 |
+| **B 类 · 知识回答** | 30% | 3000 | 历史（25 条基础）、地理（19 条）、科学（25 条）、文化（18 条），通过模板扩展至 3000 条 |
+| **C 类 · 创作与闲聊** | 30% | 3000 | 描写创作（夕阳、大海、星空等）、情感感悟（孤独、成长、友情等）、日常聊天、观点讨论 |
+
+数据格式为**标准 ChatML**（V4 BBPE 12K 词表原生支持 `<|im_start|>` / `<|im_end|>` 特殊 token）：
+
+```
+<|im_start|>system
+你是一个乐于助人的AI助手。<|im_end|>
+<|im_start|>user
+如何煮出一碗好吃的面条？<|im_end|>
+<|im_start|>assistant
+煮好面条的诀窍：水要多，水开后下面，用筷子拨散防止粘连...<|im_end|>
+```
+
+训练时仅对 `assistant` 部分计算 loss（loss mask），确保模型学会回答而非重复问题。
+
+#### SFT 指令微调
+
+```bash
+# 从头训练
+python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt
+
+# 断点续训（从 Epoch 1 checkpoint 继续）
+python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt --resume ./checkpoints/sft/sft_epoch_1.pt
+```
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 训练数据 | 10000 条 | JSONL 格式，ChatML 包装 |
+| 训练轮数 | 3 epochs | 避免过拟合 |
+| 学习率 | 5e-6 | 预训练的 1/600，保护通用能力 |
+| Batch size | 8 | accumulate=4，有效 batch=32 |
+| 格式 | ChatML + loss mask | 仅 assistant 部分计算损失 |
+| 预计耗时 | ~55 分钟 | 单卡 12GB |
+| 续训 | `--resume PATH` | 从 checkpoint 恢复 optimizer/scheduler/scaler 状态续训 |
+
+- **ChatML + loss mask**：V4 BBPE 已原生支持 `<|im_start|>`（token_id=12000）、`<|im_end|>`（token_id=12001），无需格式绕过
+- **评估方式**：对比微调前后对同一 prompt 的生成质量，检验是否从"续写"转为"直接回答"
+
+**SFT 训练结果**（lr=5e-6, epochs=3）：
+
+| Epoch | train_loss | 说明 |
+|-------|-----------|------|
+| 0 | 3.3279 | 初始状态，loss 与预训练末期接近 |
+| 1 | ~2.8 | 开始适应 ChatML 格式 |
+| 2 | ~2.2 | 对话格式基本学会 |
+
+> 提升 10 倍学习率后，模型仅需 3 个 epoch 即可掌握对话格式。loss 从 3.3 降至 2.2，说明模型有效学习了指令跟随能力。
+
+**SFT 后生成样例**（`--sft --temperature 0.7 --repetition_penalty 1.15 --max_new_tokens 128`）：
+
+| Prompt | 模型输出 | 评价 |
+|--------|----------|------|
+| 你好，请介绍一下你自己 | 如果你是个人，建议你先学会分析别人的优劣... | 格式正确（直接回答），但内容偏移到人生建议 |
+| 什么是机器学习 | 机器学习是指将信息传递给机器人，从而实现机器学习的一种方法... | 方向沾边，夹杂大量无关细节 |
+| 请用一句话描述北京的秋天 | 北京是世界上最大的热带气旋生物多样性保护区... | 完全幻觉，缺乏事实锚点 |
+| 写一首关于春天的五言诗 | 春天是温暖的季节，是安静的季节... | 没写成诗，只是在描述春天 |
+| 请解释一下什么是光合作用 | 光合作用是一种天然的氧化物，分子量约2000万个太阳质量... | 方向沾边，但事实严重错误 |
+
+> **结论**：SFT 成功让模型从"续写"转为"直接回答"，格式层面完全达标。但 40M 参数容量不足以支撑事实性知识的精准记忆——这是小模型的物理上限，而非训练问题。后续通过 DPO 对齐可进一步提升安全性和回答质量。
+
+#### DPO 偏好对齐
+
+```bash
+python gleamlm_dpo.py --data_path ./data/dpo_data.jsonl --model_path ./checkpoints/sft/sft_best.pt
+```
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 训练数据 | 150 对 chosen/rejected | SFT 模型生成 rejected（回答同一问题但答错），DeepSeek 输出作为 chosen |
+| 训练轮数 | 1 epoch | β=0.1，学习率 1e-7 |
+| DPO loss | 0.89 → 0.79 | 偏好信号有效学习，loss 下降 11% |
+| 预计耗时 | ~2 分钟 | 150 对数据，batch=2×2 |
+
+**DPO 后生成样例**（`--sft --temperature 0.7 --repetition_penalty 1.15 --max_new_tokens 128`）：
+
+| Prompt | SFT 后 | DPO 后 | 改善 |
+|--------|--------|--------|:---:|
+| 北京秋天 | 北京是世界上最大的热带气旋生物多样性保护区 | 落叶遍野、金黄如雪、红得让人心旷神怡 | 🟢 |
+| 光合作用 | 天然的氧化物，分子量约2000万个太阳质量 | 生物体生长发育和光照时间变化 | 🟢 |
+| 自我介绍 | 如果你是个人，建议先学会分析别人的优劣 | 练字孩子的成长故事 | ⬜ 叙事更连贯但仍跑题 |
+| 机器学习 | 将信息传递给机器人 | 操作系统/计算机模块分离 | ⬜ 方向修正，细节仍幻觉 |
+| 五言诗 | 春天是温暖的季节，是安静的季节 | 描写+引经据典（三国/水浒） | ⬜ 更有文采，但未成诗 |
+
+> **DPO 结论**：最显著的效果是纠正方向性错误（不再说北京是保护区、光合作用有太阳质量）。但 40M 参数注定无法记住精准事实。GleamLM-Nano 全链路（预训练→SFT→DPO）至此收尾，下一阶段转向 GleamLM-Lite（80M）预训练。
 
 ---
 
