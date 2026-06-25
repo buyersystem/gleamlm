@@ -339,7 +339,7 @@ def get_sft_args():
     parser.add_argument("--resume", type=str, default=None,
                         help='从指定 checkpoint 续训（如 ./checkpoints/sft/sft_epoch_1.pt）')
 
-    parser.add_argument("--vocab_size", type=int, default=12001)
+    parser.add_argument("--vocab_size", type=int, default=12003)
     parser.add_argument("--d_model", type=int, default=512)
     parser.add_argument("--num_layers", type=int, default=12)
     parser.add_argument("--num_heads", type=int, default=8)
@@ -380,7 +380,7 @@ def main():
     ).to(device)
 
     checkpoint = torch.load(args.model_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
     print(f"Loaded pretrained model: {args.model_path}")
     total, trainable = model.get_num_params()
     print(f"Model params: {total / 1e6:.2f}M total, {trainable / 1e6:.2f}M trainable")

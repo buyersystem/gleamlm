@@ -58,7 +58,7 @@ tok = BBPETokenizer.load("./tokenizer/checkpoints/bbpe_12k")
 dataset = LMDataset(data_dir="data/test_splits", max_seq_len=512,
                      stride=128, tokenizer=tok, split="train", max_chars=3_000_000)
 loader = torch.utils.data.DataLoader(dataset, batch_size=8, shuffle=True,
-                                      collate_fn=collate_fn, drop_last=True)
+                                      collate_fn=lambda b: collate_fn(b, pad_id=tok.pad_id), drop_last=True)
 
 model = GleamLMModel(vocab_size=12003, d_model=512, num_layers=12,
                       num_heads=8, num_kv_heads=4, max_seq_len=512).to(device)
