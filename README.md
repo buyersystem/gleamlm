@@ -179,8 +179,14 @@ python gleamlm_dpo.py --data_path ./data/dpo_data.jsonl --model_path ./checkpoin
 
 ### 6. 量化导出
 
+FP32 → FP16，体积减半（178.9 MB → 89.5 MB，2.0x），推理精度基本无损。
+
 ```bash
+# 预训练模型
 python gleamlm_quantize.py --input checkpoints/best_model.pt --output checkpoints/model_fp16.pt
+
+# DPO 对齐模型
+python gleamlm_quantize.py --input checkpoints/dpo/dpo_best.pt --output checkpoints/dpo/dpo_fp16.pt
 ```
 
 ### 7. 运行测试
