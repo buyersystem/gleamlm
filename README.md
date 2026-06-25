@@ -145,8 +145,8 @@ tensorboard --logdir ./checkpoints/runs
 | 关键参数 | 默认值 | 说明 |
 |----------|--------|------|
 | `--epochs` | 5 | 训练轮数 |
-| `--batch_size` | 8 | Micro-batch（显存安全） |
-| `--accumulate_grad` | 8 | 梯度累积（有效 batch=64） |
+| `--batch_size` | 4 | Micro-batch（显存安全） |
+| `--accumulate_grad` | 16 | 梯度累积（有效 batch=64） |
 | `--lr` | 3e-4 | 峰值学习率 |
 | `--label_smoothing` | 0.1 | 标签平滑 |
 
@@ -313,7 +313,7 @@ python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoin
 |------|-----|------|
 | 训练数据 | 10000 条 | JSONL 格式，ChatML 包装 |
 | 训练轮数 | 3 epochs | 避免过拟合 |
-| 学习率 | 5e-6 | 预训练的 1/600，保护通用能力 |
+| 学习率 | 5e-6 | 预训练的 1/60，保护通用能力 |
 | Batch size | 8 | accumulate=4，有效 batch=32 |
 | 格式 | ChatML + loss mask | 仅 assistant 部分计算损失 |
 | 预计耗时 | ~55 分钟 | 单卡 12GB |
