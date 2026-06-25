@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.gleamlm_model import GleamLMModel
 
 
-VOCAB_SIZE = 12003
+VOCAB_SIZE = 12001
 D_MODEL = 512
 MAX_SEQ_LEN = 256
 
