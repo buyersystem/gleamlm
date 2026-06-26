@@ -40,30 +40,6 @@ DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
 os.makedirs(RAW_DIR, exist_ok=True)
 
 
-def try_gdown(file_id, output_path, desc):
-    """通过 gdown 从 Google Drive 下载文件"""
-    if os.path.exists(output_path):
-        print(f"  [{desc}] 文件已存在: {output_path}")
-        return True
-
-    try:
-        import gdown
-    except ImportError:
-        print(f"  [{desc}] gdown 未安装，跳过 Google Drive 下载")
-        print(f"  安装: pip install gdown")
-        return False
-
-    print(f"  [{desc}] Google Drive 下载中...")
-    try:
-        gdown.download(id=file_id, output=output_path, quiet=False)
-        if os.path.exists(output_path):
-            print(f"  [{desc}] 下载完成: {output_path}")
-            return True
-    except Exception as e:
-        print(f"  [{desc}] gdown 下载失败: {e}")
-    return False
-
-
 def download_news(output_txt):
     """下载 news2016zh 新闻数据集，提取 title+desc+content"""
     print("\n" + "=" * 60)
