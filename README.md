@@ -8,7 +8,12 @@
 
 ## 项目简介
 
-纯 PyTorch 从零实现，零 HuggingFace 依赖，覆盖 **四源中文数据管线**（下载→清洗→去重→字符加权配比）→ **BBPE 分词器训练**（自研BBPE，零外部依赖）→ **Decoder-only 模型**（SwiGLU / GQA / RoPE / QK-Norm）→ **AMP + DDP 训练**（断点续训保存 optimizer/scheduler/scaler 全量状态）→ **SFT / DPO 对齐**（ChatML + loss mask）→FP16量化 → **KV Cache 流式推理**全链路。GleamLM-Nano模型单卡 12GB 显存即可训练，Windows/Linux 双平台兼容。
+纯 PyTorch 从零实现，零 HuggingFace 依赖，覆盖 **多源中文数据管线**（下载→清洗→去重→字符加权配比）→ **BBPE 分词器训练**（自研，零外部依赖）→ **Decoder-only 模型**（SwiGLU / GQA / RoPE / QK-Norm）→ **AMP + DDP 训练**（断点续训保存 optimizer/scheduler/scaler 全量状态）→ **SFT / DPO 对齐**（ChatML + loss mask）→FP16量化 → **KV Cache 流式推理**全链路。
+
+| 版本 | 参数量 | 定位 | 状态 |
+|------|--------|------|------|
+| **GleamLM-Nano** | ~40M | 教学入门，单卡 12GB 即可完整训练 | ✅ 已完成 |
+| **GleamLM-Lite** | ~87M | 消融实验平台，FFN 3.4× 扩容，Windows/Linux 双平台 | 🔨 训练中 |
 
 ## 技术架构
 
@@ -24,19 +29,25 @@
 | 分布式 | DDP（`torchrun` 一行启动） | — |
 | 推理加速 | KV Cache + 流式生成 + 多采样策略 | — |
 
-### 模型规格（GleamLM-Nano ~40M）
+### 模型规格
 
-| 参数 | 值 |
-|------|-----|
-| 上下文窗口 | 1024（RoPE 支持外推至 2048/4096） |
-| 词表大小 | 12,001（自研 BBPE） |
-| 网络层数 | 12 |
-| 模型维度 | 512 |
-| QK-Norm | ✅ |
-| 查询头 / KV 头 | 8 / 4（GQA） |
-| SwiGLU 中间维度 | 1365 |
-| Dropout | 0.1 |
-| 参数量 | **~40M**（Embed 6.1M + Transformer 34.6M） |
+| 参数 | Nano ~40M | Lite ~87M |
+|------|:---:|:---:|
+| 上下文窗口 | 1024 | **2048** |
+| 词表大小 | 12,002（自研 BBPE） | 12,002（复用） |
+| 网络层数 | 12 | 12 |
+| 模型维度 | 512 | **768** |
+| QK-Norm | ✅ | ✅ |
+| 查询头 / KV 头 | 8 / 4 | **12 / 6** |
+| SwiGLU 中间维度 | 1365 | **2048**（3.4× FFN 容量） |
+| Dropout | 0.1 | 0.0 |
+| Flash Attention | — | ✅ |
+| Z-Loss | — | 1e-4 |
+| 参数量 | **~40M** | **~87M** |
+| Embed 占比 | 15% | 11% |
+| FFN 参数 | 16.8M (41%) | **56.6M (65%)** |
+
+> Lite 设计原则：测试证实 12 层是中文生成的硬阈值，且事实知识 100% 存于 FFN。因此保持 12 层不动，d_model 扩至 768，d_ff 按 SwiGLU 标准公式扩至 2048（3.4× FFN 容量），词表复用 Nano 的 12K。
 
 ---
 
@@ -44,61 +55,68 @@
 
 ```
 GleamLM/
-├── gleamlm_train.py           # 预训练脚本（AMP + DDP + Cosine + 断点续训）
-├── gleamlm_infer.py           # 推理脚本（KV Cache + 交互式对话）
-├── gleamlm_dataset.py         # 数据集（滑动窗口 + memmap 预分词）
-├── gleamlm_sft.py             # SFT 指令微调（ChatML + loss mask）
-├── gleamlm_dpo.py             # DPO 偏好对齐（policy + frozen reference）
-├── gleamlm_quantize.py        # FP16 量化导出
-├── quick_test_sft_dpo.py      # SFT+DPO 全链路快速验证
+├── gleamlm/                     # 共享核心库
+│   ├── models/model.py          # GleamLMModel（RMSNorm/RoPE/GQA/SwiGLU/QK-Norm）
+│   ├── tokenizer/tokenizer.py   # BBPE 12K 分词器（纯 Python 零依赖）
+│   ├── dataset/dataset.py       # LMDataset（memmap 滑动窗口 + 预分词缓存）
+│   ├── inference/               # KV Cache 流式生成 + 多采样策略
+│   └── utils/                   # 配置加载 / LR 调度 / Z-Loss / autocast
 │
-├── models/
-│   ├── gleamlm_model.py       # 模型定义（RMSNorm / RoPE / GQA / SwiGLU）
-│   └── gleamlm_config.py      # 全局配置 + 路径常量
+├── gleamlm-nano/                # 40M 教学版
+│   ├── train.py                 # 预训练（AMP + DDP + Cosine + 断点续训）
+│   ├── infer.py                 # 推理（KV Cache + 交互式对话 + SFT 模式）
+│   ├── sft.py                   # SFT 指令微调（ChatML + loss mask）
+│   ├── dpo.py                   # DPO 偏好对齐（policy + frozen reference）
+│   ├── quantize.py              # FP16 量化导出
+│   ├── quick_test_sft_dpo.py    # SFT+DPO 全链路快速验证
+│   ├── evaluation/              # PPL 评估 + 生成样例
+│   └── checkpoints/             # 模型权重 + TensorBoard 日志
 │
-├── tokenizer/
-│   └── bbpe_tokenizer.py      # V4 BBPE 分词器（607行，纯 Python 零依赖）
+├── gleamlm-lite/                # 87M 实验版
+│   ├── train.py                 # 预训练（Cosine LR + FlashAttn + Z-Loss）
+│   ├── infer.py                 # 推理（2048 context + KV Cache）
+│   ├── sft.py                   # SFT 指令微调
+│   ├── dpo.py                   # DPO 偏好对齐
+│   ├── test_train.py            # 轻量训练冒烟测试
+│   └── evaluation/              # PPL 评估 + 生成样例
 │
-├── inference/
-│   ├── sampler.py             # Temperature / TopK / TopP 采样
-│   └── streamer.py            # KV Cache 流式生成
+├── configs/                     # YAML 配置继承
+│   ├── base.yaml                # 全局默认值
+│   ├── nano.yaml                # 40M 配置
+│   └── lite.yaml                # 87M 配置
 │
-├── utils/
-│   └── logging.py             # 统一日志模块
+├── data_tools/                  # 数据处理管线
+│   ├── download_data.py         # 多源数据下载
+│   ├── prepare_data.py          # 一键管线（清洗→去重→混合→切分）
+│   ├── build_dataset.py         # 流式多源混合 + train/valid/test 切分
+│   ├── clean_text.py            # 文本清洗（长度/语言/广告过滤）
+│   ├── dedup_text.py            # 去重（MD5 exact / prefix）
+│   ├── filter_qa.py             # QA 专项过滤
+│   ├── extract_parquet.py       # Parquet → txt 转换
+│   ├── generate_sft_data.py     # DeepSeek API 蒸馏 SFT 数据
+│   └── clean_sft_data.py        # SFT 数据格式清洗
 │
-├── tools/
-│   ├── prepare_data.py        # 一键数据管线（清洗→去重→混合→切分）
-│   ├── build_dataset.py       # 流式多源混合 + train/valid/test 切分
-│   ├── clean_text.py          # 文本清洗（长度/语言/广告过滤）
-│   ├── dedup_text.py          # 去重（MD5 exact / prefix）
-│   ├── filter_qa.py           # QA 专项过滤
-│   ├── download_data.py       # 多源数据下载
-│   ├── eval_ppl.py            # PPL 评估工具
-│   └── check_ckpt.py          # Checkpoint 检查
+├── scripts/                     # 评估 + 验证脚本
+│   ├── eval_ppl.py              # PPL 评估
+│   ├── eval_knowledge.py        # 知识评估
+│   ├── eval_layer_dropout.py    # 层 dropout 测试
+│   ├── verify_both.py           # 40M+87M 双模型验证
+│   └── verify_lite.py           # 87M 单独验证
 │
-├── scripts/
-│   ├── generate_sft_data.py   # DeepSeek API 蒸馏 SFT 数据
-│   ├── generate_sft_data_full.py # 全量 SFT 数据生成（10000 条，三类配比）
-│   ├── gen_sft.py             # SFT 数据精简生成脚本
-│   ├── generate_rejected.py   # 基模型生成 DPO rejected 样本
-│   └── clean_sft_data.py      # SFT 数据格式清洗
-│
-├── tests/
-│   ├── test_tokenizer.py      # Tokenizer 冒烟测试
-│   ├── test_model.py          # 模型前向/反向/KV Cache 测试
-│   └── test_dataset.py        # 数据集和 collate_fn 测试
+├── tests/                       # 核心库测试
+│   ├── test_model.py            # 模型前向/反向/KV Cache 测试
+│   ├── test_tokenizer.py        # Tokenizer 冒烟测试
+│   ├── test_dataset.py          # 数据集和 collate_fn 测试
+│   └── test_evaluation.py       # 评估模块测试
 │
 ├── data/
-│   ├── raw/                   # 原始语料 + 清洗后文本
-│   └── splits/                # train/valid/test + .npy 预分词缓存
+│   ├── nano_data/               # Nano 训练/验证/测试 + .npy 缓存
+│   ├── lite_data/               # Lite 训练/验证/测试 + .npy 缓存
+│   ├── sft_data.jsonl           # SFT 训练数据（10000 条）
+│   └── dpo_data.jsonl           # DPO 训练对
 │
-├── evaluation/
-│   ├── perplexity.py          # PPL 评估
-│   └── generate_samples.py    # 多 prompt 生成评测
-│
-├── checkpoints/               # 模型检查点 + TensorBoard 日志
-├── requirements.txt           # Python 依赖（5 个包）
-├── requirements-dev.txt       # 开发依赖
+├── docs/                        # 开发文档
+├── requirements.txt             # Python 依赖
 └── README.md
 ```
 
@@ -121,25 +139,27 @@ pip install -r requirements.txt
 ```bash
 # 下载原始数据（仅首次）
 pip install py7zr kagglehub
-python tools/download_data.py
+python data_tools/download_data.py
 
 # 一键：清洗 → 去重 → QA过滤 → 字符加权配比 → 混合切分
-python tools/prepare_data.py --input data/raw --output data/splits
+python data_tools/prepare_data.py --input data/raw --output data/nano_data
 
 # 自定义配比（字符占比）
-python tools/prepare_data.py --ratios 0.30 0.12 0.43 0.15
+python data_tools/prepare_data.py --ratios 0.30 0.12 0.43 0.15
 ```
 
 ### 2. 预训练
 
+#### GleamLM-Nano（40M）
+
 ```bash
-python gleamlm_train.py --data_dir ./data/splits --epochs 5
+python gleamlm-nano/train.py --config configs/nano.yaml
 
 # 断点续训
-python gleamlm_train.py --data_dir ./data/splits --load_checkpoint checkpoints/checkpoint_epoch_3.pt
+python gleamlm-nano/train.py --config configs/nano.yaml --load_checkpoint gleamlm-nano/checkpoints/checkpoint_epoch_3.pt
 
 # 监控
-tensorboard --logdir ./checkpoints/runs
+tensorboard --logdir ./gleamlm-nano/checkpoints/runs
 ```
 
 | 关键参数 | 默认值 | 说明 |
@@ -150,60 +170,89 @@ tensorboard --logdir ./checkpoints/runs
 | `--lr` | 3e-4 | 峰值学习率 |
 | `--label_smoothing` | 0.1 | 标签平滑 |
 
-优化器：AdamW（β=0.9,0.95，wd=0.01），BF16 AMP，Cosine Warmup + Decay。首次运行自动 BBPE 分词，后续 mmap 加载 ~1MB。
+单卡 RTX 4070 Ti 12GB，每 epoch ~15 小时，5 epoch 约 75 小时。预训练基座模型已在魔搭上线：[GleamLM-Nano · 模型库](https://www.modelscope.cn/models/philexohf/GleamLM-Nano)。
 
-单卡 RTX 4070 Ti 12GB，每 epoch ~15 小时，5 epoch 约 75 小时。预训练基座模型已在魔搭上线，地址：[GleamLM-Nano · 模型库](https://www.modelscope.cn/models/philexohf/GleamLM-Nano)。如果直接使用预训练模型进行后续任务，需要修改指令中的模型名称。
+#### GleamLM-Lite（87M）
+
+```bash
+python gleamlm-lite/train.py --config configs/lite.yaml
+
+# 断点续训
+python gleamlm-lite/train.py --config configs/lite.yaml --load_checkpoint gleamlm-lite/checkpoints/checkpoint_epoch_1.pt
+```
+
+| 关键参数 | 默认值 | 说明 |
+|----------|--------|------|
+| `--epochs` | 2 | 训练轮数（起步观察） |
+| `--batch_size` | 4 | Micro-batch（显存安全） |
+| `--accumulate_grad` | 16 | 梯度累积（有效 batch=64） |
+| `--lr` | 4e-4 | 峰值学习率（更大模型梯度方差小） |
+| `--z_loss_weight` | 1e-4 | Z-Loss 防 logit 爆炸 |
+
+87M 的 2× 宽度 + 2× seq_len，计算量约 Nano 的 4×。单卡 12GB 可训（~8-9 GB），建议多卡 DDP 加速。
+
+优化器：AdamW（β=0.9,0.95，wd=0.01），BF16 AMP，Cosine Warmup + Decay，Flash Attention（`F.scaled_dot_product_attention`）。首次运行自动 BBPE 分词，后续 mmap 加载 ~1MB。
 
 ### 3. 推理
 
 ```bash
+# --- Nano 40M ---
+
 # 单次生成
-python gleamlm_infer.py --model checkpoints/best_model.pt --prompt "人工智能是"
+python gleamlm-nano/infer.py --model gleamlm-nano/checkpoints/best_model.pt --prompt "人工智能是"
 
 # 交互模式
-python gleamlm_infer.py --model checkpoints/best_model.pt
-
-# 调整采样
-python gleamlm_infer.py --model checkpoints/best_model.pt --temperature 0.8 --top_k 50 --top_p 0.9
+python gleamlm-nano/infer.py --model gleamlm-nano/checkpoints/best_model.pt
 
 # SFT 模型推理（ChatML 格式 + <|im_end|> 自动截断）
-python gleamlm_infer.py --model checkpoints/sft/sft_best.pt --sft --prompt "你好，请介绍一下你自己。"
-python gleamlm_infer.py --model checkpoints/sft/sft_best.pt --sft  # 交互模式
+python gleamlm-nano/infer.py --model gleamlm-nano/checkpoints/sft/sft_best.pt --sft --prompt "你好，请介绍一下你自己。"
 
-# DPO 模型推理（同样使用 ChatML 格式，经过偏好对齐）
-python gleamlm_infer.py --model checkpoints/dpo/dpo_best.pt --sft --prompt "什么是机器学习？"
-python gleamlm_infer.py --model checkpoints/dpo/dpo_best.pt --sft  # 交互模式
+# DPO 模型推理
+python gleamlm-nano/infer.py --model gleamlm-nano/checkpoints/dpo/dpo_best.pt --sft --prompt "什么是机器学习？"
+
+# --- Lite 87M ---
+
+python gleamlm-lite/infer.py --model gleamlm-lite/checkpoints/best_model.pt --prompt "人工智能是"
+python gleamlm-lite/infer.py --model gleamlm-lite/checkpoints/best_model.pt  # 交互模式
 ```
 
 ### 4. SFT 指令微调
 
 ```bash
-python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt
+# Nano
+python gleamlm-nano/sft.py --data_path ./data/sft_data.jsonl --model_path ./gleamlm-nano/checkpoints/best_model.pt
+
+# Lite
+python gleamlm-lite/sft.py --data_path ./data/sft_data.jsonl --model_path ./gleamlm-lite/checkpoints/best_model.pt
 ```
 
 ### 5. DPO 偏好对齐
 
 ```bash
-python gleamlm_dpo.py --data_path ./data/dpo_data.jsonl --model_path ./checkpoints/sft/sft_best.pt
+# Nano
+python gleamlm-nano/dpo.py --data_path ./data/dpo_data.jsonl --model_path ./gleamlm-nano/checkpoints/sft/sft_best.pt
+
+# Lite
+python gleamlm-lite/dpo.py --data_path ./data/dpo_data.jsonl --model_path ./gleamlm-lite/checkpoints/sft/sft_best.pt
 ```
 
 ### 6. 量化导出
 
-FP32 → FP16，体积减半（178.9 MB → 89.5 MB，2.0x），推理精度基本无损。
+FP32 → FP16，体积减半，推理精度基本无损。
 
 ```bash
-# 预训练模型
-python gleamlm_quantize.py --input checkpoints/best_model.pt --output checkpoints/model_fp16.pt
+# Nano
+python gleamlm-nano/quantize.py --input gleamlm-nano/checkpoints/best_model.pt --output gleamlm-nano/checkpoints/model_fp16.pt
 
-# DPO 对齐模型
-python gleamlm_quantize.py --input checkpoints/dpo/dpo_best.pt --output checkpoints/dpo/dpo_fp16.pt
+# DPO 模型
+python gleamlm-nano/quantize.py --input gleamlm-nano/checkpoints/dpo/dpo_best.pt --output gleamlm-nano/checkpoints/dpo/dpo_fp16.pt
 ```
 
 ### 7. 运行测试
 
 ```bash
 pip install -r requirements-dev.txt
-pytest tests/ -v
+pytest tests/ gleamlm-nano/tests/ gleamlm-lite/tests/ -v
 ```
 
 ---
@@ -212,15 +261,13 @@ pytest tests/ -v
 
 ### 数据来源与清洗
 
-| 数据源 | 原始 | 清洗后 | 保留率 | 来源 |
-|--------|:---:|:---:|:---:|------|
-| 中文维基 | 565万 | 545万 | 96.4% | [modelscope](https://www.modelscope.cn/datasets/caoaolong/zhwiki) |
-| 百度百科 | 214万 | 213万 | 99.8% | 由于版权原因，自行搜索 |
-| 新闻 2016 | 202万 | 171万 | 84.5% | 由于版权原因，自行搜索 |
-| 社区问答 | 403万 | 92万 | 22.8% | [Kaggle](https://www.kaggle.com/datasets/terrychanorg/webtext2019zhjsonwebtext2019zh) |
-| **合计** | **1,384万** | **1,021万** | **73.8%** | — |
-
-最终切分为 `train.txt`（6.48 GB，90%）/ `valid.txt`（0.36 GB，5%）/ `test.txt`（0.36 GB，5%），合计 7.20 GB。
+| 数据源 | 原始 | 清洗后 | 保留率 |
+|--------|:---:|:---:|:---:|
+| 中文维基 | 565万 | 545万 | 96.4% |
+| 百度百科 | 214万 | 213万 | 99.8% |
+| 新闻 2016 | 202万 | 171万 | 84.5% |
+| 社区问答 | 403万 | 92万 | 22.8% |
+| **合计** | **1,384万** | **1,021万** | **73.8%** |
 
 ### GleamLM-Nano 字符加权配比
 
@@ -233,7 +280,38 @@ pytest tests/ -v
 | news | 43% | 752 | 12.4% |
 | qa | 15% | 192 | 16.9% |
 
-> 最终数据：train 6.48 GB（90%）/ valid 0.36 GB（5%）/ test 0.36 GB（5%），~1.2B 训练字符。
+> Nano 最终数据：train 6.48 GB / valid 0.36 GB / test 0.36 GB，~1.2B 训练字符。
+
+### GleamLM-Lite 五源配比
+
+Lite 在四源基础上引入 [Chinese FineWeb Edu](https://huggingface.co/datasets/opencsg/chinese-fineweb-edu)（教育级质量过滤网页文本），数据量从 ~1.2B 提升至 ~4.3B tokens：
+
+| 数据源 | token 估算 | 字符配比 | 文件大小 |
+|--------|-----------|:---:|------|
+| Chinese FineWeb Edu | ~1.5B | 35% | 5.8 GB |
+| 中文新闻 | ~870M | 20% | — |
+| 中文维基 | ~870M | 20% | — |
+| 百度百科 | ~650M | 15% | — |
+| 社区问答 | ~435M | 10% | — |
+| **总计** | **~4.3B** | **100%** | **13.85 GB** |
+
+> Chinchilla 最优 ~1.74B tokens（87M × 20），当前 2.5× 超出，保留多 epoch 训练余地。
+
+---
+
+## GleamLM-Lite 训练结果
+
+> 87M Lite 当前训练中，结果将在训练完成后更新。目标 PPL **< 10**（Nano 基线 13.65，FFN 3.4× 扩容 + FlashAttn + Z-Loss 叠加预期）。
+
+| 参数 | Nano 40M | Lite 87M |
+|------|------|------|
+| 优化器 | AdamW | AdamW |
+| 学习率 | 3e-4 | 4e-4 |
+| LR 调度 | Cosine | Cosine（WSD 为后续消融选项） |
+| Attention | 手写 | `F.scaled_dot_product_attention` |
+| Z-Loss | 无 | 1e-4 |
+| Dropout | 0.1 | 0.0 |
+| 数据量 | ~1.2B chars | ~4.3B tokens |
 
 ---
 
@@ -305,10 +383,10 @@ pytest tests/ -v
 
 ```bash
 # 从头训练
-python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt
+python gleamlm-nano/sft.py --data_path ./data/sft_data.jsonl --model_path ./gleamlm-nano/checkpoints/best_model.pt
 
-# 断点续训（从 Epoch 1 checkpoint 继续）
-python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoints/best_model.pt --resume ./checkpoints/sft/sft_epoch_1.pt
+# 断点续训
+python gleamlm-nano/sft.py --data_path ./data/sft_data.jsonl --model_path ./gleamlm-nano/checkpoints/best_model.pt --resume ./gleamlm-nano/checkpoints/sft/sft_epoch_1.pt
 ```
 
 | 参数 | 值 | 说明 |
@@ -349,7 +427,7 @@ python gleamlm_sft.py --data_path ./data/sft_data.jsonl --model_path ./checkpoin
 #### DPO 偏好对齐
 
 ```bash
-python gleamlm_dpo.py --data_path ./data/dpo_data.jsonl --model_path ./checkpoints/sft/sft_best.pt
+python gleamlm-nano/dpo.py --data_path ./data/dpo_data.jsonl --model_path ./gleamlm-nano/checkpoints/sft/sft_best.pt
 ```
 
 | 参数 | 值 | 说明 |
@@ -377,10 +455,16 @@ python gleamlm_dpo.py --data_path ./data/dpo_data.jsonl --model_path ./checkpoin
 
 | 版本 | 参数量 | 定位 | 状态 |
 |------|--------|------|------|
-| GleamLM-Nano | ~40M | 教学级 / 单卡资源 | 已完成 |
-| GleamLM-Lite | ~80M | 教学级 / 服务器资源 | 开发中 |
-| GleamLM-Pro | ~126M | 科研进阶 / 服务器资源 | 规划中 |
-| GleamLM-0.6B | ~0.6B | 工业级验证 / 算力集群 | 寻求合作 |
+| GleamLM-Nano | ~40M | 教学入门 / 单卡 12GB | ✅ 已完成 |
+| GleamLM-Lite | ~87M | 消融实验平台 / FFN 3.4× | 🔨 训练中 |
+| GleamLM-Pro | ~126M | 科研进阶 / 服务器资源 | 📋 规划中 |
+| GleamLM-0.6B | ~0.6B | 工业级验证 / 算力集群 | 📋 寻求合作 |
+
+---
+
+## 安全提示
+
+所有 checkpoint 加载使用 `torch.load(weights_only=False)`，这是加载优化器状态、Python 对象（如 argparse Namespace）等非张量数据的必要条件。**请勿加载来源不明的 checkpoint 文件**，否则存在 pickle 反序列化攻击风险。仅加载自己训练或可信来源的 checkpoint。
 
 ---
 

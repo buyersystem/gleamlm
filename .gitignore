@@ -3,44 +3,53 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Model checkpoints (root level only, keep directory structure)
-/checkpoints/*
-!/checkpoints/.gitkeep
-!/checkpoints/runs/
-/checkpoints/runs/*
-!/checkpoints/runs/.gitkeep
+# Model checkpoints
+gleamlm-nano/checkpoints/*
+!gleamlm-nano/checkpoints/.gitkeep
+gleamlm-lite/checkpoints/*
+!gleamlm-lite/checkpoints/.gitkeep
 
-# Training data (keep directory structure)
-data/*
+# Training data (exclude large datasets from version control)
+data/
 !data/.gitkeep
-!data/raw/
-data/raw/*
+!data/lite_data/
+!data/nano_data/
 !data/raw/.gitkeep
-!data/splits/
-data/splits/*
-!data/splits/.gitkeep
+gleamlm-nano/data/raw/*
+gleamlm-nano/data/splits/*
+gleamlm-lite/data/splits/*
 
-# Images (training curves, etc.)
-images/
+# Tokenizer checkpoints (keep 12K, ignore test)
 
-# Documentation (internal, not for public repo)
+# Build artifacts
+build/
+dist/
+gleamlm.egg-info/
+
+# Documentation (internal, select files uploaded manually)
 docs/
 
-# Temporary files
-temp_*
-infer_result.txt
+# TensorBoard logs
+**/runs/
+
+# Images (training curves)
+images/
 
 # IDE
 .vscode/
 .idea/
 .DS_Store
 
-# Test tokenizer (only the test files, keep production bpe_32k)
-tokenizer/checkpoints/test_bpe.model
-tokenizer/checkpoints/test_bpe.vocab
+# IDE config
+opencode.json
 
-# Internal debug tools
-tools/_read_tb.py
-tools/check_ckpt.py
-tools/make_small_data.py
-tools/quick_run.py
+# Pytest cache
+.pytest_cache/
+
+# Temporary files
+temp_*
+infer_result.txt
+*.backup
+
+# Empty directory
+training/

@@ -1,5 +1,1 @@
-torch==2.5.1+cu124
-tqdm==4.67.1
-tensorboard==2.19.0
-numpy==2.2.4
-zhconv
+-e .[train]

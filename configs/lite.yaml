@@ -1,0 +1,39 @@
+# ============================================================================
+# GleamLM-Lite 87M 配置
+# ============================================================================
+# 继承 base.yaml，仅覆盖差异项
+extends: base.yaml
+
+training:
+  epochs: 2
+  batch_size: 4
+  accumulate_grad: 16
+  max_train_chars: 5300000000   # 5.3B chars
+
+lr:
+  type: cosine                   # Cosine Annealing + Warmup
+  lr: 0.0004
+  warmup_ratio: 0.02
+  min_lr_ratio: 0.1
+
+model:
+  vocab_size: 12002
+  d_model: 768
+  num_layers: 12
+  num_heads: 12
+  num_kv_heads: 6
+  d_ff: 2048
+  max_seq_len: 2048
+  dropout: 0.0
+  tie_weights: true
+  use_flash_attn: true
+
+data:
+  data_dir: data/lite_data
+  tokenizer_path: ""            # 默认: {root}/gleamlm/tokenizer/checkpoints/bbpe_12k
+  checkpoint_dir: ""            # 默认: {root}/gleamlm-lite/checkpoints
+  ids_prefix: ""                # 用 12K 词表
+
+advanced:
+  z_loss_weight: 0.0001
+  bf16: true

@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gleamlm"
+dynamic = ["version"]
+description = "GleamLM — A lightweight language model for education and research"
+readme = {file = "README.md", content-type = "text/markdown"}
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Fei Zhang", email = "philex_hf@163.com"},
+]
+keywords = ["llm", "language-model", "transformer", "chinese", "educational", "pretraining"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Education",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "torch>=2.0",
+    "numpy",
+    "tqdm>=4.64",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+train = [
+    "tensorboard>=2.14",
+]
+dev = [
+    "pytest",
+    "tensorboard>=2.14",
+]
+data = [
+    "pandas",
+    "pyarrow>=10.0",
+    "fastparquet",
+]
+tools = [
+    "zhconv",
+]
+
+[project.urls]
+Homepage = "https://github.com/philexohf/gleamlm"
+Repository = "https://github.com/philexohf/gleamlm"
+
+[tool.setuptools.packages.find]
+include = ["gleamlm", "gleamlm.*"]
+
+[tool.setuptools.package-data]
+gleamlm = ["tokenizer/checkpoints/bbpe_12k/*.json"]
+
+[tool.setuptools_scm]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

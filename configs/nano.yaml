@@ -1,0 +1,38 @@
+# ============================================================================
+# GleamLM-Nano 40M 配置
+# ============================================================================
+# 继承 base.yaml，仅覆盖差异项
+extends: base.yaml
+
+training:
+  epochs: 5
+  batch_size: 8
+  accumulate_grad: 8
+  max_train_chars: 1200000000
+
+lr:
+  type: cosine
+  lr: 0.0003
+  warmup_ratio: 0.01
+  min_lr_ratio: 0.1
+
+model:
+  vocab_size: 12002
+  d_model: 512
+  num_layers: 12
+  num_heads: 8
+  num_kv_heads: 4
+  d_ff: 1365
+  max_seq_len: 1024
+  dropout: 0.1
+  tie_weights: true
+  use_flash_attn: false
+
+data:
+  tokenizer_path: ""            # 默认: {root}/gleamlm/tokenizer/checkpoints/bbpe_12k
+  checkpoint_dir: ""            # 默认: {root}/gleamlm-nano/checkpoints
+  ids_prefix: ""
+
+advanced:
+  z_loss_weight: 0.0
+  bf16: false                   # nano 用 fp32

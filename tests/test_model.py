@@ -1,80 +1,324 @@
-"""Model forward/backward shape tests"""
-
-import os
-import sys
+"""模型 前向/反向/KV Cache/参数量/关键路径 测试"""
+import math
 import pytest
 import torch
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from models.gleamlm_model import GleamLMModel
-
-
-VOCAB_SIZE = 12001
-D_MODEL = 512
-MAX_SEQ_LEN = 256
+import torch.nn.functional as F
+from gleamlm.models.model import (
+    GleamLMModel, RMSNorm, GroupedQueryAttention, SwiGLUFFN, DecoderBlock,
+    precompute_freqs_cis, apply_rotary_emb, _rotate_half,
+)
 
 
-@pytest.fixture(scope="module")
-def model():
-    model = GleamLMModel(
-        vocab_size=VOCAB_SIZE,
-        d_model=D_MODEL,
-        num_layers=12,
-        num_heads=8,
-        num_kv_heads=4,
-        d_ff=1365,
-        dropout=0.0,
-        max_seq_len=MAX_SEQ_LEN,
-        pad_token_id=0,
-    )
-    return model
+VOCAB_SIZE = 12002
 
 
-def test_parameter_count(model):
-    total, trainable = model.get_num_params()
-    expected = 39_000_000  # ~39M
-    assert 35_000_000 < total < 42_000_000, f"Unexpected param count: {total / 1e6:.1f}M"
+# 基础组件
+
+def test_rms_norm_shape():
+    norm = RMSNorm(64)
+    x = torch.randn(4, 16, 64)
+    out = norm(x)
+    assert out.shape == (4, 16, 64)
 
 
-def test_forward_shape(model):
-    input_ids = torch.randint(0, VOCAB_SIZE, (4, 128))
-    logits, kv_list = model(input_ids)
-    batch, seq, vocab = logits.shape
-    assert batch == 4
-    assert seq == 128
-    assert vocab == VOCAB_SIZE
-    assert len(kv_list) == 12  # 12 layers
+def test_rms_norm_numerics():
+    norm = RMSNorm(64, eps=1e-6)
+    x = torch.ones(2, 8, 64) * 3.0
+    out = norm(x)
+    rms = math.sqrt(3.0 ** 2 + 1e-6)
+    expected = (3.0 / rms) * 1.0
+    assert abs(out[0, 0, 0].item() - expected) < 1e-4
 
 
-def test_backward_no_nan(model):
-    input_ids = torch.randint(0, VOCAB_SIZE, (4, 128))
-    logits, _ = model(input_ids)
-    loss = torch.nn.functional.cross_entropy(
+def test_swiglu_ffn_shape():
+    ffn = SwiGLUFFN(64, 256)
+    x = torch.randn(4, 16, 64)
+    out = ffn(x)
+    assert out.shape == (4, 16, 64)
+
+
+def test_swiglu_ffn_gate_structure():
+    ffn = SwiGLUFFN(64, 256)
+    x = torch.randn(2, 8, 64)
+    gate = F.silu(ffn.W_gate(x))
+    up = ffn.W_up(x)
+    assert gate.shape == (2, 8, 256)
+    assert up.shape == (2, 8, 256)
+
+
+def test_precompute_freqs_cis_shape():
+    cos, sin = precompute_freqs_cis(64, 128)
+    assert cos.shape == (128, 64)
+    assert sin.shape == (128, 64)
+
+
+def test_apply_rotary_emb_shape():
+    cos, sin = precompute_freqs_cis(64, 128)
+    xq = torch.randn(2, 8, 10, 64)
+    xk = torch.randn(2, 4, 10, 64)
+    q_out, k_out = apply_rotary_emb(xq, xk, cos, sin, offset=0)
+    assert q_out.shape == xq.shape
+    assert k_out.shape == xk.shape
+
+
+def test_apply_rotary_emb_offset():
+    cos, sin = precompute_freqs_cis(64, 128)
+    xq = torch.randn(1, 8, 5, 64)
+    xk = torch.randn(1, 4, 5, 64)
+    q_out, k_out = apply_rotary_emb(xq, xk, cos, sin, offset=10)
+    assert q_out.shape == xq.shape
+    assert k_out.shape == xk.shape
+
+
+def test_apply_rotary_emb_extension():
+    """cos/sin 可以由调用方预扩展后传入"""
+    cos, sin = precompute_freqs_cis(64, 30)
+    xq = torch.randn(1, 8, 20, 64)
+    xk = torch.randn(1, 4, 20, 64)
+    q_out, k_out = apply_rotary_emb(xq, xk, cos, sin, offset=0)
+    assert q_out.shape == xq.shape
+    assert k_out.shape == xk.shape
+
+
+def test_rotate_half():
+    x = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
+    out = _rotate_half(x)
+    expected = torch.tensor([[-3.0, -4.0, 1.0, 2.0]])
+    assert torch.equal(out, expected)
+
+
+# GQA 注意力
+
+def test_gqa_repeat_kv():
+    attn = GroupedQueryAttention(256, 8, 2, 128)
+    kv = torch.randn(2, 2, 10, 32)
+    repeated = attn._repeat_kv(kv, 4)
+    assert repeated.shape == (2, 8, 10, 32)
+
+
+def test_gqa_forward_shape():
+    attn = GroupedQueryAttention(256, 8, 2, 128)
+    x = torch.randn(4, 16, 256)
+    out, weights, kv = attn(x)
+    assert out.shape == (4, 16, 256)
+    assert weights is not None
+    assert weights.shape == (4, 8, 16, 16)
+    assert kv[0].shape == (4, 2, 16, 32)
+    assert kv[1].shape == (4, 2, 16, 32)
+
+
+def test_gqa_forward_flash():
+    attn = GroupedQueryAttention(256, 8, 2, 128, use_flash_attn=True)
+    x = torch.randn(2, 16, 256)
+    out, weights, kv = attn(x)
+    assert out.shape == (2, 16, 256)
+    assert weights is None
+    assert kv[0].shape == (2, 2, 16, 32)
+
+
+def test_gqa_kv_cache():
+    attn = GroupedQueryAttention(256, 8, 2, 128)
+    x = torch.randn(1, 10, 256)
+    _, _, past_kv = attn(x)
+    assert past_kv[0].shape[2] == 10
+    x2 = torch.randn(1, 1, 256)
+    _, _, new_kv = attn(x2, past_kv=past_kv)
+    assert new_kv[0].shape[2] == 11
+
+
+def test_gqa_with_mask():
+    attn = GroupedQueryAttention(256, 8, 2, 128)
+    x = torch.randn(2, 8, 256)
+    mask = torch.full((1, 1, 8, 8), float('-inf'))
+    mask = torch.triu(mask, diagonal=1)
+    out, weights, kv = attn(x, mask=mask)
+    assert out.shape == (2, 8, 256)
+    assert weights is not None
+
+
+# DecoderBlock
+
+def test_decoder_block_shape():
+    block = DecoderBlock(256, 8, 2, 682, 128)
+    x = torch.randn(4, 16, 256)
+    out, kv = block(x)
+    assert out.shape == (4, 16, 256)
+    assert kv[0].shape == (4, 2, 16, 32)
+
+
+def test_decoder_block_residual():
+    block = DecoderBlock(256, 8, 2, 682, 128, dropout=0.0)
+    x = torch.randn(2, 8, 256)
+    out, _ = block(x)
+    assert not torch.isnan(out).any()
+
+
+# GleamLMModel
+
+def test_parameter_count(small_model):
+    total, trainable = small_model.get_num_params()
+    assert 3_000_000 < total < 8_000_000, f"Unexpected: {total / 1e6:.1f}M"
+
+
+def test_forward_shape(small_model):
+    input_ids = torch.randint(0, VOCAB_SIZE, (4, 64))
+    logits, kv_list = small_model(input_ids)
+    assert logits.shape == (4, 64, VOCAB_SIZE)
+    assert len(kv_list) == 4
+
+
+def test_backward_no_nan(small_model):
+    small_model.train()
+    input_ids = torch.randint(0, VOCAB_SIZE, (4, 64))
+    logits, _ = small_model(input_ids)
+    loss = F.cross_entropy(
         logits[:, :-1].reshape(-1, VOCAB_SIZE),
         input_ids[:, 1:].reshape(-1),
         ignore_index=0,
     )
     loss.backward()
-    for name, p in model.named_parameters():
+    for name, p in small_model.named_parameters():
         if p.grad is not None:
             assert not torch.isnan(p.grad).any(), f"NaN grad in {name}"
+    small_model.zero_grad()
+    small_model.eval()
 
 
-def test_kv_cache_forward(model):
+def test_kv_cache_forward(small_model):
     prompt = torch.randint(0, VOCAB_SIZE, (1, 10))
-    logits, kv_cache = model(prompt)
-    assert kv_cache[0][0].size(2) == 10  # seq_len
+    with torch.no_grad():
+        logits, kv_cache = small_model(prompt)
+    assert kv_cache[0][0].size(2) == 10
 
     past_kv = kv_cache
     next_token = logits[:, -1:].argmax(dim=-1)
-    for _ in range(5):
-        logits, past_kv = model(next_token, past_kv_list=past_kv)
-        next_token = logits[:, -1:].argmax(dim=-1)
-    assert past_kv[0][0].size(2) == 15  # 10 prefill + 5 decode
+    with torch.no_grad():
+        for _ in range(5):
+            logits, past_kv = small_model(next_token, past_kv_list=past_kv)
+            next_token = logits[:, -1:].argmax(dim=-1)
+    assert past_kv[0][0].size(2) == 15
 
 
-def test_long_sequence(model):
-    input_ids = torch.randint(0, VOCAB_SIZE, (2, 256))
-    logits, _ = model(input_ids)
-    assert logits.shape == (2, 256, VOCAB_SIZE)
+def test_long_sequence(small_model):
+    """超 max_seq_len 的序列，RoPE 应自动外推"""
+    long_input = torch.randint(0, VOCAB_SIZE, (2, 200))
+    with torch.no_grad():
+        logits, _ = small_model(long_input)
+    assert logits.shape == (2, 200, VOCAB_SIZE)
+
+
+# 权重绑定 (Weight Tying)
+
+def test_weight_tying_enabled():
+    model = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, tie_weights=True,
+    )
+    assert model.lm_head.weight is model.token_embed.weight
+
+
+def test_weight_tying_disabled():
+    model = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, tie_weights=False,
+    )
+    assert model.lm_head.weight is not model.token_embed.weight
+
+
+def test_weight_tying_param_count():
+    tied = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, tie_weights=True,
+    )
+    untied = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, tie_weights=False,
+    )
+    tied_total, _ = tied.get_num_params()
+    untied_total, _ = untied.get_num_params()
+    embed_params = 12002 * 256
+    assert untied_total - tied_total == embed_params
+
+
+def test_weight_tying_get_num_params_dedup(small_model):
+    total, trainable = small_model.get_num_params()
+    raw_total = sum(p.numel() for p in small_model.parameters())
+    assert total == raw_total
+
+
+# Flash Attention 路径
+
+def test_flash_attn_model_forward():
+    model = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, use_flash_attn=True,
+    )
+    model.eval()
+    input_ids = torch.randint(0, VOCAB_SIZE, (2, 32))
+    with torch.no_grad():
+        logits, kv_list = model(input_ids)
+    assert logits.shape == (2, 32, VOCAB_SIZE)
+    assert len(kv_list) == 2
+
+
+def test_flash_attn_kv_cache():
+    model = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, use_flash_attn=True,
+    )
+    model.eval()
+    prompt = torch.randint(0, VOCAB_SIZE, (1, 10))
+    with torch.no_grad():
+        logits, kv_cache = model(prompt)
+    assert kv_cache[0][0].size(2) == 10
+
+
+# QK-Norm
+
+def test_qk_norm_applied():
+    attn = GroupedQueryAttention(256, 8, 2, 128)
+    x = torch.randn(2, 8, 256)
+    Q = attn.W_q(x).view(2, 8, 8, 32).transpose(1, 2)
+    K = attn.W_k(x).view(2, 8, 2, 32).transpose(1, 2)
+    Q_normed = attn.q_norm(Q)
+    K_normed = attn.k_norm(K)
+    assert Q_normed.shape == Q.shape
+    assert K_normed.shape == K.shape
+    # RMSNorm 确保输出是 float32 精度内的合理值
+    assert not torch.isnan(Q_normed).any()
+    assert not torch.isnan(K_normed).any()
+
+
+# output 一致性验证
+
+def test_same_input_same_output():
+    model = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128, tie_weights=True,
+    )
+    model.eval()
+    input_ids = torch.randint(0, VOCAB_SIZE, (1, 16))
+    with torch.no_grad():
+        logits1, _ = model(input_ids)
+        logits2, _ = model(input_ids)
+    assert torch.allclose(logits1, logits2)
+
+
+def test_model_device_consistency():
+    model = GleamLMModel(
+        vocab_size=12002, d_model=256, num_layers=2,
+        num_heads=4, num_kv_heads=2, d_ff=682,
+        max_seq_len=128,
+    )
+    device = next(model.parameters()).device
+    input_ids = torch.randint(0, VOCAB_SIZE, (2, 16), device=device)
+    with torch.no_grad():
+        logits, _ = model(input_ids)
+    assert logits.device == device

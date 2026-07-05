@@ -1,0 +1,4 @@
+include gleamlm/tokenizer/checkpoints/bbpe_12k/*.json
+include requirements.txt
+include README.md
+include LICENSE

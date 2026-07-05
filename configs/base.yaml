@@ -1,0 +1,63 @@
+# ============================================================================
+# GleamLM 公共默认配置 — 所有模型共享的通用参数
+# 具体模型配置（nano/lite/pro）通过 merges 继承后会覆盖各自差异项
+# ============================================================================
+
+# ---- 训练控制 ----
+training:
+  seed: 42
+  epochs: 4
+  batch_size: 8
+  accumulate_grad: 8
+  clip_grad: 1.0
+  weight_decay: 0.01
+  label_smoothing: 0.1
+  log_interval: 50
+  eval_interval: 500
+  save_interval: 2000
+  max_train_chars: 1200000000   # 12 亿字符上限
+
+# ---- 学习率 (Cosine) ----
+lr:
+  type: cosine                  # nano / lite 共用 Cosine Annealing + Warmup
+  lr: 0.0003
+  warmup_ratio: 0.01
+  min_lr_ratio: 0.1
+
+# ---- 优化器 ----
+optimizer:
+  type: adamw
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+
+# ---- 模型架构占位 (各模型覆盖) ----
+model:
+  vocab_size: 12002
+  d_model: 512
+  num_layers: 12
+  num_heads: 8
+  num_kv_heads: 4
+  d_ff: 1365
+  max_seq_len: 1024
+  dropout: 0.1
+  tie_weights: true
+  use_flash_attn: false
+
+# ---- 数据路径 ----
+data:
+  data_dir: ""                  # 运行时由 config loader 自动解析为 {root}/data/nano_data
+  tokenizer_path: ""            # 运行时由 config loader 自动解析为 {root}/gleamlm/tokenizer/checkpoints/bbpe_12k
+  checkpoint_dir: ""            # 运行时由 config loader 自动解析为 {model_dir}/checkpoints
+  ids_prefix: ""                # 预分词文件前缀，空字符串表示无前缀
+  load_checkpoint: null         # 断点续训 checkpoint 路径，如 checkpoints/checkpoint_epoch_3.pt
+
+# ---- 高级 ----
+advanced:
+  z_loss_weight: 0.0            # lite 覆盖为 1e-4
+  bf16: true
+  pin_memory: true
+  num_workers: 0
+
+# ---- 分布式 ----
+distributed:
+  backend: auto   # auto: Windows 自动回退 gloo，Linux 使用 nccl

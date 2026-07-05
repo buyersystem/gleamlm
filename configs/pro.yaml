@@ -1,0 +1,35 @@
+# ============================================================================
+# GleamLM-Pro 配置（占位，后续确定参数）
+# ============================================================================
+extends: base.yaml
+
+training:
+  epochs: 3
+  batch_size: 2
+  accumulate_grad: 32
+
+lr:
+  type: wsd
+  lr: 0.0003
+  warmup_ratio: 0.03
+  stable_ratio: 0.80
+  min_lr_ratio: 0.05
+
+model:
+  vocab_size: 24000
+  d_model: 1024
+  num_layers: 16
+  num_heads: 16
+  num_kv_heads: 8
+  d_ff: 4096
+  max_seq_len: 4096
+  dropout: 0.0
+  tie_weights: true
+  use_flash_attn: true
+
+data:
+  ids_prefix: "24k"
+
+advanced:
+  z_loss_weight: 0.0001
+  bf16: true
