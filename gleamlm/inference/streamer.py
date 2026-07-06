@@ -58,7 +58,8 @@ class TextStreamer:
     def generate_text(self, model: GleamLMModel, prompt: str,
                       max_new_tokens: int = 256, temperature: float = 1.0,
                       top_k: int = 50, top_p: float = 0.9,
-                      repetition_penalty: float = 1.0
+                      repetition_penalty: float = 1.0,
+                      stop_on_endoftext: bool = False
                       ) -> Generator[str, None, None]:
         prompt_ids = self.tokenizer.encode(prompt, add_bos=False, add_eos=False)
         prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long)
@@ -77,7 +78,7 @@ class TextStreamer:
                 try:
                     text = byte_buffer.decode('utf-8')
                     new_part = text[len(total_decoded):]
-                    total_decoded = text
+                    total_decoded = ""
                     byte_buffer = bytearray()
                 except UnicodeDecodeError as e:
                     if e.start == 0:
@@ -87,7 +88,7 @@ class TextStreamer:
                     total_decoded = text
                     byte_buffer = byte_buffer[e.start:]
 
-                if "<|endoftext|>" in new_part:
+                if stop_on_endoftext and "<|endoftext|>" in new_part:
                     new_part = new_part.split("<|endoftext|>")[0]
                     yield new_part
                     return
@@ -96,6 +97,6 @@ class TextStreamer:
 
         if byte_buffer:
             final_text = byte_buffer.decode('utf-8', errors='replace')
-            if "<|endoftext|>" in final_text:
+            if stop_on_endoftext and "<|endoftext|>" in final_text:
                 final_text = final_text.split("<|endoftext|>")[0]
             yield final_text
