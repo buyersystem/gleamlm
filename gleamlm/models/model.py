@@ -270,9 +270,12 @@ class GleamLMModel(nn.Module):
         if self.lm_head.weight is not self.token_embed.weight:
             nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
 
-    def _create_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
-        """创建因果注意力掩码（上三角 -inf）"""
-        mask = torch.triu(torch.full((seq_len, seq_len), float("-inf"), device=device), diagonal=1)
+    def _create_causal_mask(self, seq_len: int, device: torch.device, offset: int = 0) -> torch.Tensor:
+        """创建因果注意力掩码。offset > 0 时处理 KV cache 场景下的前文偏移。"""
+        total = offset + seq_len
+        mask = torch.triu(
+            torch.full((seq_len, total), float("-inf"), device=device), diagonal=offset + 1
+        )
         return mask.unsqueeze(0).unsqueeze(0)
 
     def forward(
@@ -283,7 +286,10 @@ class GleamLMModel(nn.Module):
         x = self.token_embed(input_ids)
         x = self.emb_dropout(x)
 
-        causal_mask = self._create_causal_mask(seq_len, device) if past_kv_list is None else None
+        causal_mask = self._create_causal_mask(
+            seq_len, device,
+            offset=past_kv_list[0][0].size(2) if past_kv_list is not None else 0,
+        )
 
         new_kv_list: PastKeyValueList = []
         for i, layer in enumerate(self.layers):
@@ -296,18 +302,6 @@ class GleamLMModel(nn.Module):
         return logits, new_kv_list
 
     def get_num_params(self) -> tuple[int, int]:
-        """统计参数量。
-        Note: PyTorch 的 parameters() 已通过 id() 去重，
-        此处显式去重确保 tied weights (lm_head==token_embed) 不重复计算。"""
-        seen = set()
-        total = 0
-        trainable = 0
-        for p in self.parameters():
-            pid = id(p)
-            if pid in seen:
-                continue
-            seen.add(pid)
-            total += p.numel()
-            if p.requires_grad:
-                trainable += p.numel()
+        total = sum(p.numel() for p in self.parameters())
+        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         return total, trainable

@@ -68,8 +68,8 @@ def clean_text(
     if convert_zh and HAS_ZhCONV:
         text = zhconv.convert(text, "zh-cn")
 
-    # 去除 HTML 标签
-    text = re.sub(r"<[^>]+>", "", text)
+    # 去除 HTML 标签（仅匹配 tag 名首字符为字母的合法标签，避免误伤数学比较符）
+    text = re.sub(r"</?[a-zA-Z][^>]*>", "", text)
 
     # 去除 URL
     text = re.sub(r"https?://\S+", "", text)

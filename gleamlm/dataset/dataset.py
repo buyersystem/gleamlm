@@ -31,7 +31,7 @@ class LMDataset(Dataset):
     ) -> None:
         self.tokenizer = tokenizer
         self.max_seq_len = max_seq_len
-        self.stride = stride or max_seq_len * 3 // 4
+        self.stride = stride if stride is not None else max_seq_len * 3 // 4
         self.augment = augment
 
         text_file = os.path.join(data_dir, f"{split}.txt")
@@ -59,7 +59,6 @@ class LMDataset(Dataset):
                 total_chars = len(text)
 
                 chunk_size = 256 * 1024
-                all_ids: list[int] = []
                 n_chunks = (total_chars + chunk_size - 1) // chunk_size
 
                 print(
@@ -67,21 +66,30 @@ class LMDataset(Dataset):
                     f"{n_chunks} chunks)..."
                 )
                 sys.stdout.flush()
+                # 预分配 numpy 数组，避免 Python list 的 28 字节/元素 OOM
+                # BBPE CJK 分词 ~1.5 字符/token，取 2x 余量安全上限
+                estimated = int(total_chars * 2.0)
+                all_ids = np.empty(estimated, dtype=np.uint32)
+                pos = 0
                 status_path = os.path.join(data_dir, f".tokenizing_{split}")
                 for i in tqdm(
                     range(0, total_chars, chunk_size), desc=f"  {split}", file=sys.stdout
                 ):
                     chunk = text[i : i + chunk_size]
                     ids = tokenizer.encode(chunk, add_bos=False, add_eos=False)
-                    all_ids.extend(ids)
+                    n = len(ids)
+                    if pos + n > len(all_ids):
+                        all_ids = np.resize(all_ids, len(all_ids) * 2)
+                    all_ids[pos : pos + n] = ids
+                    pos += n
                     if (i // chunk_size) % 10 == 0:
                         with open(status_path, "w") as sf:
                             sf.write(f"{i + chunk_size}/{total_chars}")
 
-                print(f"  Done: {len(all_ids)} tokens")
+                all_ids = all_ids[:pos]
+                print(f"  Done: {pos} tokens")
 
-                ids_array = np.array(all_ids, dtype=np.uint32)
-                np.save(ids_file, ids_array)
+                np.save(ids_file, all_ids)
                 del all_ids, text
                 print(f"  Saved to {ids_file}")
 

@@ -79,6 +79,12 @@ def main():
     tools_dir = os.path.dirname(os.path.abspath(__file__))
 
     if args.ratios:
+        if len(args.ratios) < len(SOURCES):
+            parser.error(
+                f"--ratios 数量 ({len(args.ratios)}) 少于数据源数量 ({len(SOURCES)})。"
+                f" 需要为每个源指定一个比例值。"
+                f"\n  示例: --ratios " + " ".join(str(s["ratio"]) for s in SOURCES)
+            )
         for i, s in enumerate(SOURCES):
             s["ratio"] = args.ratios[i]
 

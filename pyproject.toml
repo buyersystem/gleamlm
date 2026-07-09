@@ -49,6 +49,10 @@ data = [
 tools = [
     "zhconv",
 ]
+quality = [
+    "openai>=1.0",
+    "fasttext>=0.9",
+]
 
 [project.urls]
 Homepage = "https://github.com/philexohf/gleamlm"
