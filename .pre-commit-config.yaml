@@ -9,4 +9,5 @@ repos:
     rev: v2.2.0
     hooks:
       - id: mypy
+        args: [--exclude, "gleamlm-nano/|gleamlm-lite/|gleamlm-pro/|scripts/|data_tools/|tests/|configs/"]
         additional_dependencies: [torch>=2.0, numpy>=1.20]
