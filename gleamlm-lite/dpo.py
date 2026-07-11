@@ -7,14 +7,13 @@
 import argparse
 import math
 import os
-import random
 
 import torch
 from torch.utils.data import DataLoader
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import create_scaler
+from gleamlm.training.base_trainer import create_scaler, set_seed
 from gleamlm.training.dpo_trainer import (
     DPODataset,
     dpad_collate,
@@ -56,14 +55,13 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-7)
     parser.add_argument("--beta", type=float, default=0.1, help="DPO temperature")
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output_dir",
                         default=os.path.join(_CHECKPOINT_DIR, 'dpo'))
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
-    random.seed(42)
+    set_seed(args.seed)
     print("=" * 60)
     print("GleamLM-Lite 87M DPO 偏好对齐")
     print("=" * 60)
@@ -116,9 +114,11 @@ def main():
     print(f"Batch: {args.batch_size} x {args.accumulate_grad} = {effective_batch}")
 
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                            collate_fn=dpad_collate)
+                            collate_fn=dpad_collate, num_workers=0, pin_memory=True)
 
-    optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.lr,
+                                   betas=(0.9, 0.95), eps=1e-8,
+                                   weight_decay=0.01)
 
     total_steps = math.ceil(len(dataloader) / args.accumulate_grad) * args.epochs
     scheduler = torch.optim.lr_scheduler.LambdaLR(

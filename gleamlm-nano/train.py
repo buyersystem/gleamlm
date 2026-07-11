@@ -16,13 +16,8 @@ except ImportError:
 
 import math
 import os
-import sys
-from contextlib import nullcontext
-
-from tqdm import tqdm
 
 from gleamlm.dataset.dataset import LMDataset, collate_fn
-from gleamlm.models.config import get_args
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.training.base_trainer import (
@@ -32,134 +27,109 @@ from gleamlm.training.base_trainer import (
     load_checkpoint,
     save_checkpoint,
     set_seed,
+    train_one_epoch,
 )
 
 
-def train_one_epoch(
-    model,
-    train_loader,
-    optimizer,
-    scheduler,
-    criterion,
-    raw_criterion,
-    device,
-    epoch,
-    args,
-    global_step,
-    writer,
-    scaler,
-):
-    """训练一个 epoch，支持 AMP + 梯度累积。
+def main():
+    _script_dir = os.path.dirname(os.path.abspath(__file__))
+    _root_dir = os.path.dirname(_script_dir)
 
-    criterion: 带 label_smoothing 的 loss（用于反向传播）
-    raw_criterion: 无平滑的 loss（用于日志，与 eval 可比）
-    """
-    model.train()
-    total_smoothed = 0
-    total_raw = 0
-    num_batches = 0
-    accumulate_grad = args.accumulate_grad
+    import argparse
 
-    pbar = (
-        tqdm(train_loader, desc=f"Epoch {epoch}", mininterval=5, miniters=50)
-        if args.local_rank == 0
-        else train_loader
+    parser = argparse.ArgumentParser(description="GleamLM-Nano 40M Training")
+
+    # 路径
+    parser.add_argument(
+        "--data_dir", type=str, default=os.path.join(_root_dir, "data", "nano_data")
+    )
+    parser.add_argument(
+        "--tokenizer_path",
+        type=str,
+        default=os.path.join(_root_dir, "gleamlm", "tokenizer", "checkpoints", "bbpe_12k"),
+    )
+    parser.add_argument(
+        "--checkpoint_dir", type=str, default=os.path.join(_script_dir, "checkpoints")
+    )
+    parser.add_argument("--load_checkpoint", type=str, default=None)
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=os.path.join(_root_dir, "configs", "nano.yaml"),
+        help="YAML 配置文件路径",
     )
 
-    for batch_idx, (input_ids, target_ids) in enumerate(pbar):
-        input_ids = input_ids.to(device)
-        target_ids = target_ids.to(device)
+    # 模型结构（Nano 40M 默认值）
+    parser.add_argument("--vocab_size", type=int, default=12002)
+    parser.add_argument("--d_model", type=int, default=512)
+    parser.add_argument("--num_layers", type=int, default=12)
+    parser.add_argument("--num_heads", type=int, default=8)
+    parser.add_argument("--num_kv_heads", type=int, default=4)
+    parser.add_argument("--d_ff", type=int, default=1365)
+    parser.add_argument("--max_seq_len", type=int, default=1024)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--use_flash_attn", action="store_true", default=False)
+    parser.add_argument("--no_flash_attn", dest="use_flash_attn", action="store_false")
 
-        # AMP 前向（兼容 PyTorch 1.x / 2.x）
-        _amp_device = "cuda" if torch.cuda.is_available() else "cpu"
-        autocast_ctx = (
-            torch.amp.autocast(_amp_device)
-            if hasattr(torch.amp, "autocast")
-            else torch.cuda.amp.autocast()
-        )
-        with autocast_ctx:
-            logits, _ = model(input_ids)
-            loss = criterion(logits.view(-1, logits.size(-1)), target_ids.view(-1))
-            # 无平滑 raw loss（仅用于日志，不参与反向传播）
-            with torch.no_grad():
-                raw_loss = raw_criterion(logits.view(-1, logits.size(-1)), target_ids.view(-1))
+    # 训练参数
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--accumulate_grad", type=int, default=8)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--warmup_ratio", type=float, default=0.01)
+    parser.add_argument("--min_lr_ratio", type=float, default=0.1)
+    parser.add_argument("--label_smoothing", type=float, default=0.1)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--clip_grad", type=float, default=1.0)
+    parser.add_argument("--z_loss_weight", type=float, default=0.0)
+    parser.add_argument("--seed", type=int, default=42)
 
-        loss = loss / accumulate_grad
+    # 精度
+    parser.add_argument("--bf16", action="store_true", default=False)
+    parser.add_argument("--no_bf16", dest="bf16", action="store_false")
+    parser.add_argument("--max_train_chars", type=int, default=1_200_000_000)
 
-        # DDP 梯度累积优化：非累加边界步骤跳过 all_reduce
-        is_accum_step = (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(
-            train_loader
-        )
-        sync_context = (
-            model.no_sync() if (not is_accum_step and args.world_size > 1) else nullcontext()
-        )
-        with sync_context:
-            scaler.scale(loss).backward()
+    # 配置加载
+    config_args, _ = parser.parse_known_args()
 
-        if (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(train_loader):
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+    if config_args.config:
+        from gleamlm.utils.config import load_config_as_args
 
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            optimizer.zero_grad()
+        args = load_config_as_args(config_args.config, cli_overrides=True)
+        defaults = {
+            a.dest: parser.get_default(a.dest)
+            for a in parser._actions
+            if a.dest != "help" and a.dest != "config"
+        }
+        for key, val in defaults.items():
+            if not hasattr(args, key):
+                setattr(args, key, val)
+    else:
+        args = parser.parse_args()
 
-            if args.local_rank == 0 and writer is not None:
-                current_loss = raw_loss.item()
-                current_lr = scheduler.get_last_lr()[0]
-                writer.add_scalar("Train/Loss", current_loss, global_step)
-                writer.add_scalar("Train/Learning_Rate", current_lr, global_step)
-
-            global_step += 1
-
-        total_smoothed += loss.item() * accumulate_grad
-        total_raw += raw_loss.item()
-        num_batches += 1
-
-        if args.local_rank == 0 and batch_idx % args.log_interval == 0:
-            lr = scheduler.get_last_lr()[0]
-            pbar.set_postfix({"loss": f"{raw_loss.item():.4f}", "lr": f"{lr:.6f}"})
-
-    return total_raw / num_batches, global_step
-
-
-def main():
-    # 无 --config 时默认走 root configs/nano.yaml
-    if "--config" not in sys.argv:
-        _default_config = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "nano.yaml"
-        )
-        sys.argv = [sys.argv[0], "--config", _default_config] + sys.argv[1:]
-
-    args = get_args()
+    set_seed(args.seed)
 
     # DDP 初始化
-    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        args.world_size = int(os.environ["WORLD_SIZE"])
-        args.rank = int(os.environ["RANK"])
-        args.local_rank = int(os.environ["LOCAL_RANK"])
-    else:
-        args.world_size = 1
-        args.rank = 0
-        args.local_rank = 0
+    args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    args.world_size = int(os.environ.get("WORLD_SIZE", 1))
+    args.rank = int(os.environ.get("RANK", 0))
+    device = torch.device(f"cuda:{args.local_rank}" if torch.cuda.is_available() else "cpu")
 
     if args.world_size > 1:
         backend = "nccl" if torch.cuda.is_available() else "gloo"
         dist.init_process_group(backend=backend)
-        torch.cuda.set_device(args.local_rank)
+        if torch.cuda.is_available():
+            torch.cuda.set_device(args.local_rank)
 
-    device = torch.device(f"cuda:{args.local_rank}" if torch.cuda.is_available() else "cpu")
     if device.type == "cpu" and args.local_rank == 0:
         print("WARNING: CUDA not available. Training on CPU will be extremely slow.")
         print(
             "Install PyTorch with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu124"
         )
-    set_seed(args.seed)
 
     if args.local_rank == 0:
         print("=" * 60)
-        print("GleamLM 大模型训练")
+        print("GleamLM-Nano 40M 训练")
         print("=" * 60)
         print(f"World size: {args.world_size} GPU(s)")
         print(
@@ -169,7 +139,6 @@ def main():
         print(f"Data dir: {args.data_dir}")
 
     train_txt = os.path.join(args.data_dir, "train.txt")
-    os.path.join(args.data_dir, "valid.txt")
 
     if not os.path.exists(train_txt):
         raise FileNotFoundError(
@@ -235,6 +204,7 @@ def main():
         max_seq_len=args.max_seq_len,
         pad_token_id=tokenizer.pad_id,
         tie_weights=True,
+        use_flash_attn=getattr(args, "use_flash_attn", False),
     ).to(device)
 
     if args.local_rank == 0:
@@ -250,9 +220,6 @@ def main():
     criterion = nn.CrossEntropyLoss(
         ignore_index=tokenizer.pad_id, label_smoothing=args.label_smoothing
     )
-
-    # 无平滑 loss，用于日志显示，与 eval 直接可比
-    raw_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id)
 
     optimizer, scheduler = create_optimizer_and_scheduler(model, train_loader, args)
     scaler = create_scaler()
@@ -294,7 +261,6 @@ def main():
             optimizer,
             scheduler,
             criterion,
-            raw_criterion,
             device,
             epoch,
             args,

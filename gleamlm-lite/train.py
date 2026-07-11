@@ -16,9 +16,6 @@ except ImportError:
 
 import math
 import os
-from contextlib import nullcontext
-
-from tqdm import tqdm
 
 from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
@@ -30,80 +27,8 @@ from gleamlm.training.base_trainer import (
     load_checkpoint,
     save_checkpoint,
     set_seed,
+    train_one_epoch,
 )
-from gleamlm.utils.torch_utils import safe_autocast
-
-
-def train_one_epoch(
-    model,
-    train_loader,
-    optimizer,
-    scheduler,
-    criterion,
-    device,
-    epoch,
-    args,
-    global_step,
-    writer,
-    scaler,
-):
-    """训练一个 epoch，支持 AMP + 梯度累积 + Z-Loss"""
-    model.train()
-    total_loss = 0
-    num_batches = 0
-    accumulate_grad = args.accumulate_grad
-
-    pbar = tqdm(train_loader, desc=f"Epoch {epoch}") if args.local_rank == 0 else train_loader
-
-    for batch_idx, (input_ids, target_ids) in enumerate(pbar):
-        input_ids = input_ids.to(device)
-        target_ids = target_ids.to(device)
-
-        with safe_autocast(enabled=args.bf16):
-            logits, _ = model(input_ids)
-            ce_loss = criterion(logits.view(-1, args.vocab_size), target_ids.view(-1))
-            log_z = torch.logsumexp(logits, dim=-1)
-            z_loss = args.z_loss_weight * (log_z**2).mean()
-            loss = (ce_loss + z_loss) / accumulate_grad
-
-        is_accum_step = (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(
-            train_loader
-        )
-        sync_context = (
-            model.no_sync() if (not is_accum_step and args.world_size > 1) else nullcontext()
-        )
-        with sync_context:
-            scaler.scale(loss).backward()
-
-        if (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(train_loader):
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            optimizer.zero_grad()
-
-            # TensorBoard
-            if writer is not None and args.local_rank == 0 and global_step % args.log_interval == 0:
-                lr = scheduler.get_last_lr()[0]
-                writer.add_scalar("Train/Loss", ce_loss.item(), global_step)
-                writer.add_scalar("Train/LR", lr, global_step)
-
-            global_step += 1
-
-            if isinstance(pbar, tqdm):
-                pbar.set_postfix(
-                    {
-                        "loss": f"{ce_loss.item():.3f}",
-                        "lr": f"{scheduler.get_last_lr()[0]:.6f}",
-                        "step": global_step,
-                    }
-                )
-
-        total_loss += ce_loss.item()
-        num_batches += 1
-
-    return total_loss / max(1, num_batches), global_step
 
 
 def main():
@@ -162,8 +87,6 @@ def main():
     # 精度与日志
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no_bf16", dest="bf16", action="store_false")
-    parser.add_argument("--log_interval", type=int, default=50)
-    parser.add_argument("--eval_interval", type=int, default=500)
     parser.add_argument("--max_train_chars", type=int, default=5_300_000_000)
     parser.add_argument(
         "--ids_prefix", type=str, default="", help="预分词文件前缀，用于区分不同分词器"
@@ -377,7 +300,7 @@ def main():
                 writer.add_scalar("Eval/Perplexity", val_ppl, epoch)
                 writer.add_scalar("Eval/Train_Loss", train_loss, epoch)
 
-            if val_loss < best_val_loss:
+            if val_loss > 0 and val_loss < best_val_loss:
                 best_val_loss = val_loss
                 save_checkpoint(
                     model, optimizer, scheduler, scaler,

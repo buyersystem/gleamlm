@@ -44,13 +44,32 @@ def get_lr_wsd(
 
 
 @contextmanager
-def safe_autocast(enabled: bool = True) -> Generator[None, None, None]:
-    """安全的 autocast 上下文管理器。"""
-    if enabled and torch.cuda.is_available():
-        with torch.amp.autocast("cuda", dtype=torch.bfloat16):  # type: ignore[attr-defined]
+def safe_autocast(
+    enabled: bool = True, *, dtype: torch.dtype = torch.bfloat16
+) -> Generator[None, None, None]:
+    """安全的 autocast 上下文管理器。
+
+    Args:
+        enabled: 是否启用 AMP（False = FP32 全精度）。
+        dtype: AMP 精度（默认 bfloat16，传入 torch.float16 使用 FP16）。
+    """
+    if not enabled:
+        yield
+        return
+
+    if torch.cuda.is_available():
+        with torch.amp.autocast("cuda", dtype=dtype):  # type: ignore[attr-defined]
             yield
-    elif enabled and hasattr(torch.cpu, "is_bf16_supported") and torch.cpu.is_bf16_supported():
+        return
+
+    if (
+        dtype == torch.bfloat16
+        and hasattr(torch, "cpu")
+        and callable(getattr(torch.cpu, "is_bf16_supported", None))
+        and torch.cpu.is_bf16_supported()
+    ):
         with torch.amp.autocast("cpu", dtype=torch.bfloat16):  # type: ignore[attr-defined]
             yield
-    else:
-        yield
+        return
+
+    yield

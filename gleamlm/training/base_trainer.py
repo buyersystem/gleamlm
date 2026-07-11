@@ -8,18 +8,18 @@ from __future__ import annotations
 
 import math
 import random
+from contextlib import nullcontext
 from typing import Any
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from torch.utils.data.distributed import DistributedSampler
+from tqdm import tqdm
 
-from gleamlm.dataset.dataset import LMDataset, collate_fn
-from gleamlm.models.model import GleamLMModel
-from gleamlm.utils.torch_utils import get_lr_cosine
+from gleamlm.utils.torch_utils import get_lr_cosine, get_lr_wsd, safe_autocast
 
 
 def set_seed(seed: int) -> None:
@@ -45,86 +45,31 @@ def create_optimizer_and_scheduler(
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=args.lr,
-        betas=(0.9, 0.95),
-        eps=1e-8,
+        betas=tuple(getattr(args, "betas", (0.9, 0.95))),
+        eps=getattr(args, "eps", 1e-8),
         weight_decay=args.weight_decay,
     )
     total_steps = math.ceil(len(train_loader) / args.accumulate_grad) * args.epochs
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lambda step: get_lr_cosine(
-            step,
-            total_steps,
-            getattr(args, "warmup_ratio", 0.02),
-            getattr(args, "min_lr_ratio", 0.1),
-        ),
-    )
-    return optimizer, scheduler
+    lr_type = getattr(args, "type", "cosine")
+    warmup_ratio = getattr(args, "warmup_ratio", 0.02)
+    min_lr_ratio = getattr(args, "min_lr_ratio", 0.1)
+    if lr_type == "wsd":
 
-
-def create_dataloaders(
-    args: Any,
-    train_dataset: LMDataset,
-    val_dataset: LMDataset,
-    pad_id: int,
-) -> tuple[DataLoader, DataLoader]:
-    if args.world_size > 1:
-        train_sampler = DistributedSampler(
-            train_dataset, num_replicas=args.world_size, rank=args.rank
-        )
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            sampler=train_sampler,
-            collate_fn=lambda b: collate_fn(b, pad_id=pad_id),
-            pin_memory=True,
-        )
-        val_sampler = DistributedSampler(val_dataset, num_replicas=args.world_size, rank=args.rank)
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=args.batch_size,
-            sampler=val_sampler,
-            collate_fn=lambda b: collate_fn(b, pad_id=pad_id),
-            pin_memory=True,
-        )
+        def lr_fn(step: int) -> float:
+            return get_lr_wsd(
+                step,
+                total_steps,
+                warmup_ratio,
+                getattr(args, "stable_ratio", 0.80),
+                min_lr_ratio,
+            )
     else:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=args.batch_size,
-            shuffle=True,
-            collate_fn=lambda b: collate_fn(b, pad_id=pad_id),
-            num_workers=0,
-            pin_memory=False,
-        )
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            collate_fn=lambda b: collate_fn(b, pad_id=pad_id),
-            num_workers=0,
-            pin_memory=False,
-        )
-    return train_loader, val_loader
 
+        def lr_fn(step: int) -> float:
+            return get_lr_cosine(step, total_steps, warmup_ratio, min_lr_ratio)
 
-def create_model(
-    args: Any,
-    pad_token_id: int,
-    device: torch.device,
-) -> GleamLMModel:
-    return GleamLMModel(
-        vocab_size=args.vocab_size,
-        d_model=args.d_model,
-        num_layers=args.num_layers,
-        num_heads=args.num_heads,
-        num_kv_heads=args.num_kv_heads,
-        d_ff=args.d_ff,
-        dropout=args.dropout,
-        max_seq_len=args.max_seq_len,
-        pad_token_id=pad_token_id,
-        tie_weights=True,
-        use_flash_attn=getattr(args, "use_flash_attn", False),
-    ).to(device)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_fn)
+    return optimizer, scheduler
 
 
 @torch.no_grad()
@@ -204,3 +149,89 @@ def load_checkpoint(
         "global_step": checkpoint.get("global_step", 0),
         "best_val_loss": checkpoint.get("val_loss", float("inf")),
     }
+
+
+def train_one_epoch(
+    model: nn.Module,
+    train_loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    criterion: nn.Module,
+    device: torch.device,
+    epoch: int,
+    args: Any,
+    global_step: int,
+    writer: Any,
+    scaler: Any,
+) -> tuple[float, int]:
+    """训练一个 epoch，支持 AMP + 梯度累积 + Z-Loss + DDP。
+
+    criterion: 带 label_smoothing 的 CrossEntropyLoss（用于反向传播）。
+    日志和返回的 loss 使用无平滑 raw CE，保证与 eval 可比。
+    """
+    model.train()
+    total_raw_ce = 0.0
+    num_batches = 0
+    accumulate_grad = args.accumulate_grad
+    z_loss_weight = getattr(args, "z_loss_weight", 0.0)
+    pad_id: int = criterion.ignore_index  # type: ignore[assignment]
+    amp_dtype = torch.bfloat16 if getattr(args, "bf16", False) else torch.float16
+
+    pbar = (
+        tqdm(train_loader, desc=f"Epoch {epoch}", mininterval=5, miniters=50)
+        if args.local_rank == 0
+        else train_loader
+    )
+
+    for batch_idx, (input_ids, target_ids) in enumerate(pbar):
+        input_ids = input_ids.to(device)
+        target_ids = target_ids.to(device)
+
+        with safe_autocast(enabled=True, dtype=amp_dtype):
+            logits, _ = model(input_ids)
+            ce_loss = criterion(logits.view(-1, args.vocab_size), target_ids.view(-1))
+            raw_ce = F.cross_entropy(
+                logits.view(-1, args.vocab_size),
+                target_ids.view(-1),
+                ignore_index=pad_id,
+                label_smoothing=0.0,
+            )
+            log_z = torch.logsumexp(logits, dim=-1)
+            z_loss = z_loss_weight * (log_z**2).mean()
+            loss = (ce_loss + z_loss) / accumulate_grad
+
+        is_accum_step = (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(
+            train_loader
+        )
+        sync_context = (
+            model.no_sync() if (not is_accum_step and args.world_size > 1) else nullcontext()
+        )
+        with sync_context:
+            scaler.scale(loss).backward()
+
+        if is_accum_step:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
+
+            if writer is not None and args.local_rank == 0:
+                writer.add_scalar("Train/Loss", raw_ce.item(), global_step)
+                writer.add_scalar("Train/LR", scheduler.get_last_lr()[0], global_step)
+
+            global_step += 1
+
+            if isinstance(pbar, tqdm):
+                pbar.set_postfix(
+                    {
+                        "loss": f"{raw_ce.item():.4f}",
+                        "lr": f"{scheduler.get_last_lr()[0]:.6f}",
+                    }
+                )
+
+        total_raw_ce += raw_ce.item()
+        num_batches += 1
+
+    return total_raw_ce / max(1, num_batches), global_step

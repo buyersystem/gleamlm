@@ -60,9 +60,9 @@ See ADR-0011 for the full design rationale.
 ## Model Variants
 
 - **GleamLM-Nano (~40M)**: 12L × 512d, BBPE 12K. Baseline, complete (v0.1.0).
-- **GleamLM-Lite (~87M)**: 12L × 768d, d_ff=2048 (3.4× FFN). Training in progress.
-- **GleamLM-Pro (~126M)**: 18L × 768d. Planned.
-- **GleamLM-0.6B (~597M)**: 37L × 1024d, 64K vocab, YaRN, Linux-only. Planned.
+- **GleamLM-Lite (~87M)**: 12L × 768d, d_ff=2048 (3.4× FFN). Basic lifecycle complete; advanced training deferred.
+- **GleamLM-Pro (~126M)**: 18L × 768d, BBPE 12K, d_ff=3072. In development.
+- **GleamLM-0.6B (~597M)**: 37L × 1024d, BBPE 24K, YaRN, Linux-only. Planned.
 
 ## _Avoid_
 

@@ -8,6 +8,8 @@ gleamlm-nano/checkpoints/*
 !gleamlm-nano/checkpoints/.gitkeep
 gleamlm-lite/checkpoints/*
 !gleamlm-lite/checkpoints/.gitkeep
+gleamlm-pro/checkpoints/*
+!gleamlm-pro/checkpoints/.gitkeep
 
 # Training data (exclude large datasets from version control)
 data/
@@ -26,10 +28,8 @@ build/
 dist/
 gleamlm.egg-info/
 
-# Documentation (internal dev docs; ADRs are tracked)
-docs/GleamLM*/
-docs/agents/
-docs/测试报告.md
+# Documentation
+docs/
 
 # TensorBoard logs
 **/runs/

@@ -10,6 +10,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
@@ -62,7 +63,8 @@ def _compute_raw_loss(
     n_batches = 0
     criterion = nn.CrossEntropyLoss(reduction="sum", ignore_index=pad_token_id)
 
-    for input_ids, target_ids in data_loader:
+    pbar = tqdm(data_loader, desc="Eval", mininterval=5, miniters=50)
+    for input_ids, target_ids in pbar:
         if max_batches and n_batches >= max_batches:
             break
         input_ids = input_ids.to(device)
@@ -74,6 +76,10 @@ def _compute_raw_loss(
         total_loss += loss.item()
         total_tokens += (target_ids != pad_token_id).sum().item()
         n_batches += 1
+
+        pbar.set_postfix(
+            {"loss": f"{loss.item() / max(1, (target_ids != pad_token_id).sum().item()):.4f}"}
+        )
 
     return total_loss, total_tokens, n_batches
 

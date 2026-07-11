@@ -525,8 +525,8 @@ python gleamlm-nano/dpo.py --data_path ./data/dpo_data.jsonl --model_path ./glea
 |------|--------|------|------|
 | GleamLM-Nano | ~40M | 教学入门 / 单卡 12GB | ✅ 已完成 |
 | GleamLM-Lite | ~87M | 消融实验平台 / FFN 3.4× | ✅ 已完成 |
-| GleamLM-Pro | ~126M | 科研进阶 / 服务器资源 | 📋 规划中 |
-| GleamLM-0.6B | ~0.6B | 工业级验证 / 算力集群 | 📋 寻求合作 |
+| GleamLM-Pro | ~126M | 科研进阶 / 18L×768d / BBPE 12K | 🔨 开发中 |
+| GleamLM-0.6B | ~0.6B | 工业级验证 / 37L×1024d / BBPE 24K | 📋 寻求合作 |
 
 ---
 

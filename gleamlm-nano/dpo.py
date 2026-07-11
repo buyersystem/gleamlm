@@ -8,14 +8,13 @@
 import argparse
 import math
 import os
-import random
 
 import torch
 from torch.utils.data import DataLoader
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import create_scaler
+from gleamlm.training.base_trainer import create_scaler, set_seed
 from gleamlm.training.dpo_trainer import (
     DPODataset,
     dpad_collate,
@@ -35,6 +34,11 @@ def main():
     parser.add_argument("--model_path", default=f"{DEFAULT_CHECKPOINT_DIR}/sft/sft_best.pt")
     parser.add_argument("--tokenizer_path", default=DEFAULT_TOKENIZER_PATH)
     parser.add_argument("--d_model", type=int, default=512)
+    parser.add_argument("--num_layers", type=int, default=12)
+    parser.add_argument("--num_heads", type=int, default=8)
+    parser.add_argument("--num_kv_heads", type=int, default=4)
+    parser.add_argument("--d_ff", type=int, default=1365)
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--max_seq_len", type=int, default=512)
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--accumulate_grad", type=int, default=2)
@@ -42,6 +46,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-7)
     parser.add_argument("--beta", type=float, default=0.1, help="DPO temperature")
     parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--use_flash_attn", action="store_true", default=False, help="Use PyTorch Flash Attention"
     )
@@ -49,9 +54,7 @@ def main():
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    torch.manual_seed(42)
-    torch.cuda.manual_seed_all(42)
-    random.seed(42)
+    set_seed(args.seed)
     print("=" * 60)
     print("GleamLM DPO 偏好对齐")
     print("=" * 60)
@@ -85,7 +88,13 @@ def main():
         model_kwargs = {
             "vocab_size": vocab_size,
             "d_model": args.d_model,
+            "num_layers": args.num_layers,
+            "num_heads": args.num_heads,
+            "num_kv_heads": args.num_kv_heads,
+            "d_ff": args.d_ff,
+            "dropout": args.dropout,
             "max_seq_len": args.max_seq_len,
+            "pad_token_id": 0,
         }
 
     policy_model = GleamLMModel(**model_kwargs, use_flash_attn=args.use_flash_attn).to(device)
@@ -110,11 +119,18 @@ def main():
     print(f"Batch: {args.batch_size} x {args.accumulate_grad} = {effective_batch}")
 
     dataloader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dpad_collate
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=dpad_collate,
+        num_workers=0,
+        pin_memory=True,
     )
 
     # 4. 优化器 & 调度器
-    optimizer = torch.optim.AdamW(policy_model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(
+        policy_model.parameters(), lr=args.lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=0.01
+    )
 
     total_steps = math.ceil(len(dataloader) / args.accumulate_grad) * args.epochs
     scheduler = torch.optim.lr_scheduler.LambdaLR(

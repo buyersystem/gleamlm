@@ -36,6 +36,7 @@ train = [
 ]
 dev = [
     "pytest",
+    "pytest-cov",
     "tensorboard>=2.14",
     "ruff>=0.15",
     "mypy>=2.0",
