@@ -17,6 +17,7 @@ data/
 !data/lite_data/
 !data/nano_data/
 !data/raw/.gitkeep
+!gleamlm-pro/data/.gitkeep
 gleamlm-nano/data/raw/*
 gleamlm-nano/data/splits/*
 gleamlm-lite/data/splits/*
