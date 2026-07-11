@@ -219,14 +219,12 @@ test("test_sampler_shape", test_sampler_shape)
 def test_streamer_generate():
     from gleamlm.inference.streamer import TextStreamer
     streamer = TextStreamer(tokenizer)
-    prompt_ids = torch.tensor([[tokenizer.bos_id]], dtype=torch.long)
     model.eval()
     count = 0
-    with torch.no_grad():
-        for token_id in streamer.generate(model, prompt_ids, max_new_tokens=10,
-                                          temperature=0.8, top_k=50):
-            count += 1
-            assert isinstance(token_id, int), f"Expected int got {type(token_id)}"
+    for chunk in streamer.generate_text(model, "你好", max_new_tokens=10,
+                                         temperature=0.8, top_k=50):
+        count += 1
+        assert isinstance(chunk, str), f"Expected str got {type(chunk)}"
     assert count > 0, "Should generate at least 1 token"
 
 

@@ -208,7 +208,7 @@ sft_model = GleamLMModel(
     max_seq_len=512,
     tie_weights=True,
 ).to(device)
-ckpt = torch.load("checkpoints/best_model.pt", map_location=device)
+ckpt = torch.load("checkpoints/test_best_model.pt", map_location=device)
 sft_model.load_state_dict(ckpt["model_state_dict"])
 print(f"  SFT model loaded: {sum(p.numel() for p in sft_model.parameters()) / 1e6:.2f}M params")
 
@@ -417,7 +417,7 @@ print("  Saved: checkpoints/dpo_test/dpo_best.pt")
 print("=" * 60)
 print("Step 6: 验证所有产出...")
 checks = {
-    "checkpoints/best_model.pt": "预训练 (~155MB)",
+    "checkpoints/test_best_model.pt": "预训练 (~155MB)",
     "checkpoints/sft_test/sft_best.pt": "SFT (~155MB)",
     "checkpoints/dpo_test/dpo_best.pt": "DPO (~155MB)",
 }
