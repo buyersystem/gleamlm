@@ -2,13 +2,14 @@
 验证: 数据加载 → 模型初始化 → 前向 → 反向 → 优化器步进 → 评估 → checkpoint save/load
 """
 
+import math
+import os
+import shutil
+import tempfile
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-import os
-import math
-import tempfile
-import shutil
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DATA_DIR = os.path.join(_PROJECT_ROOT, 'data', 'splits')
@@ -46,7 +47,7 @@ def make_tiny_data(data_dir):
     real_train = os.path.join(DEFAULT_DATA_DIR, 'train.txt')
     if os.path.exists(real_train):
         lines = []
-        with open(real_train, 'r', encoding='utf-8') as f:
+        with open(real_train, encoding='utf-8') as f:
             for i, line in enumerate(f):
                 if i >= 200: break
                 lines.append(line)
@@ -97,8 +98,9 @@ def test_full_pipeline():
 
     # 2. 数据集
     print("\n[2] 加载数据集...")
-    from gleamlm.dataset.dataset import LMDataset, collate_fn
     from torch.utils.data import DataLoader
+
+    from gleamlm.dataset.dataset import LMDataset, collate_fn
 
     train_ds = LMDataset(data_dir, tokenizer, TEST_CONFIG['max_seq_len'], 'train', max_chars=500_000, augment=False)
     valid_ds = LMDataset(data_dir, tokenizer, TEST_CONFIG['max_seq_len'], 'valid', augment=False)
@@ -201,7 +203,6 @@ def test_full_pipeline():
             epoch_loss += ce_loss.item()
             epoch_steps += 1
 
-            # 第一步检查梯度
             if epoch == 0 and step == 0:
                 max_grad = max(p.grad.abs().max().item() for p in model.parameters() if p.grad is not None)
                 print(f"  Step 0: loss={ce_loss.item():.4f}, max_grad={max_grad:.4f}")
@@ -238,7 +239,7 @@ def test_full_pipeline():
         print(f"  Loss 下降: {status}")
 
     # 8. checkpoint 保存
-    print(f"\n[8] 保存 checkpoint...")
+    print("\n[8] 保存 checkpoint...")
     ckpt_path = os.path.join(ckpt_dir, "test_best.pt")
     torch.save({
         'epoch': TEST_CONFIG['epochs'] - 1,
@@ -255,7 +256,7 @@ def test_full_pipeline():
     print(f"  已保存: {ckpt_path} ({ckpt_size_mb:.1f} MB) [OK]")
 
     # 9. checkpoint 加载验证
-    print(f"\n[9] 重新加载 checkpoint...")
+    print("\n[9] 重新加载 checkpoint...")
     model2 = GleamLMModel(
         vocab_size=TEST_CONFIG['vocab_size'],
         d_model=TEST_CONFIG['d_model'],
@@ -273,7 +274,6 @@ def test_full_pipeline():
     model2.load_state_dict(ckpt['model_state_dict'])
     model2.eval()
 
-    # 验证加载后的 forward 结果一致
     with torch.no_grad():
         test_input = torch.randint(1, 1000, (1, 32), device=device)
         with safe_autocast():
@@ -283,7 +283,6 @@ def test_full_pipeline():
         status = "[OK]" if diff < 1e-5 else "[FAIL]"
         print(f"  重载后 logit 最大差异: {diff:.2e} {status}")
 
-    # 清理临时数据
     shutil.rmtree(tmp_dir, ignore_errors=True)
 
     print("\n" + "=" * 60)

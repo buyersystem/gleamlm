@@ -47,6 +47,16 @@
 - **Character-weighted mixing**: Convert target character% ratios to line-count ratios based on average characters-per-line.
 - **Sliding window**: Overlapping windows with `stride = 3/4 * max_seq_len`.
 
+## Repo Architecture
+
+- **Core library (`gleamlm/`)**: Provides importable, variant-agnostic functions and classes (model, tokenizer, dataset, training loops, inference engine, evaluation, preprocessing, deployment). All symbols are parameterized — no hardcoded variant-specific defaults.
+- **Variant directory (`gleamlm-nano/`, `gleamlm-lite/`, `gleamlm-pro/`)**: Self-contained recipe scripts showing the complete end-to-end workflow for a specific model variant. Each script explicitly writes out its variant's architecture defaults, hyperparameters, and path constants.
+- **Recipe test**: Copy a variant script to a fresh directory, change a few parameters, and it should run. If imports break or the reader can't trace what each step does, the script fails the test.
+- **Orchestration-visible principle**: `main()` must be readable without jumping to other files. Steps are listed explicitly; implementation details are delegated to `gleamlm/` imports.
+- **Deletion test**: If removing a function from `gleamlm/` would break variant scripts, it belongs in `gleamlm/`. If it would only affect one variant, it belongs in that variant's directory.
+
+See ADR-0011 for the full design rationale.
+
 ## Model Variants
 
 - **GleamLM-Nano (~40M)**: 12L × 512d, BBPE 12K. Baseline, complete (v0.1.0).

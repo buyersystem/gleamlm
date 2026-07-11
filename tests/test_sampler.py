@@ -64,17 +64,13 @@ def test_repetition_penalty_accumulates():
     logits = torch.tensor([[2.0, 5.0, 3.0, 1.0]])
     pen = 2.0
     logits_after_first = logits.clone()
-    returned = sample_token(
-        logits_after_first, repetition_penalty=pen, generated_ids=[]
-    )
+    returned = sample_token(logits_after_first, repetition_penalty=pen, generated_ids=[])
     # 同一次调用内 generated_ids 不含已生成 token，故 logits 不变
     assert torch.equal(logits_after_first, logits), "empty generated_ids leaves logits unchanged"
 
     # 再调用时传入之前生成的 token，penalty 作用于该 token
     logits_after_pen = logits.clone()
-    returned_after = sample_token(
-        logits_after_pen, repetition_penalty=pen, generated_ids=[returned.item()]
-    )
+    _ = sample_token(logits_after_pen, repetition_penalty=pen, generated_ids=[returned.item()])
     idx = returned.item()
     assert logits_after_pen[0, idx].item() == pytest.approx(logits[0, idx].item() / pen), (
         "repetition penalty divided logit of generated token"
@@ -87,3 +83,80 @@ def test_repetition_penalty_1_is_noop():
     logits_copy = logits.clone()
     _ = sample_token(logits, repetition_penalty=1.0, generated_ids=[3, 7, 42])
     assert torch.equal(logits, logits_copy)
+
+
+def test_repetition_penalty_prevents_token_cycling_greedy():
+    """回归测试: repetition_penalty=1.15 降低重复 token 的 logit — 贪婪等效场景
+
+    构造 logits 使 token 5 为 argmax（logit=5.0），token 6 紧随其后（logit=4.5）。
+    无 penalty 时 token 5 持续被选；施加 penalty=1.15 后，token 5 被选 1 次后其
+    有效 logit 降至 ~4.35 < 4.5，argmax 转为 token 6，打破连续重复。
+    """
+    torch.manual_seed(42)
+    logits = torch.zeros(1, 100)
+    logits[0, 5] = 5.0
+    logits[0, 6] = 4.5
+
+    generated_ids: list[int] = []
+    penalty = 1.15
+
+    for _step in range(10):
+        token = sample_token(
+            logits.clone(),
+            temperature=0.0,
+            repetition_penalty=penalty,
+            generated_ids=generated_ids,
+        )
+        tid = int(token.item())
+        generated_ids.append(tid)
+
+    # penalty 使 token 5 的 logit 在出现多次后显著降低
+    count5 = generated_ids.count(5)
+    assert count5 > 0, "至少应选择过 token 5"
+    effective_logit_5 = 5.0 / (penalty**count5)
+    assert effective_logit_5 < 4.5, (
+        f"penalty={penalty} 应将 token 5 的有效 logit ({effective_logit_5:.2f}) "
+        f"降至低于 token 6 (4.5)"
+    )
+
+    # 验证最终有除 token 5 以外的 token 被选
+    unique_tokens = set(generated_ids)
+    assert len(unique_tokens) > 1, (
+        f"repetition_penalty 应使生成中出现多个不同 token，实际 token 集合: {unique_tokens}"
+    )
+
+
+def test_repetition_penalty_prevents_token_cycling_temperature():
+    """回归测试: temperature=0.8 下 repetition_penalty=1.15 仍打破循环"""
+    torch.manual_seed(123)
+    logits = torch.zeros(1, 100)
+    logits[0, 5] = 5.0
+    logits[0, 6] = 4.5
+
+    generated_ids: list[int] = []
+    penalty = 1.15
+
+    for _step in range(10):
+        token = sample_token(
+            logits.clone(),
+            temperature=0.8,
+            repetition_penalty=penalty,
+            generated_ids=generated_ids,
+        )
+        tid = int(token.item())
+        generated_ids.append(tid)
+
+    # penalty 使 token 5 的有效 logit 在重复一定次数后低于 token 6
+    count5 = generated_ids.count(5)
+    assert count5 > 0, "至少应选择过 token 5"
+    effective_logit_5 = 5.0 / (penalty**count5)
+    assert effective_logit_5 < 4.5, (
+        f"temperature=0.8: penalty={penalty} 应将 token 5 的有效 logit "
+        f"({effective_logit_5:.2f}) 降至低于 token 6 (4.5)"
+    )
+
+    unique_tokens = set(generated_ids)
+    assert len(unique_tokens) > 1, (
+        f"temperature=0.8: repetition_penalty 应使生成中出现多个不同 token，"
+        f"实际 token 集合: {unique_tokens}"
+    )

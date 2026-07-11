@@ -25,10 +25,11 @@ gleamlm-lite/data/splits/*
 build/
 dist/
 gleamlm.egg-info/
-gleamlm-*/
 
-# Documentation (internal, select files uploaded manually)
-docs/
+# Documentation (internal dev docs; ADRs are tracked)
+docs/GleamLM*/
+docs/agents/
+docs/测试报告.md
 
 # TensorBoard logs
 **/runs/
@@ -60,6 +61,3 @@ AGENTS.md
 temp_*
 infer_result.txt
 *.backup
-
-# Empty directory
-training/

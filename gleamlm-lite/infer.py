@@ -1,9 +1,10 @@
 """GleamLM-Lite 推理脚本，87M模型，2048上下文。支持交互式生成和多种采样策略"""
 
-import torch
 import argparse
-import sys
 import os
+import sys
+
+import torch
 
 # Windows 终端编码修复
 if sys.platform == 'win32':
@@ -15,15 +16,14 @@ if sys.platform == 'win32':
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from gleamlm import load_model_for_inference
-from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
-from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.inference.streamer import TextStreamer
+from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 DEFAULT_MODEL = os.path.join(_SCRIPT_DIR, 'checkpoints', 'best_model.pt')
 
 
 def load_model(model_path, device='cuda'):
-    """加载模型和分词器"""
     print(f"Loading model: {model_path}")
     try:
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
@@ -63,7 +63,6 @@ def load_model(model_path, device='cuda'):
 def generate(model, tokenizer, prompt, max_new_tokens=256,
              temperature=0.8, top_k=50, top_p=0.9, repetition_penalty=1.1,
              device='cuda', sft_mode=False, stop_token=None):
-    """生成文本并实时打印"""
     streamer = TextStreamer(tokenizer)
 
     # SFT 模式：ChatML 包装
@@ -105,7 +104,6 @@ def generate(model, tokenizer, prompt, max_new_tokens=256,
 def interactive(model, tokenizer, max_new_tokens=256,
                 temperature=0.8, top_k=50, top_p=0.9, repetition_penalty=1.1,
                 device='cuda', sft_mode=False):
-    """交互式对话模式"""
     print("\n" + "=" * 60)
     print("GleamLM-Lite 87M 交互式文本生成")
     if sft_mode:

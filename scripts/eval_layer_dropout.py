@@ -111,7 +111,6 @@ def load_model(tokenizer):
         )
 
     state = checkpoint["model_state_dict"]
-    # Strip DDP prefix if present
     new_state = {}
     for k, v in state.items():
         new_k = k.replace("module.", "")
@@ -123,7 +122,6 @@ def load_model(tokenizer):
 
 
 def generate_text(model, tokenizer, prompt, max_new_tokens=80):
-    """Simple greedy generation"""
     ids = tokenizer.encode(prompt)
     input_ids = torch.tensor([ids], device=DEVICE)
 
@@ -151,9 +149,9 @@ def run_layer_dropout_test():
     print("B3: LAYER DROPOUT SIMULATION")
     print("=" * 70)
 
-    layer_configs = [12, 11, 10, 9, 8]  # Drop 0 to 4 top layers
     all_results = {}
 
+    layer_configs = [12, 11, 10, 9, 8]
     for num_layers in layer_configs:
         print(f"\n--- {num_layers} Active Layers (dropped {12 - num_layers}) ---")
         model = LayerLimitedModel(base_model, num_layers)
@@ -178,7 +176,6 @@ def run_layer_dropout_test():
         # Simple heuristic: count unique chars as diversity proxy
         unique_chars = sum(len(set(r[2])) for r in results)
         avg_len = sum(len(r[2]) for r in results) / len(results)
-        # Check for repetition patterns
         repetition_count = sum(1 for r in results if _has_repetition(r[2]))
         print(
             f"{num_layers:<8} {unique_chars:<12} {avg_len:<12.1f} {'N/A':<12} {repetition_count}/{len(results)} rep"
@@ -216,7 +213,6 @@ def main():
     print("KEY FINDING")
     print("=" * 70)
 
-    # Compare 8L vs 12L on knowledge question
     r12 = results[12]
     r8 = results[8]
     for (_cat12, p12, g12), (_cat8, _p8, g8) in zip(r12, r8, strict=False):

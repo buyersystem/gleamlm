@@ -1,21 +1,21 @@
 """GleamLM-Lite 87M 预训练冒烟测试。快速验证前向、反向、Z-Loss、Cosine LR"""
 
+import math
+import os
+
 import torch
 import torch.nn as nn
-import os
-import random
-import numpy as np
-import math
 from tqdm import tqdm
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
+from torch.utils.data import DataLoader
+
+from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 from gleamlm.utils.torch_utils import get_lr_cosine
-from torch.utils.data import DataLoader
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"设备: {device}")
@@ -32,7 +32,7 @@ os.makedirs(_TEST_DATA_DIR, exist_ok=True)
 # 从 lite_data 截取文本写为 train.txt（用于 LMDataset 分词）
 _SRC = os.path.join(_SCRIPT_DIR, '..', 'data', 'lite_data', 'valid.txt')
 if not os.path.exists(os.path.join(_TEST_DATA_DIR, 'train.txt')):
-    with open(_SRC, 'r', encoding='utf-8') as f:
+    with open(_SRC, encoding='utf-8') as f:
         text = f.read(100000)
     with open(os.path.join(_TEST_DATA_DIR, 'train.txt'), 'w', encoding='utf-8') as f:
         f.write(text)
@@ -108,15 +108,15 @@ for epoch in range(2):
 
 print(f"\n{'='*50}")
 print("冒烟测试通过")
-print(f"  - 模型: 87.1M 参数, 前向/反向 OK")
-print(f"  - Flash Attention: 已启用")
-print(f"  - Cosine LR 调度: 已验证")
-print(f"  - Z-Loss: 已验证")
+print("  - 模型: 87.1M 参数, 前向/反向 OK")
+print("  - Flash Attention: 已启用")
+print("  - Cosine LR 调度: 已验证")
+print("  - Z-Loss: 已验证")
 print(f"  - 数据: {len(ds)} 样本, {len(loader)} 批次")
-print(f"  - Loss 下降, 训练稳定")
+print("  - Loss 下降, 训练稳定")
 
 # 保存 checkpoint 供 SFT/DPO/推理使用（与 train.py 一致格式）
-ckpt_path = os.path.join(_SCRIPT_DIR, "checkpoints", "best_model.pt")
+ckpt_path = os.path.join(_SCRIPT_DIR, "checkpoints", "test_best_model.pt")
 os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
 torch.save({
     'model_state_dict': model.state_dict(),

@@ -15,6 +15,13 @@ import os
 import subprocess
 import sys
 
+# 预处理脚本路径（在 gleamlm/preprocessing/ 核心库中）
+_PREPROC_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "gleamlm",
+    "preprocessing",
+)
+
 # 数据源配置（顺序即混合轮询优先级，配比影响每轮读取行数）
 SOURCES = [
     {"name": "wiki", "file": "wiki_clean.txt", "type": "text", "ratio": 0.30},
@@ -76,8 +83,6 @@ def main():
     parser.add_argument("--prefix_len", type=int, default=100, help="prefix 模式下的字符数")
     args = parser.parse_args()
 
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-
     if args.ratios:
         if len(args.ratios) < len(SOURCES):
             parser.error(
@@ -110,7 +115,7 @@ def main():
             run(
                 [
                     "python",
-                    os.path.join(tools_dir, "clean_text.py"),
+                    os.path.join(_PREPROC_DIR, "clean_text.py"),
                     "--input",
                     raw,
                     "--output",
@@ -145,7 +150,7 @@ def main():
                 run(
                     [
                         "python",
-                        os.path.join(tools_dir, "filter_qa.py"),
+                        os.path.join(_PREPROC_DIR, "filter_qa.py"),
                         "--input",
                         src,
                         "--output",
@@ -154,12 +159,11 @@ def main():
                     f"QA过滤: {s['name']}",
                 )
             else:
-                # 新闻用 prefix 模式（标题去重），其他用 exact（全文去重）
                 mode = "prefix" if s["type"] == "news" else args.dedup_mode
                 run(
                     [
                         "python",
-                        os.path.join(tools_dir, "dedup_text.py"),
+                        os.path.join(_PREPROC_DIR, "dedup_text.py"),
                         "--input",
                         src,
                         "--output",
@@ -172,12 +176,11 @@ def main():
                     f"去重: {s['name']} (mode={mode})",
                 )
 
-    # 3. 字符加权配比 → 行数配比（业界标准：按字符量而非行数混合）
+    # 3. 字符加权配比 → 行数配比
     print("\n[3/4] 多源混合切分")
     input_files = []
     target_ratios = [s["ratio"] for s in SOURCES]
 
-    # 扫描各源行均字符
     print("  扫描各源行均字符...")
     avg_chars_list = []
     for s in SOURCES:
@@ -194,7 +197,6 @@ def main():
         input_files.append(fpath)
         print(f"    {s['name']}: ~{avg_c:.0f} 字/行")
 
-    # 按字符量加权：target_ratio / avg_chars → 行数配比
     effective = []
     for i, s in enumerate(SOURCES):
         if avg_chars_list[i] > 0:
@@ -205,7 +207,6 @@ def main():
     if total > 0:
         effective = [e / total for e in effective]
 
-    # 取有效文件
     valid_files = []
     valid_ratios = []
     for i, s in enumerate(SOURCES):
@@ -225,7 +226,7 @@ def main():
         sys.exit(1)
 
     cmd_list = (
-        ["python", os.path.join(tools_dir, "build_dataset.py"), "--input"]
+        ["python", os.path.join(_PREPROC_DIR, "build_dataset.py"), "--input"]
         + valid_files
         + ["--ratios"]
         + valid_ratios

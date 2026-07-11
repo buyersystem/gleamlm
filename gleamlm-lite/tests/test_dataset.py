@@ -1,7 +1,8 @@
 """GleamLM-Lite 数据集测试 — pytest"""
 import os
+
 import pytest
-import torch
+
 from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH

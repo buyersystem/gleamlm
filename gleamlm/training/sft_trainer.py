@@ -1,0 +1,230 @@
+"""SFT (Supervised Fine-Tuning) shared module. Extracted from nano/sft.py and lite/sft.py.
+
+Provides SFTDataset, train_one_epoch_sft, evaluate_sft, and generate_response_sft.
+"""
+
+from __future__ import annotations
+
+import json
+import random
+from typing import Any
+
+import torch
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
+from tqdm import tqdm
+
+from gleamlm.inference.generate import generate_response
+from gleamlm.tokenizer.tokenizer import BBPETokenizer
+
+SYSTEM_PROMPTS = [
+    "你是一个有帮助的AI助手。",
+    "你是一个友善的中文对话助手，请用简洁清晰的语言回答问题。",
+    "你是一个知识渊博的助手，请准确回答问题。",
+    "You are a helpful AI assistant.",
+]
+
+
+class SFTDataset(Dataset):
+    """SFT dataset: JSONL -> ChatML format -> loss mask.
+
+    ChatML format:
+      <|im_start|><|user|>\\n{instruction}<|im_end|>\\n<|im_start|><|assistant|>\\n{output}<|im_end|>
+
+    With system message:
+      <|im_start|><|system|>\\n{system_prompt}<|im_end|>\\n
+      <|im_start|><|user|>\\n{instruction}<|im_end|>\\n
+      <|im_start|><|assistant|>\\n{output}<|im_end|>
+
+    loss mask: user/system portion labels=-100, only assistant portion contributes to loss.
+    """
+
+    def __init__(
+        self,
+        data_path: str,
+        tokenizer: BBPETokenizer,
+        max_seq_len: int = 512,
+        inject_system_ratio: float = 0.2,
+    ):
+        self.tokenizer = tokenizer
+        self.max_seq_len = max_seq_len
+        self.inject_system_ratio = inject_system_ratio
+        self.pad_id = tokenizer.pad_id
+        self.bos_id = tokenizer.bos_id
+        self.eos_id = tokenizer.eos_id
+
+        self.data: list[dict[str, str]] = []
+        required_keys = {"instruction", "output"}
+        with open(data_path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as e:
+                    print(f"Warning: skipping line {i} in {data_path}: {e}")
+                    continue
+                missing = required_keys - set(item.keys())
+                if missing:
+                    raise ValueError(f"Line {i}: missing required keys {missing} in {data_path}")
+                self.data.append({"instruction": item["instruction"], "output": item["output"]})
+        print(f"Loaded {len(self.data)} SFT samples from {data_path}")
+
+        rng = random.Random(42)
+        self._system_prompts: list[str] = []
+        for _ in range(len(self.data)):
+            if rng.random() < inject_system_ratio:
+                self._system_prompts.append(rng.choice(SYSTEM_PROMPTS))
+            else:
+                self._system_prompts.append("")
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def _encode(self, text: str) -> list[int]:
+        return self.tokenizer.encode(text, add_bos=False, add_eos=False)
+
+    def _build_prompt(self, instruction: str, system_prompt: str = "") -> str:
+        """Build prompt text up to assistant header (excludes answer)."""
+        if system_prompt:
+            return (
+                f"<|im_start|><|system|>\n{system_prompt}<|im_end|>\n"
+                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
+                f"<|im_start|><|assistant|>\n"
+            )
+        return f"<|im_start|><|user|>\n{instruction}<|im_end|>\n<|im_start|><|assistant|>\n"
+
+    def _build_full(self, instruction: str, output: str, system_prompt: str = "") -> str:
+        if system_prompt:
+            return (
+                f"<|im_start|><|system|>\n{system_prompt}<|im_end|>\n"
+                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
+                f"<|im_start|><|assistant|>\n{output}<|im_end|>"
+            )
+        return (
+            f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
+            f"<|im_start|><|assistant|>\n{output}<|im_end|>"
+        )
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        item = self.data[idx]
+        instruction = item["instruction"]
+        output = item["output"]
+        system_prompt = self._system_prompts[idx]
+
+        prompt_text = self._build_prompt(instruction, system_prompt)
+        full_text = self._build_full(instruction, output, system_prompt)
+
+        prompt_ids = self._encode(prompt_text)
+        full_ids = self._encode(full_text)
+
+        P = min(len(prompt_ids), self.max_seq_len - 2)
+
+        if len(full_ids) > self.max_seq_len:
+            im_end_ids = self._encode("<|im_end|>")
+            full_ids = full_ids[: self.max_seq_len]
+            if len(full_ids) >= len(im_end_ids) and full_ids[-len(im_end_ids) :] != im_end_ids:
+                full_ids = full_ids[: self.max_seq_len - len(im_end_ids)] + im_end_ids
+
+        input_ids = full_ids[:-1]
+        labels = list(full_ids[1:])
+
+        mask_end = min(P, len(labels))
+        for i in range(mask_end - 1):
+            labels[i] = -100
+
+        pad_len = self.max_seq_len - len(input_ids)
+        if pad_len > 0:
+            input_ids = input_ids + [self.pad_id] * pad_len
+            labels = labels + [-100] * pad_len
+
+        return (
+            torch.tensor(input_ids, dtype=torch.long),
+            torch.tensor(labels, dtype=torch.long),
+        )
+
+    @staticmethod
+    def collate_fn(
+        batch: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        input_ids = torch.stack([item[0] for item in batch])
+        labels = torch.stack([item[1] for item in batch])
+        return input_ids, labels
+
+
+def train_one_epoch_sft(
+    model: torch.nn.Module,
+    train_loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    device: torch.device,
+    epoch: int,
+    args: Any,
+    global_step: int,
+    scaler: Any,
+    log_interval: int = 50,
+) -> tuple[float, int]:
+    model.train()
+    total_loss = 0.0
+    num_batches = 0
+
+    pbar = tqdm(train_loader, desc=f"SFT Epoch {epoch}", mininterval=3, miniters=20)
+
+    for batch_idx, (input_ids, labels) in enumerate(pbar):
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
+
+        amp_device = "cuda" if torch.cuda.is_available() else "cpu"
+        with torch.amp.autocast(amp_device):  # type: ignore[attr-defined]
+            logits, _ = model(input_ids)
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                labels.view(-1),
+                ignore_index=-100,
+            )
+
+        loss = loss / args.accumulate_grad
+        scaler.scale(loss).backward()
+
+        if (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(train_loader):
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
+            optimizer.zero_grad()
+            global_step += 1
+
+        total_loss += loss.item() * args.accumulate_grad
+        num_batches += 1
+
+        if batch_idx % log_interval == 0:
+            lr = scheduler.get_last_lr()[0]
+            pbar.set_postfix(
+                {
+                    "loss": f"{loss.item() * args.accumulate_grad:.4f}",
+                    "lr": f"{lr:.2e}",
+                }
+            )
+
+    return total_loss / num_batches, global_step
+
+
+def evaluate_sft(
+    model: torch.nn.Module,
+    tokenizer: BBPETokenizer,
+    test_prompts: list[str],
+) -> list[tuple[str, str]]:
+    model.eval()
+    print("\n" + "=" * 60)
+    print("SFT 生成评估")
+    print("=" * 60)
+    results: list[tuple[str, str]] = []
+    for prompt in test_prompts:
+        response = generate_response(model, tokenizer, prompt)
+        results.append((prompt, response))
+        print(f"\n[User] {prompt}")
+        print(f"[Assistant] {response}")
+        print("-" * 40)
+    return results

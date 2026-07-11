@@ -6,7 +6,7 @@ import sys
 import torch
 
 from gleamlm import load_model_for_inference
-from gleamlm.inference.sampler import sample_token
+from gleamlm.inference.generator import generate_tokens
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
@@ -109,41 +109,34 @@ def load_model_and_tokenizer():
 
 
 def generate(model, tokenizer, prompt, max_new_tokens=64):
-    """Generate text using KV cache + shared sampler"""
+    """Generate text using the shared autoregressive generator."""
     prompt_ids = tokenizer.encode(prompt)
-    input_ids = torch.tensor([prompt_ids], device=DEVICE)
-    generated_ids = prompt_ids.copy()
-    past_kv = None
 
-    with torch.no_grad():
-        for _i in range(max_new_tokens):
-            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
-                logits, past_kv = model(input_ids, past_kv_list=past_kv)
-            next_token = sample_token(
-                logits[:, -1, :],
-                temperature=0.7,
-                top_k=50,
-                generated_ids=generated_ids,
-            )
-            token_id = next_token.item()
-            if token_id == tokenizer.eos_id:
-                break
-            generated_ids.append(token_id)
-            input_ids = torch.tensor([[token_id]], device=DEVICE)
+    generated = list(
+        generate_tokens(
+            model,
+            prompt_ids,
+            torch.device(DEVICE),
+            max_new_tokens=max_new_tokens,
+            temperature=0.7,
+            top_k=50,
+            top_p=0.0,
+            stop_ids={tokenizer.eos_id},
+            amp_dtype=torch.bfloat16 if DEVICE == "cuda" else None,
+        )
+    )
 
-    full = tokenizer.decode(generated_ids)
-    generated = full[len(prompt):].strip() if full.startswith(prompt) else full.strip()
-    return generated[:200]
+    full = tokenizer.decode(generated)
+    result = full[len(prompt) :].strip() if full.startswith(prompt) else full.strip()
+    return result[:200]
 
 
 def check_knowledge(generated, expected):
-    """Check if generated text contains expected answer"""
     generated_lower = generated.lower().replace(" ", "")
     for kw in expected.split(","):
         kw = kw.strip().lower()
         if kw in generated_lower:
             return "CORRECT"
-    # Check for hallucination indicators
     hallucination_keywords = ["保护区", "氧化物", "太阳质量", "热带"]
     for hw in hallucination_keywords:
         if hw in generated:

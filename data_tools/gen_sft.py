@@ -1,8 +1,14 @@
-"""生成 10000 条 SFT 数据：A类4000 + B类3000 + C类3000"""
+"""生成 10000 条 SFT 数据：A类4000 + B类3000 + C类3000
+
+用法:
+    python data_tools/gen_sft.py --mode hardcoded --output data/sft_data.jsonl
+    python data_tools/gen_sft.py --mode api --api_key sk-xxx --output data/sft_api.jsonl
+"""
 
 import json
 import os
 import random
+import sys
 
 random.seed(42)
 
@@ -1054,8 +1060,8 @@ def build_category(bases, cat, target):
     return result[:target]
 
 
-# 主流程
-if __name__ == "__main__":
+def generate_hardcoded(output_path: str = "data/sft_data.jsonl", target_count: int = 10000) -> None:
+    """Generate SFT data from hardcoded templates."""
     print("Generating A-class (通用问答, target=4000)...")
     a_data = build_category(A_DATA, "A", 4000)
     print(f"  Got {len(a_data)} entries")
@@ -1070,25 +1076,25 @@ if __name__ == "__main__":
 
     all_data = a_data + b_data + c_data
 
-    seen = set()
+    seen: set[str] = set()
     unique_data = []
     for item in all_data:
         if item["instruction"] not in seen:
             seen.add(item["instruction"])
             unique_data.append(item)
 
-    if len(unique_data) < 10000:
-        need = 10000 - len(unique_data)
+    if len(unique_data) < target_count:
+        need = target_count - len(unique_data)
         for i in range(need):
             src = unique_data[i % len(unique_data)]
             unique_data.append(
                 {"instruction": f"请帮我：{src['instruction']}", "output": src["output"]}
             )
 
-    unique_data = unique_data[:10000]
+    unique_data = unique_data[:target_count]
     random.shuffle(unique_data)
 
-    output_path = "data/sft_data.jsonl"
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         for item in unique_data:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
@@ -1100,3 +1106,41 @@ if __name__ == "__main__":
         print(f"  Q: {item['instruction'][:70]}...")
         print(f"  A: {item['output'][:80]}...")
         print()
+
+
+def generate_api() -> None:
+    """Delegate to API-based SFT data distillation script."""
+    from data_tools.generate_sft_data import main as api_main
+
+    api_main()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Unified SFT data generation")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="hardcoded",
+        choices=["hardcoded", "api"],
+        help="生成模式: hardcoded=模板变体, api=DeepSeek API 蒸馏",
+    )
+    parser.add_argument("--output", type=str, default="data/sft_data.jsonl", help="输出 JSONL 路径")
+    parser.add_argument("--count", type=int, default=10000, help="目标条目数 (仅 hardcoded 模式)")
+
+    # API mode args (forwarded to generate_sft_data.py)
+    parser.add_argument("--api_key", type=str, default=None)
+    parser.add_argument("--base_url", type=str, default="https://api.deepseek.com")
+    parser.add_argument("--api_model", type=str, default="deepseek-chat")
+    parser.add_argument("--variants_per_seed", type=int, default=4)
+    parser.add_argument("--skip_variants", action="store_true")
+    parser.add_argument("--delay", type=float, default=0.5)
+    parser.add_argument("--dry_run", type=int, default=0)
+    args, remaining = parser.parse_known_args()
+
+    if args.mode == "hardcoded":
+        generate_hardcoded(args.output, args.count)
+    else:
+        sys.argv = [sys.argv[0]] + remaining
+        generate_api()

@@ -495,7 +495,6 @@ SEEDS = [
     "对不起，这件事超出了我的知识范围。",
 ]
 
-# 变体生成 Prompt 模板
 VARIANT_PROMPT = """请为以下问题生成 {n} 个意思相近但表达不同的变体。
 要求：
 - 变体必须是中文
@@ -520,14 +519,12 @@ VARIANT_EXAMPLE = """示例：
 
 
 def get_client(api_key, base_url):
-    """创建 OpenAI 兼容客户端"""
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
 def call_api(
     client, model, system_prompt, user_prompt, temperature=0.7, max_tokens=1024, max_retries=3
 ):
-    """调用 API，带重试"""
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
@@ -553,7 +550,6 @@ def call_api(
 
 
 def generate_variants(client, model, seed, n_variants=4):
-    """为一个种子生成 n 个同义变体"""
     prompt = VARIANT_PROMPT.format(
         n=n_variants,
         seed=seed,
@@ -580,7 +576,6 @@ def generate_variants(client, model, seed, n_variants=4):
 
 
 def generate_answer(client, model, instruction):
-    """用 DeepSeek 生成高质量回答"""
     return call_api(
         client,
         model,
@@ -680,7 +675,6 @@ def main():
         print(f"失败: {fail_count} 条")
         print(f"输出: {os.path.abspath(args.output)}")
 
-        # 统计类别分布
         print_distribution(results)
     else:
         print("\nError: 没有成功生成任何数据")
@@ -688,29 +682,24 @@ def main():
 
 
 def save_partial(results, path):
-    """部分保存"""
     with open(path, "w", encoding="utf-8") as f:
         for item in results:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
 
 
 def save_final(results, path):
-    """最终保存为 JSONL + 备份"""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    # 备份旧文件
     if os.path.exists(path):
         backup = path + ".bak"
         os.rename(path, backup)
         print(f"Backed up old file to: {backup}")
     save_partial(results, path)
-    # 清除 partial
     partial = path + ".partial"
     if os.path.exists(partial):
         os.remove(partial)
 
 
 def print_distribution(results):
-    """统计并打印类别分布"""
     creation_kw = [
         "诗",
         "描写",

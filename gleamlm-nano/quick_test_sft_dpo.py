@@ -20,9 +20,9 @@ print("Step 1: 快速预训练 (200 steps)...")
 # 清除旧缓存
 import shutil
 
-from data_tools.build_dataset import stream_build
 from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
+from gleamlm.preprocessing.build_dataset import stream_build
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 
 for d in ["data/test_raw", "data/test_splits", "checkpoints/sft_test", "checkpoints/dpo_test"]:
@@ -116,8 +116,8 @@ for step, batch in enumerate(loader):
 print(f"  预训练完成 ({time.time() - t0:.1f}s)")
 
 os.makedirs("checkpoints", exist_ok=True)
-torch.save({"model_state_dict": model.state_dict()}, "checkpoints/best_model.pt")
-print("  Saved: checkpoints/best_model.pt")
+torch.save({"model_state_dict": model.state_dict()}, "checkpoints/test_best_model.pt")
+print("  Saved: checkpoints/test_best_model.pt")
 
 print("=" * 60)
 print("Step 2: 生成 SFT 数据...")

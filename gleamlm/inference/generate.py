@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from gleamlm.inference.sampler import sample_token
+from gleamlm.inference.generator import generate_tokens
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 
@@ -20,14 +20,12 @@ def generate_response(
     top_p: float = 0.9,
     repetition_penalty: float = 1.15,
 ) -> str:
-    """生成对话回复，遇到 <|im_end|> 或 <|endoftext|> 自动截断"""
+    """Generate a chat response with ChatML formatting. Stops at <|im_end|> or <|endoftext|>."""
     model.eval()
     device = next(model.parameters()).device
 
     prompt_text = f"<|im_start|><|user|>\n{instruction}<|im_end|>\n<|im_start|><|assistant|>\n"
     prompt_ids = tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
-    prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long).to(device)
-    generated_ids = prompt_ids.copy()
 
     stop_ids = {
         tokenizer.eos_id,
@@ -35,37 +33,30 @@ def generate_response(
         tokenizer.special_tokens.get("<|im_end|>"),
     }
     stop_ids.discard(None)
+    assert None not in stop_ids  # type guard for mypy
 
-    amp_device = "cuda" if torch.cuda.is_available() else "cpu"
-    with torch.amp.autocast(amp_device):  # type: ignore[attr-defined]
-        logits, past_kv = model(prompt_tensor)
-
-    for i in range(max_new_tokens):
-        next_token = sample_token(
-            logits[:, -1, :],
+    generated_tokens: list[int] = []
+    for i, token_id in enumerate(
+        generate_tokens(
+            model,
+            prompt_ids,
+            device,
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
             repetition_penalty=repetition_penalty,
-            generated_ids=generated_ids,
+            stop_ids=stop_ids,  # type: ignore[arg-type]
         )
-        token_id = next_token.item()
-
-        if token_id in stop_ids:
-            break
-
-        generated_ids.append(token_id)
-
+    ):
+        generated_tokens.append(token_id)
+        # Periodic <|endoftext|> check on decoded text
         if (i + 1) % 4 == 0:
-            draft = tokenizer.decode(generated_ids[len(prompt_ids) :], skip_special=False)
+            draft = tokenizer.decode(generated_tokens, skip_special=False)
             if "<|endoftext|>" in draft:
                 break
 
-        next_input = torch.tensor([[token_id]], dtype=torch.long).to(device)
-        with torch.amp.autocast(amp_device):  # type: ignore[attr-defined]
-            logits, past_kv = model(next_input, past_kv_list=past_kv)
-
-    response = tokenizer.decode(generated_ids[len(prompt_ids) :], skip_special=False)
+    response = tokenizer.decode(generated_tokens, skip_special=False)
     if "<|endoftext|>" in response:
         response = response.split("<|endoftext|>")[0]
     return response

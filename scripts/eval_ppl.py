@@ -23,21 +23,18 @@ import math
 
 from torch.utils.data import DataLoader
 
+from gleamlm.evaluation.ppl import _compute_raw_loss
 
-@torch.no_grad()
+
 def compute_ppl_fast(model, data_loader, device, max_batches=None, pad_token_id=0):
-    model.eval()
-    total_loss = 0
-    total_tokens = 0
-    criterion = torch.nn.CrossEntropyLoss(reduction="sum", ignore_index=pad_token_id)
-    for i, (input_ids, target_ids) in enumerate(data_loader):
-        if max_batches and i >= max_batches:
-            break
-        input_ids, target_ids = input_ids.to(device), target_ids.to(device)
-        logits, _ = model(input_ids)
-        loss = criterion(logits.view(-1, logits.size(-1)), target_ids.view(-1))
-        total_loss += loss.item()
-        total_tokens += (target_ids != pad_token_id).sum().item()
+    """Fast PPL computation — delegates to shared _compute_raw_loss."""
+    total_loss, total_tokens, _ = _compute_raw_loss(
+        model,
+        data_loader,
+        device,
+        pad_token_id,
+        max_batches,
+    )
     return total_loss / max(1, total_tokens)
 
 

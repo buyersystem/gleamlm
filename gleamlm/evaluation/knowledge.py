@@ -7,10 +7,9 @@ from typing import Any
 
 import torch
 
-from gleamlm.inference.sampler import sample_token
+from gleamlm.inference.generator import generate_tokens
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.utils.torch_utils import safe_autocast
 
 
 @dataclass
@@ -86,41 +85,38 @@ def _simple_generate(
     model: GleamLMModel,
     tokenizer: BBPETokenizer,
     prompt: str,
-    device: str,
+    device: str | torch.device,
     max_new_tokens: int = 64,
     temperature: float = 0.7,
     top_k: int = 50,
 ) -> str:
-    """独立生成函数 — 使用 KV Cache 逐 token 增量推理。
-
-    首步预填充 prompt，后续每步仅输入新 token 并复用 KV Cache，
-    RoPE 通过 offset 自动递增位置编码。
-    """
+    if isinstance(device, str):
+        device = torch.device(device)
     prompt_ids = tokenizer.encode(prompt)
-    input_ids = torch.tensor([prompt_ids], device=device)
-    generated_ids = prompt_ids.copy()
-    past_kv = None
 
-    with torch.no_grad():
-        for _ in range(max_new_tokens):
-            with safe_autocast():
-                logits, past_kv = model(input_ids, past_kv_list=past_kv)
-            next_token = sample_token(
-                logits[:, -1, :],
-                temperature=temperature,
-                top_k=top_k,
-                top_p=0.0,
-                generated_ids=generated_ids,
-            )
-            token_id = next_token.item()
-            if token_id in {tokenizer.eos_id, tokenizer.special_tokens.get("<|im_end|>")}:
-                break
-            generated_ids.append(token_id)
-            input_ids = torch.tensor([[token_id]], device=device)
+    stop_ids = {
+        tokenizer.eos_id,
+        tokenizer.special_tokens.get("<|im_end|>"),
+    }
+    stop_ids.discard(None)
 
-    full = tokenizer.decode(generated_ids)
-    generated = full[len(prompt):].strip() if full.startswith(prompt) else full.strip()
-    return generated[:200]
+    generated = list(
+        generate_tokens(
+            model,
+            prompt_ids,
+            device,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_k=top_k,
+            top_p=0.0,
+            stop_ids=stop_ids,  # type: ignore[arg-type]
+            amp_dtype=torch.bfloat16 if torch.cuda.is_available() else None,
+        )
+    )
+
+    full = tokenizer.decode(generated)
+    result = full[len(prompt) :].strip() if full.startswith(prompt) else full.strip()
+    return result[:200]
 
 
 def _check_answer(
@@ -159,7 +155,6 @@ def evaluate_knowledge(
     model.eval()
     result = KnowledgeResult()
 
-    # A1: 事实填空
     if verbose:
         print(f"\n{'=' * 60}")
         print(f"A1: FACT FILL-IN ({len(fact_prompts)} prompts)")
@@ -190,7 +185,6 @@ def evaluate_knowledge(
             f"{result.hallucination} hallucinations"
         )
 
-    # A2: 实体探针
     if verbose:
         print(f"\n{'=' * 60}")
         print(f"A2: ENTITY PROBE ({len(entity_probes)} entities)")

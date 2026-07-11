@@ -22,7 +22,6 @@ from gleamlm.tokenizer.tokenizer import BBPETokenizer
 
 
 def load_model(model_path, device="cuda"):
-    """加载模型和分词器"""
     print(f"Loading model: {model_path}")
     try:
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
@@ -71,7 +70,6 @@ def generate(
     sft_mode=False,
     stop_token=None,
 ):
-    """生成文本并实时打印"""
     streamer = TextStreamer(tokenizer)
 
     # SFT 模式：ChatML 包装
@@ -130,7 +128,6 @@ def interactive(
     device="cuda",
     sft_mode=False,
 ):
-    """交互式对话模式"""
     print("\n" + "=" * 60)
     print("GleamLM 交互式文本生成")
     if sft_mode:

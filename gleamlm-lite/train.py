@@ -16,25 +16,22 @@ except ImportError:
 
 import math
 import os
-import random
-import sys
 from contextlib import nullcontext
 
-import numpy as np
 from tqdm import tqdm
 
 from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.utils.torch_utils import get_lr_cosine, safe_autocast
-
-
-def set_seed(seed):
-    """固定随机种子，确保实验可复现"""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+from gleamlm.training.base_trainer import (
+    create_optimizer_and_scheduler,
+    create_scaler,
+    evaluate,
+    load_checkpoint,
+    save_checkpoint,
+    set_seed,
+)
+from gleamlm.utils.torch_utils import safe_autocast
 
 
 def train_one_epoch(
@@ -62,7 +59,6 @@ def train_one_epoch(
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
 
-        # AMP 前向
         with safe_autocast(enabled=args.bf16):
             logits, _ = model(input_ids)
             ce_loss = criterion(logits.view(-1, args.vocab_size), target_ids.view(-1))
@@ -70,7 +66,6 @@ def train_one_epoch(
             z_loss = args.z_loss_weight * (log_z**2).mean()
             loss = (ce_loss + z_loss) / accumulate_grad
 
-        # 反向传播 + 梯度累积
         is_accum_step = (batch_idx + 1) % accumulate_grad == 0 or (batch_idx + 1) == len(
             train_loader
         )
@@ -88,7 +83,7 @@ def train_one_epoch(
             scheduler.step()
             optimizer.zero_grad()
 
-            # TensorBoard 日志
+            # TensorBoard
             if writer is not None and args.local_rank == 0 and global_step % args.log_interval == 0:
                 lr = scheduler.get_last_lr()[0]
                 writer.add_scalar("Train/Loss", ce_loss.item(), global_step)
@@ -96,7 +91,6 @@ def train_one_epoch(
 
             global_step += 1
 
-            # 进度条：每个 step 更新一次
             if isinstance(pbar, tqdm):
                 pbar.set_postfix(
                     {
@@ -110,39 +104,6 @@ def train_one_epoch(
         num_batches += 1
 
     return total_loss / max(1, num_batches), global_step
-
-
-@torch.no_grad()
-def evaluate(model, val_loader, eval_criterion, device, pad_token_id=0, world_size=1):
-    """验证集评估，返回 loss 和 PPL。DDP 下自动汇总所有 rank 的 loss"""
-    torch.cuda.empty_cache()
-    model.eval()
-    total_loss = 0
-    total_tokens = 0
-
-    for input_ids, target_ids in tqdm(val_loader, desc="  Eval", file=sys.stdout):
-        input_ids = input_ids.to(device)
-        target_ids = target_ids.to(device)
-
-        logits, _ = model(input_ids)
-        loss = eval_criterion(logits.view(-1, logits.size(-1)), target_ids.view(-1))
-
-        total_loss += loss.item()
-        total_tokens += (target_ids != pad_token_id).sum().item()
-
-    # DDP: 汇总所有 rank 的 loss 和 token 数
-    if world_size > 1 and dist.is_initialized():
-        loss_tensor = torch.tensor(total_loss, device=device)
-        tokens_tensor = torch.tensor(total_tokens, device=device)
-        dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
-        dist.all_reduce(tokens_tensor, op=dist.ReduceOp.SUM)
-        total_loss = loss_tensor.item()
-        total_tokens = int(tokens_tensor.item())
-
-    avg_loss = total_loss / max(1, total_tokens)
-    ppl = math.exp(avg_loss)
-
-    return avg_loss, ppl
 
 
 def main():
@@ -257,7 +218,6 @@ def main():
         print(f"  Flash Attn: {args.use_flash_attn}, Z-Loss: {args.z_loss_weight}")
         print(f"  设备: {device}")
 
-    # 数据 / 分词器
     tokenizer = BBPETokenizer.load(args.tokenizer_path)
 
     if args.local_rank == 0:
@@ -317,7 +277,6 @@ def main():
             pin_memory=True,
         )
 
-    # 模型
     model = GleamLMModel(
         vocab_size=args.vocab_size,
         d_model=args.d_model,
@@ -339,26 +298,12 @@ def main():
     if args.world_size > 1:
         model = nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
 
-    # 优化器 / 调度器
     criterion = nn.CrossEntropyLoss(
         ignore_index=tokenizer.pad_id, label_smoothing=args.label_smoothing
     )
-    eval_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, reduction="sum")
 
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.lr, betas=(0.9, 0.95), eps=1e-8, weight_decay=args.weight_decay
-    )
-
-    total_steps = math.ceil(len(train_loader) / args.accumulate_grad) * args.epochs
-    scheduler = torch.optim.lr_scheduler.LambdaLR(
-        optimizer,
-        lambda step: get_lr_cosine(step, total_steps, args.warmup_ratio, args.min_lr_ratio),
-    )
-
-    if hasattr(torch.amp, "GradScaler"):
-        scaler = torch.amp.GradScaler("cuda")
-    else:
-        scaler = torch.cuda.amp.GradScaler()
+    optimizer, scheduler = create_optimizer_and_scheduler(model, train_loader, args)
+    scaler = create_scaler()
 
     # 断点续训
     start_epoch = 0
@@ -368,20 +313,11 @@ def main():
     if args.load_checkpoint and os.path.exists(args.load_checkpoint):
         if args.local_rank == 0:
             print(f"加载 checkpoint: {args.load_checkpoint}")
-        checkpoint = torch.load(args.load_checkpoint, map_location=device, weights_only=False)
-        if args.world_size > 1:
-            model.module.load_state_dict(checkpoint["model_state_dict"])
-        else:
-            model.load_state_dict(checkpoint["model_state_dict"])
-        if "optimizer_state_dict" in checkpoint:
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        if "scheduler_state_dict" in checkpoint:
-            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        if "scaler_state_dict" in checkpoint:
-            scaler.load_state_dict(checkpoint["scaler_state_dict"])
-        start_epoch = checkpoint.get("epoch", 0) + 1
-        global_step = checkpoint.get("global_step", 0)
-        best_val_loss = checkpoint.get("val_loss", float("inf"))
+        ckpt_info = load_checkpoint(model, optimizer, scheduler, scaler,
+                                     args.load_checkpoint, device, args.world_size)
+        start_epoch = ckpt_info["start_epoch"]
+        global_step = ckpt_info["global_step"]
+        best_val_loss = ckpt_info["best_val_loss"]
         if args.local_rank == 0:
             print(f"  从 epoch {start_epoch}, step {global_step} 续训")
 
@@ -397,7 +333,6 @@ def main():
         else:
             print("警告: tensorboard 不可用")
 
-    # 训练循环
     for epoch in range(start_epoch, args.epochs):
         if args.world_size > 1:
             train_loader.sampler.set_epoch(epoch)
@@ -419,7 +354,6 @@ def main():
         val_loss, val_ppl = evaluate(
             model.module if args.world_size > 1 else model,
             val_loader,
-            eval_criterion,
             device,
             tokenizer.pad_id,
             args.world_size,
@@ -443,41 +377,20 @@ def main():
                 writer.add_scalar("Eval/Perplexity", val_ppl, epoch)
                 writer.add_scalar("Eval/Train_Loss", train_loss, epoch)
 
-            # 保存 checkpoint
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                ckpt_path = os.path.join(args.checkpoint_dir, "best_model.pt")
-                torch.save(
-                    {
-                        "epoch": epoch,
-                        "global_step": global_step,
-                        "model_state_dict": model.module.state_dict()
-                        if args.world_size > 1
-                        else model.state_dict(),
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "scheduler_state_dict": scheduler.state_dict(),
-                        "scaler_state_dict": scaler.state_dict(),
-                        "train_loss": train_loss,
-                        "val_loss": val_loss,
-                        "val_ppl": val_ppl,
-                        "args": args,
-                    },
-                    ckpt_path,
+                save_checkpoint(
+                    model, optimizer, scheduler, scaler,
+                    os.path.join(args.checkpoint_dir, "best_model.pt"),
+                    epoch, global_step, args.world_size,
+                    extra={"train_loss": train_loss, "val_loss": val_loss, "val_ppl": val_ppl, "args": args},
                 )
                 print(f"  保存最佳模型 (val_loss={val_loss:.4f}, val_ppl={val_ppl:.2f})")
 
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "global_step": global_step,
-                    "model_state_dict": model.module.state_dict()
-                    if args.world_size > 1
-                    else model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "scheduler_state_dict": scheduler.state_dict(),
-                    "scaler_state_dict": scaler.state_dict(),
-                },
+            save_checkpoint(
+                model, optimizer, scheduler, scaler,
                 os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt"),
+                epoch, global_step, args.world_size,
             )
 
     if args.world_size > 1:

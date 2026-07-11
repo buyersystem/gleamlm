@@ -45,34 +45,54 @@ class PPLResult:
         }
 
 
-def compute_ppl(
+@torch.no_grad()
+def _compute_raw_loss(
     model: nn.Module,
     data_loader: DataLoader,
-    device: str,
+    device: torch.device,
     pad_token_id: int = 0,
     max_batches: int | None = None,
-) -> PPLResult:
-    """核心 PPL 计算：sum(loss) / sum(tokens)"""
-    model.eval()
+) -> tuple[float, int, int]:
+    """Core PPL helper: iterate loader, accumulate sum(loss) and both total tokens.
+
+    Returns (total_loss, total_tokens, n_batches). Callers handle avg_loss, ppl, and DDP all-reduce.
+    """
     total_loss = 0.0
     total_tokens = 0
     n_batches = 0
     criterion = nn.CrossEntropyLoss(reduction="sum", ignore_index=pad_token_id)
 
-    with torch.no_grad():
-        for input_ids, target_ids in data_loader:
-            if max_batches and n_batches >= max_batches:
-                break
-            input_ids = input_ids.to(device)
-            target_ids = target_ids.to(device)
+    for input_ids, target_ids in data_loader:
+        if max_batches and n_batches >= max_batches:
+            break
+        input_ids = input_ids.to(device)
+        target_ids = target_ids.to(device)
 
-            logits, _ = model(input_ids)
-            loss = criterion(logits.reshape(-1, logits.size(-1)), target_ids.reshape(-1))
+        logits, _ = model(input_ids)
+        loss = criterion(logits.reshape(-1, logits.size(-1)), target_ids.reshape(-1))
 
-            total_loss += loss.item()
-            total_tokens += (target_ids != pad_token_id).sum().item()
-            n_batches += 1
+        total_loss += loss.item()
+        total_tokens += (target_ids != pad_token_id).sum().item()
+        n_batches += 1
 
+    return total_loss, total_tokens, n_batches
+
+
+def compute_ppl(
+    model: nn.Module,
+    data_loader: DataLoader,
+    device: torch.device,
+    pad_token_id: int = 0,
+    max_batches: int | None = None,
+) -> PPLResult:
+    """Compute PPL: sum(loss) / sum(tokens) → exp()."""
+    total_loss, total_tokens, n_batches = _compute_raw_loss(
+        model,
+        data_loader,
+        device,
+        pad_token_id,
+        max_batches,
+    )
     avg_loss = total_loss / max(1, total_tokens)
     ppl = math.exp(avg_loss)
     return PPLResult(
@@ -116,7 +136,7 @@ def evaluate_ppl(
             num_workers=0,
         )
 
-    result = compute_ppl(model, dl, device, tokenizer.pad_id, max_batches)
+    result = compute_ppl(model, dl, torch.device(device), tokenizer.pad_id, max_batches)
     result.dataset_name = dataset
 
     total, _ = model.get_num_params()

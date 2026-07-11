@@ -1,6 +1,6 @@
 """GleamLM-Lite 87M 冒烟测试 — 无需 pytest，直接 python 运行"""
-import sys
 import os
+import sys
 import traceback
 
 import torch

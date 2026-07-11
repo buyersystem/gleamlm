@@ -1,6 +1,7 @@
 """GleamLM-Lite 87M 模型前向/反向测试 — pytest"""
 import pytest
 import torch
+
 from gleamlm.models.model import GleamLMModel
 
 VOCAB_SIZE = 12002

@@ -1,9 +1,9 @@
 """使用训练好的模型生成文本样例，用于人工评估"""
 
-import torch
-import os
-import sys
 import argparse
+import sys
+
+import torch
 
 # Windows 终端编码修复
 if sys.platform == 'win32':
@@ -13,8 +13,8 @@ if sys.platform == 'win32':
         pass
 
 from gleamlm import load_model_for_inference
-from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.inference.streamer import TextStreamer
+from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 
