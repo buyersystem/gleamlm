@@ -289,10 +289,21 @@ class GleamLMModel(nn.Module):
         x = self.token_embed(input_ids)
         x = self.emb_dropout(x)
 
-        causal_mask = self._create_causal_mask(
-            seq_len, device,
-            offset=past_kv_list[0][0].size(2) if past_kv_list is not None else 0,
-        )
+        if past_kv_list is not None:
+            if not isinstance(past_kv_list, list) or not past_kv_list:
+                raise ValueError(
+                    "past_kv_list must be a non-empty list of (K, V) tuples, "
+                    f"got {type(past_kv_list)}"
+                )
+            if len(past_kv_list) != self.num_layers:
+                raise ValueError(
+                    f"past_kv_list length ({len(past_kv_list)}) != num_layers ({self.num_layers})"
+                )
+            offset = past_kv_list[0][0].size(2)
+        else:
+            offset = 0
+
+        causal_mask = self._create_causal_mask(seq_len, device, offset=offset)
 
         new_kv_list: PastKeyValueList = []
         for i, layer in enumerate(self.layers):

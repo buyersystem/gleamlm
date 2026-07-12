@@ -22,7 +22,6 @@ def generate_response(
     repetition_penalty: float = 1.15,
 ) -> str:
     """Generate a chat response with ChatML formatting. Stops at <|im_end|> or <|endoftext|>."""
-    model.eval()
     device = next(model.parameters()).device
 
     prompt_text = format_chatml(
