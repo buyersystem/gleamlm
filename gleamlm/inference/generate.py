@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 
+from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generator import generate_tokens
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
@@ -24,7 +25,10 @@ def generate_response(
     model.eval()
     device = next(model.parameters()).device
 
-    prompt_text = f"<|im_start|><|user|>\n{instruction}<|im_end|>\n<|im_start|><|assistant|>\n"
+    prompt_text = format_chatml(
+        [{"role": "user", "content": instruction}],
+        add_generation_prompt=True,
+    )
     prompt_ids = tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
 
     stop_ids = {

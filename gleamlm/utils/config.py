@@ -146,6 +146,7 @@ _CONFIG_VALIDATORS = {
         "dropout": (float, lambda v: 0.0 <= v <= 1.0),
         "tie_weights": (bool, None),
         "use_flash_attn": (bool, None),
+        "use_gradient_checkpointing": (bool, None),
     },
     "training": {
         "epochs": (int, lambda v: 1 <= v <= 1000),

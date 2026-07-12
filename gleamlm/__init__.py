@@ -37,6 +37,7 @@ def load_model_for_inference(
             "pad_token_id": getattr(args, "pad_token_id", 0),
             "tie_weights": getattr(args, "tie_weights", True),
             "use_flash_attn": getattr(args, "use_flash_attn", False),
+            "use_gradient_checkpointing": getattr(args, "use_gradient_checkpointing", False),
         }
     elif "config" in checkpoint:
         config = checkpoint["config"]

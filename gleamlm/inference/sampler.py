@@ -43,9 +43,4 @@ def sample_token(
         logits = logits.masked_fill(indices_to_remove, float("-inf"))
 
     probs = F.softmax(logits, dim=-1)
-    if probs.dim() == 1:
-        sampled = torch.multinomial(probs, num_samples=1)
-    else:
-        sampled = torch.multinomial(probs, num_samples=1).squeeze(-1)
-
-    return sampled
+    return torch.multinomial(probs, num_samples=1).squeeze(-1)

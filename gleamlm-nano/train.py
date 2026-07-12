@@ -28,6 +28,7 @@ from gleamlm.training.base_trainer import (
     save_checkpoint,
     set_seed,
     train_one_epoch,
+    wrap_for_distributed,
 )
 
 
@@ -215,7 +216,7 @@ def main():
     # model = torch.compile(model)
 
     if args.world_size > 1:
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
+        model = wrap_for_distributed(model, args)
 
     criterion = nn.CrossEntropyLoss(
         ignore_index=tokenizer.pad_id, label_smoothing=args.label_smoothing

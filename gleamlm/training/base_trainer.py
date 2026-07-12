@@ -1,7 +1,5 @@
-"""Pre-training shared utilities. Extracted from nano/train.py and lite/train.py.
-
-Covers: set_seed, evaluate, checkpoint save/load, GradScaler creation,
-DataLoader setup, optimizer/scheduler creation, model building.
+"""Pre-training shared utilities — seed, AMP, distributed wrapping,
+optimizer/scheduler, evaluate, checkpoint save/load, training loop.
 """
 
 from __future__ import annotations
@@ -35,6 +33,19 @@ def create_scaler() -> torch.amp.GradScaler | torch.cuda.amp.GradScaler:  # pyri
     if hasattr(torch.amp, "GradScaler"):
         return torch.amp.GradScaler("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore[name-defined]
     return torch.cuda.amp.GradScaler()  # pyright: ignore[reportDeprecated]
+
+
+def wrap_for_distributed(model: nn.Module, args: Any) -> nn.Module:
+    if args.world_size > 1:
+        if getattr(args, "use_fsdp", False):
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
+            model = FSDP(model, use_orig_params=True)
+        else:
+            model = nn.parallel.DistributedDataParallel(
+                model, device_ids=[args.local_rank]
+            )
+    return model
 
 
 def create_optimizer_and_scheduler(

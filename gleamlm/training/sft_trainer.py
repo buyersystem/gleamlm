@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import random
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -16,6 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generate import generate_response
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 
@@ -130,37 +132,22 @@ class SFTDataset(Dataset):
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_bos=False, add_eos=False)
 
-    # --- single-turn helpers (unchanged) ---
-
-    def _build_prompt(self, instruction: str, system_prompt: str = "") -> str:
-        if system_prompt:
-            return (
-                f"<|im_start|><|system|>\n{system_prompt}<|im_end|>\n"
-                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
-                f"<|im_start|><|assistant|>\n"
-            )
-        return f"<|im_start|><|user|>\n{instruction}<|im_end|>\n<|im_start|><|assistant|>\n"
-
-    def _build_full(self, instruction: str, output: str, system_prompt: str = "") -> str:
-        if system_prompt:
-            return (
-                f"<|im_start|><|system|>\n{system_prompt}<|im_end|>\n"
-                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
-                f"<|im_start|><|assistant|>\n{output}<|im_end|>"
-            )
-        return (
-            f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
-            f"<|im_start|><|assistant|>\n{output}<|im_end|>"
-        )
-
     def _single_turn_item(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         item = self.data[idx]
         instruction = item["instruction"]
         output = item["output"]
         system_prompt = self._system_prompts[idx]
 
-        prompt_text = self._build_prompt(instruction, system_prompt)
-        full_text = self._build_full(instruction, output, system_prompt)
+        msgs: list[dict[str, str]] = []
+        if system_prompt:
+            msgs.append({"role": "system", "content": system_prompt})
+        msgs.append({"role": "user", "content": instruction})
+
+        prompt_text = format_chatml(msgs, add_generation_prompt=True)
+        full_text = format_chatml(
+            msgs + [{"role": "assistant", "content": output}],
+            add_generation_prompt=False,
+        )
 
         prompt_ids = self._encode(prompt_text)
         full_ids = self._encode(full_text)
@@ -191,37 +178,16 @@ class SFTDataset(Dataset):
 
     # --- multi-turn helpers ---
 
-    @staticmethod
-    def _message_to_text(msg: dict[str, str], trailing_nl: bool = True) -> str:
-        role = msg["role"]
-        content = msg["content"]
-        end = "\n" if trailing_nl else ""
-        return f"<|im_start|><|{role}|>\n{content}<|im_end|>{end}"
-
-    def _build_multiturn_prompt_and_full(self, messages: list[dict[str, str]]) -> tuple[str, str]:
-        if len(messages) < 2:
-            raise ValueError("Multi-turn conversation must have at least 2 messages")
-
-        last = messages[-1]
-        if last["role"] != "assistant":
-            raise ValueError(f"Last message must be assistant, got '{last['role']}'")
-
-        prompt_parts: list[str] = []
-        for msg in messages[:-1]:
-            prompt_parts.append(self._message_to_text(msg, trailing_nl=True))
-        prompt_parts.append("<|im_start|><|assistant|>\n")
-
-        full_parts = list(prompt_parts)
-        full_parts.append(f"{last['content']}<|im_end|>")
-
-        return "".join(prompt_parts), "".join(full_parts)
-
     def _multi_turn_item(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         messages = self.data[idx]["messages"]
+        last = messages[-1]
 
-        prompt_text, full_text = self._build_multiturn_prompt_and_full(messages)
-        prompt_ids = self._encode(prompt_text)
-        full_ids = self._encode(full_text)
+        full_ids = self._encode(
+            format_chatml(messages, add_generation_prompt=False)
+        )
+        prompt_ids = self._encode(
+            format_chatml(messages[:-1], add_generation_prompt=True)
+        )
 
         P = len(prompt_ids)
 
@@ -296,7 +262,11 @@ def train_one_epoch_sft(
             )
 
         loss = loss / args.accumulate_grad
-        scaler.scale(loss).backward()
+        world_size = getattr(args, "world_size", 1)
+        is_accum = (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(train_loader)
+        sync_ctx = model.no_sync() if (not is_accum and world_size > 1) else nullcontext()
+        with sync_ctx:
+            scaler.scale(loss).backward()
 
         if (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(train_loader):
             scaler.unscale_(optimizer)

@@ -9,6 +9,7 @@ Supports both single-turn and multi-turn preference data.
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -16,6 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generate import generate_response
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 
@@ -113,20 +115,6 @@ class DPODataset(Dataset):
     def _encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_bos=False, add_eos=False)
 
-    @staticmethod
-    def _message_to_text(msg: dict[str, str], trailing_nl: bool = True) -> str:
-        role = msg["role"]
-        content = msg["content"]
-        end = "\n" if trailing_nl else ""
-        return f"<|im_start|><|{role}|>\n{content}<|im_end|>{end}"
-
-    def _build_multiturn_prompt_text(self, messages: list[dict[str, str]]) -> str:
-        parts: list[str] = []
-        for msg in messages:
-            parts.append(self._message_to_text(msg, trailing_nl=True))
-        parts.append("<|im_start|><|assistant|>\n")
-        return "".join(parts)
-
     def __getitem__(self, idx: int) -> dict[str, Any]:
         s = self.samples[idx]
         chosen = s["chosen"]
@@ -134,23 +122,25 @@ class DPODataset(Dataset):
 
         if "messages" in s:
             messages = s["messages"]
-            prompt_text = self._build_multiturn_prompt_text(messages)
-
-            history_text = "".join(self._message_to_text(m, trailing_nl=True) for m in messages)
-            chosen_text = f"{history_text}<|im_start|><|assistant|>\n{chosen}<|im_end|>"
-            rejected_text = f"{history_text}<|im_start|><|assistant|>\n{rejected}<|im_end|>"
+            prompt_text = format_chatml(messages, add_generation_prompt=True)
+            chosen_text = format_chatml(
+                messages + [{"role": "assistant", "content": chosen}],
+                add_generation_prompt=False,
+            )
+            rejected_text = format_chatml(
+                messages + [{"role": "assistant", "content": rejected}],
+                add_generation_prompt=False,
+            )
         else:
-            instruction = s["instruction"]
-            prompt_text = (
-                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n<|im_start|><|assistant|>\n"
+            msgs = [{"role": "user", "content": s["instruction"]}]
+            prompt_text = format_chatml(msgs, add_generation_prompt=True)
+            chosen_text = format_chatml(
+                msgs + [{"role": "assistant", "content": chosen}],
+                add_generation_prompt=False,
             )
-            chosen_text = (
-                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
-                f"<|im_start|><|assistant|>\n{chosen}<|im_end|>"
-            )
-            rejected_text = (
-                f"<|im_start|><|user|>\n{instruction}<|im_end|>\n"
-                f"<|im_start|><|assistant|>\n{rejected}<|im_end|>"
+            rejected_text = format_chatml(
+                msgs + [{"role": "assistant", "content": rejected}],
+                add_generation_prompt=False,
             )
 
         prompt_ids = self._encode(prompt_text)
@@ -262,7 +252,11 @@ def train_one_epoch_dpo(
         loss = dpo_loss(policy_cho, policy_rej, ref_cho.detach(), ref_rej.detach(), beta)
 
         loss = loss / args.accumulate_grad
-        scaler.scale(loss).backward()
+        world_size = getattr(args, "world_size", 1)
+        is_accum = (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(dataloader)
+        sync_ctx = model.no_sync() if (not is_accum and world_size > 1) else nullcontext()
+        with sync_ctx:
+            scaler.scale(loss).backward()
 
         if (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(dataloader):
             scaler.unscale_(optimizer)

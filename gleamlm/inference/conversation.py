@@ -6,6 +6,7 @@ from collections.abc import Iterator
 
 import torch
 
+from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generator import generate_tokens
 from gleamlm.types import PastKeyValueList
 
@@ -69,11 +70,14 @@ class Conversation:
             stop_ids.add(im_end_id)
 
         if self.past_kv is None:
-            prompt_text = self._build_full_chatml()
+            prompt_text = format_chatml(
+                self.messages, add_generation_prompt=True
+            )
         else:
             last_user = self.messages[-1]["content"]
-            prompt_text = (
-                f"<|im_start|><|user|>\n{last_user}<|im_end|>\n<|im_start|><|assistant|>\n"
+            prompt_text = format_chatml(
+                [{"role": "user", "content": last_user}],
+                add_generation_prompt=True,
             )
 
         prompt_ids = self.tokenizer.encode(prompt_text, add_bos=False, add_eos=False)
@@ -153,20 +157,6 @@ class Conversation:
         self.messages.append(
             {"role": "assistant", "content": self._decode_tokens(generated_tokens)}
         )
-
-    def _build_full_chatml(self) -> str:
-        parts: list[str] = []
-        for msg in self.messages[:-1]:
-            role = msg["role"]
-            if role == "system":
-                parts.append(f"<|im_start|><|system|>\n{msg['content']}<|im_end|>\n")
-            elif role == "user":
-                parts.append(f"<|im_start|><|user|>\n{msg['content']}<|im_end|>\n")
-            elif role == "assistant":
-                parts.append(f"<|im_start|><|assistant|>\n{msg['content']}<|im_end|>\n")
-        last_user = self.messages[-1]["content"]
-        parts.append(f"<|im_start|><|user|>\n{last_user}<|im_end|>\n<|im_start|><|assistant|>\n")
-        return "".join(parts)
 
     def _decode_tokens(self, tokens: list[int]) -> str:
         return self.tokenizer.decode(tokens, skip_special=True)

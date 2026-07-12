@@ -28,6 +28,7 @@ from gleamlm.training.base_trainer import (
     save_checkpoint,
     set_seed,
     train_one_epoch,
+    wrap_for_distributed,
 )
 
 
@@ -88,6 +89,7 @@ def main():
     # 精度
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no_bf16", dest="bf16", action="store_false")
+    parser.set_defaults(bf16=True)
     parser.add_argument("--max_train_chars", type=int, default=5_300_000_000)
     parser.add_argument(
         "--ids_prefix", type=str, default="", help="预分词文件前缀，用于区分不同分词器"
@@ -220,7 +222,7 @@ def main():
         print(f"模型参数: {total / 1e6:.2f}M total, {trainable / 1e6:.2f}M trainable")
 
     if args.world_size > 1:
-        model = nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
+        model = wrap_for_distributed(model, args)
 
     criterion = nn.CrossEntropyLoss(
         ignore_index=tokenizer.pad_id, label_smoothing=args.label_smoothing

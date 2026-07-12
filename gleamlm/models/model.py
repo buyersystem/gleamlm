@@ -6,6 +6,7 @@ import math
 
 import torch
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from torch import nn
 
 from gleamlm.types import PastKeyValue, PastKeyValueList
@@ -228,12 +229,14 @@ class GleamLMModel(nn.Module):
         pad_token_id: int = 0,
         tie_weights: bool = True,
         use_flash_attn: bool = False,
+        use_gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.num_layers = num_layers
         self.pad_token_id = pad_token_id
         self.max_seq_len = max_seq_len
+        self.use_gradient_checkpointing = use_gradient_checkpointing
 
         self.token_embed = nn.Embedding(vocab_size, d_model, padding_idx=pad_token_id)
 
@@ -294,7 +297,13 @@ class GleamLMModel(nn.Module):
         new_kv_list: PastKeyValueList = []
         for i, layer in enumerate(self.layers):
             past_kv = past_kv_list[i] if past_kv_list is not None else None
-            x, current_kv = layer(x, causal_mask, past_kv)
+            if self.training and self.use_gradient_checkpointing:
+                x, current_kv = torch.utils.checkpoint.checkpoint(
+                    layer, x, causal_mask, past_kv,
+                    use_reentrant=False,
+                )
+            else:
+                x, current_kv = layer(x, causal_mask, past_kv)
             new_kv_list.append(current_kv)
 
         x = self.final_norm(x)
