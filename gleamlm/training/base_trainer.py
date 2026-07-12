@@ -7,6 +7,7 @@ from __future__ import annotations
 import math
 import random
 from contextlib import nullcontext
+from functools import partial
 from typing import Any
 
 import numpy as np
@@ -39,8 +40,18 @@ def wrap_for_distributed(model: nn.Module, args: Any) -> nn.Module:
     if args.world_size > 1:
         if getattr(args, "use_fsdp", False):
             from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
-            model = FSDP(model, use_orig_params=True)
+            from gleamlm.models.model import DecoderBlock
+
+            model = FSDP(
+                model,
+                auto_wrap_policy=partial(
+                    transformer_auto_wrap_policy,
+                    transformer_layer_cls={DecoderBlock},
+                ),
+                use_orig_params=True,
+            )
         else:
             model = nn.parallel.DistributedDataParallel(
                 model, device_ids=[args.local_rank]
@@ -183,6 +194,7 @@ def train_one_epoch(
     model.train()
     total_raw_ce = 0.0
     num_batches = 0
+    prev_loss: float | None = None
     accumulate_grad = args.accumulate_grad
     z_loss_weight = getattr(args, "z_loss_weight", 0.0)
     pad_id: int = criterion.ignore_index  # type: ignore[assignment]
@@ -221,18 +233,34 @@ def train_one_epoch(
             scaler.scale(loss).backward()
 
         if is_accum_step:
+            cur_loss = raw_ce.item()
+
+            if torch.isnan(raw_ce) or torch.isinf(raw_ce):
+                print(f"\n[FATAL] NaN/Inf loss at step {global_step}, aborting")
+                raise RuntimeError(f"NaN/Inf loss at step {global_step}")
+
+            if prev_loss is not None and cur_loss > prev_loss * 3.0:
+                print(f"\n[WARN] Loss spike at step {global_step}: "
+                      f"{prev_loss:.3f} -> {cur_loss:.3f}, skipping update")
+                optimizer.zero_grad()
+                prev_loss = cur_loss
+                continue
+
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            if grad_norm > 10.0:
+                print(f"\n[WARN] High grad norm at step {global_step}: {grad_norm:.1f}")
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
             optimizer.zero_grad()
 
             if writer is not None and args.local_rank == 0:
-                writer.add_scalar("Train/Loss", raw_ce.item(), global_step)
+                writer.add_scalar("Train/Loss", cur_loss, global_step)
                 writer.add_scalar("Train/LR", scheduler.get_last_lr()[0], global_step)
 
             global_step += 1
+            prev_loss = cur_loss
 
             if isinstance(pbar, tqdm):
                 pbar.set_postfix(

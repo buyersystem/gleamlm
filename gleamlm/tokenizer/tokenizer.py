@@ -79,8 +79,16 @@ class BBPETokenizer:
         total_pairs = sum(len(seq) - 1 for seq in byte_sequences if len(seq) > 1)
         print(f"  Collected {len(byte_sequences):,} words, {total_pairs:,} initial pairs")
 
-        n_merges = vocab_size - 256 - 10  # 预留 10 个特殊 token 位置
-        print(f"  Step 2/3: Training {n_merges} BPE merges...")
+        # 先注册特殊 token 以获取实际数量，再回退 _next_id 给 BPE 训练
+        tokenizer._add_special_tokens()
+        SPECIAL_COUNT = len(tokenizer.special_tokens)
+        tokenizer._next_id = 256
+        tokenizer.special_tokens.clear()
+        tokenizer.id_to_special.clear()
+        tokenizer.id_to_byte = {i: bytes([i]) for i in range(256)}
+
+        n_merges = vocab_size - 256 - SPECIAL_COUNT
+        print(f"  Step 2/3: Training {n_merges} BPE merges ({SPECIAL_COUNT} special tokens reserved)...")
 
         # 构建 pair → 出现位置的索引（用 dict/set 实现 O(1) 增删）
         print("    Building pair index...", end=" ", flush=True)
@@ -282,6 +290,9 @@ class BBPETokenizer:
 
     def _add_special_tokens(self) -> None:
         """注入特殊 token 到词表末尾"""
+        if self.special_tokens:
+            return  # 已注册，幂等
+
         specials = [
             "<|endoftext|>",
             "<|im_start|>",
@@ -303,19 +314,22 @@ class BBPETokenizer:
                 self.id_to_byte[tid] = token.encode("utf-8")
                 self._next_id += 1
 
-        # 设置常用别名
+        self._set_aliases()
+
+        # 构建特殊 token 切分正则（按长度降序，确保最长匹配优先）
+        self._build_special_regex()
+
+    def _set_aliases(self) -> None:
+        """设置常用特殊 token 别名"""
         self.pad_token = "<pad>"
         self.unk_token = "<unk>"
         self.bos_token = "<s>"
         self.eos_token = "</s>"
 
-        self.pad_id = self.special_tokens["<pad>"]
-        self.unk_id = self.special_tokens["<unk>"]
-        self.bos_id = self.special_tokens["<s>"]
-        self.eos_id = self.special_tokens["</s>"]
-
-        # 构建特殊 token 切分正则（按长度降序，确保最长匹配优先）
-        self._build_special_regex()
+        self.pad_id = self.special_tokens.get("<pad>", 0)
+        self.unk_id = self.special_tokens.get("<unk>", 1)
+        self.bos_id = self.special_tokens.get("<s>", 2)
+        self.eos_id = self.special_tokens.get("</s>", 3)
 
     # 编码 / 解码
 
@@ -471,15 +485,7 @@ class BBPETokenizer:
             tokenizer.id_to_byte[tid] = token.encode("utf-8")
         tokenizer._next_id = data["_next_id"]
 
-        tokenizer.pad_token = "<pad>"
-        tokenizer.unk_token = "<unk>"
-        tokenizer.bos_token = "<s>"
-        tokenizer.eos_token = "</s>"
-        tokenizer.pad_id = tokenizer.special_tokens.get("<pad>", 0)
-        tokenizer.unk_id = tokenizer.special_tokens.get("<unk>", 1)
-        tokenizer.bos_id = tokenizer.special_tokens.get("<s>", 2)
-        tokenizer.eos_id = tokenizer.special_tokens.get("</s>", 3)
-
+        tokenizer._set_aliases()
         tokenizer._build_special_regex()
 
         print(f"BBPE tokenizer loaded: {path} (vocab_size={tokenizer._next_id})")
