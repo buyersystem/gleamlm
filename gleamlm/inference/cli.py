@@ -20,6 +20,7 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")
 
 from gleamlm import load_model_for_inference
+from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.conversation import Conversation
 from gleamlm.inference.streamer import TextStreamer
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
@@ -58,7 +59,10 @@ def generate(
     streamer = TextStreamer(tokenizer)
 
     if sft_mode:
-        prompt = f"<|im_start|><|user|>\n{prompt}<|im_end|>\n<|im_start|><|assistant|>\n"
+        prompt = format_chatml(
+            [{"role": "user", "content": prompt}],
+            add_generation_prompt=True,
+        )
         if stop_token is None:
             stop_token = "<|im_end|>"
 
