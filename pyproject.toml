@@ -49,6 +49,7 @@ data = [
 ]
 tools = [
     "zhconv",
+    "safetensors>=0.4",
 ]
 quality = [
     "openai>=1.0",

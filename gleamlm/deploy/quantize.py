@@ -29,7 +29,7 @@ ARCH_KEYS = [
 ]
 
 
-def _extract_config(checkpoint: dict) -> dict[str, Any]:
+def extract_config(checkpoint: dict) -> dict[str, Any]:
     if "args" in checkpoint:
         args = checkpoint["args"]
         return {
@@ -84,7 +84,7 @@ def quantize_to_fp16(input_path: str, output_path: str) -> None:
     print(f"Loading checkpoint: {input_path}")
     checkpoint = torch.load(input_path, map_location="cpu", weights_only=False)
 
-    config = _extract_config(checkpoint)
+    config = extract_config(checkpoint)
 
     model = GleamLMModel(**config)
     state_dict = checkpoint["model_state_dict"]
