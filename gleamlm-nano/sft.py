@@ -131,7 +131,7 @@ def main():
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
-        collate_fn=SFTDataset.collate_fn,
+        collate_fn=train_dataset.collate_fn,
         num_workers=0,
         pin_memory=True,
     )

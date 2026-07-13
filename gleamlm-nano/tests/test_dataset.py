@@ -31,7 +31,7 @@ def test_getitem_shape(tokenizer):
 def test_collate_fn(tokenizer):
     ds = LMDataset(_BASE_DIR, tokenizer, 512, "valid")
     samples = [ds[i] for i in range(min(4, len(ds)))]
-    input_ids, target_ids = collate_fn(samples, pad_id=tokenizer.pad_id)
+    input_ids, target_ids, _ = collate_fn(samples, pad_id=tokenizer.pad_id)
     assert input_ids.dim() == 2
     assert target_ids.dim() == 2
     assert input_ids.size(0) == len(samples)

@@ -48,6 +48,7 @@ def dpad_collate(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         "rejected_ids": rejected_ids,
         "chosen_mask": chosen_mask,
         "rejected_mask": rejected_mask,
+        "_pad_id": pad_id,
     }
 
 
@@ -243,8 +244,14 @@ def train_one_epoch_dpo(
 
         amp_device = "cuda" if torch.cuda.is_available() else "cpu"
         with torch.amp.autocast(amp_device):  # type: ignore[attr-defined]
-            c_logits, _ = model(chosen_ids)
-            r_logits, _ = model(rejected_ids)
+            c_logits, _ = model(
+                chosen_ids,
+                attention_mask=(chosen_ids != batch["_pad_id"]).to(dtype=torch.long),
+            )
+            r_logits, _ = model(
+                rejected_ids,
+                attention_mask=(rejected_ids != batch["_pad_id"]).to(dtype=torch.long),
+            )
 
         policy_cho = compute_log_probs(c_logits.float(), chosen_ids, chosen_mask)
         policy_rej = compute_log_probs(r_logits.float(), rejected_ids, rejected_mask)

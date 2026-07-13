@@ -221,13 +221,13 @@ class SFTDataset(Dataset):
             return self._multi_turn_item(idx)
         return self._single_turn_item(idx)
 
-    @staticmethod
     def collate_fn(
-        batch: list[tuple[torch.Tensor, torch.Tensor]],
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, batch: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         input_ids = torch.stack([item[0] for item in batch])
         labels = torch.stack([item[1] for item in batch])
-        return input_ids, labels
+        attention_mask = (input_ids != self.pad_id).to(dtype=torch.long)
+        return input_ids, labels, attention_mask
 
 
 def train_one_epoch_sft(
@@ -248,13 +248,14 @@ def train_one_epoch_sft(
 
     pbar = tqdm(train_loader, desc=f"SFT Epoch {epoch}", mininterval=3, miniters=20)
 
-    for batch_idx, (input_ids, labels) in enumerate(pbar):
+    for batch_idx, (input_ids, labels, attention_mask) in enumerate(pbar):
         input_ids = input_ids.to(device)
         labels = labels.to(device)
+        attention_mask = attention_mask.to(device)
 
         amp_device = "cuda" if torch.cuda.is_available() else "cpu"
         with torch.amp.autocast(amp_device):  # type: ignore[attr-defined]
-            logits, _ = model(input_ids)
+            logits, _ = model(input_ids, attention_mask=attention_mask)
             loss = F.cross_entropy(
                 logits.view(-1, logits.size(-1)),
                 labels.view(-1),

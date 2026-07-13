@@ -145,11 +145,13 @@ def test_full_pipeline():
         epoch_loss = 0.0
         epoch_steps = 0
         optimizer.zero_grad()
-        for input_ids, target_ids in train_loader:
-            input_ids, target_ids = input_ids.to(device), target_ids.to(device)
+        for input_ids, target_ids, attention_mask in train_loader:
+            input_ids, target_ids, attention_mask = (
+                input_ids.to(device), target_ids.to(device), attention_mask.to(device)
+            )
             optimizer.zero_grad()
             with safe_autocast(enabled=TEST_CONFIG["bf16"]):
-                logits, _ = model(input_ids)
+                logits, _ = model(input_ids, attention_mask=attention_mask)
                 ce_loss = criterion(logits.view(-1, TEST_CONFIG["vocab_size"]), target_ids.view(-1))
                 log_z = torch.logsumexp(logits, dim=-1)
                 z_loss = TEST_CONFIG["z_loss_weight"] * (log_z ** 2).mean()
@@ -168,10 +170,12 @@ def test_full_pipeline():
         val_total_loss, val_tokens = 0.0, 0
         eval_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, reduction="sum")
         with torch.no_grad():
-            for input_ids, target_ids in valid_loader:
-                input_ids, target_ids = input_ids.to(device), target_ids.to(device)
+            for input_ids, target_ids, attention_mask in valid_loader:
+                input_ids, target_ids, attention_mask = (
+                    input_ids.to(device), target_ids.to(device), attention_mask.to(device)
+                )
                 with safe_autocast():
-                    logits, _ = model(input_ids)
+                    logits, _ = model(input_ids, attention_mask=attention_mask)
                 val_loss = eval_criterion(logits.view(-1, TEST_CONFIG["vocab_size"]), target_ids.view(-1))
                 val_total_loss += val_loss.item()
                 val_tokens += (target_ids != tokenizer.pad_id).sum().item()

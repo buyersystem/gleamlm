@@ -1,4 +1,4 @@
-"""GleamLM-Lite 全流程冒烟测试
+"""GleamLM-Nano 全流程冒烟测试
 验证: 数据加载 → 模型初始化 → 前向 → 反向 → 优化器步进 → 评估 → checkpoint save/load
 """
 
@@ -14,15 +14,14 @@ import torch.nn as nn
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DEFAULT_DATA_DIR = os.path.join(_PROJECT_ROOT, 'data', 'splits')
 
-# 测试配置：用真实架构但 tiny 数据
 TEST_CONFIG = {
     "vocab_size": 12002,
-    "d_model": 768,
-    "num_layers": 2,       # 只 2 层，跑得快
-    "num_heads": 12,
-    "num_kv_heads": 6,
-    "d_ff": 2048,
-    "max_seq_len": 256,    # 短序列
+    "d_model": 512,
+    "num_layers": 4,        # 只 4 层，跑得快
+    "num_heads": 8,
+    "num_kv_heads": 4,
+    "d_ff": 1365,
+    "max_seq_len": 256,     # 短序列
     "dropout": 0.0,
     "tie_weights": True,
     "use_flash_attn": True,
@@ -49,10 +48,10 @@ def make_tiny_data(data_dir):
         lines = []
         with open(real_train, encoding='utf-8') as f:
             for i, line in enumerate(f):
-                if i >= 200: break
+                if i >= 200:
+                    break
                 lines.append(line)
     else:
-        # 回退：合成语料
         lines = [
             "中国是一个历史悠久、文化丰富的国家。\n",
             "人工智能技术正在改变世界的方方面面。\n",
@@ -71,7 +70,7 @@ def make_tiny_data(data_dir):
 
 def test_full_pipeline():
     print("=" * 60)
-    print("GleamLM-Lite 冒烟测试 - 全流程")
+    print("GleamLM-Nano 冒烟测试 - 全流程")
     print("=" * 60)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -80,8 +79,7 @@ def test_full_pipeline():
     torch.manual_seed(TEST_CONFIG['seed'])
     np.random.seed(TEST_CONFIG['seed'])
 
-    # 临时数据目录
-    tmp_dir = tempfile.mkdtemp(prefix='gleamlm_lite_test_')
+    tmp_dir = tempfile.mkdtemp(prefix='gleamlm_nano_test_')
     data_dir = os.path.join(tmp_dir, 'splits')
     ckpt_dir = os.path.join(tmp_dir, 'checkpoints')
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -140,13 +138,11 @@ def test_full_pipeline():
     # 4. 优化器 + 调度器 + scaler
     print("\n[4] 设置优化器/调度器/scaler...")
     def get_lr_cosine(step, total_steps, warmup_ratio=0.01, min_lr_ratio=0.1):
-        """Cosine Annealing + Warmup"""
         warmup_steps = int(total_steps * warmup_ratio)
         if step < warmup_steps:
             return step / max(1, warmup_steps)
-        else:
-            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-            return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
 
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=TEST_CONFIG['lr'],
@@ -160,10 +156,7 @@ def test_full_pipeline():
             TEST_CONFIG['warmup_ratio'], TEST_CONFIG['min_lr_ratio']
         )
     )
-    if hasattr(torch.amp, 'GradScaler'):
-        scaler = torch.amp.GradScaler('cuda')
-    else:
-        scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else torch.amp.GradScaler('cpu')
     print(f"  总步数: {total_steps}, 调度器: Cosine [OK]")
 
     criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_id, label_smoothing=TEST_CONFIG['label_smoothing'])

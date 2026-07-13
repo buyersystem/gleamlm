@@ -2,6 +2,7 @@
 
 import math
 
+import pytest
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -218,7 +219,7 @@ def test_kv_cache_forward(small_model):
 
 
 def test_long_sequence(small_model):
-    """超 max_seq_len 的序列，RoPE 应自动外推"""
+    """序列长度在预分配的 rope_max_len（max_seq_len*4）内，应正常前向"""
     long_input = torch.randint(0, VOCAB_SIZE, (2, 200))
     with torch.no_grad():
         logits, _ = small_model(long_input)
@@ -395,3 +396,153 @@ def test_model_device_consistency():
     with torch.no_grad():
         logits, _ = model(input_ids)
     assert logits.device == device
+
+
+# ---- 因果掩码回归测试 ----
+
+
+def test_causal_mask_matrix_values():
+    """_create_attn_mask 返回值：未来位置应被 mask"""
+    model = GleamLMModel(
+        vocab_size=12002,
+        d_model=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=682,
+        max_seq_len=128,
+    )
+    mask = model._create_attn_mask(seq_len=5, device="cpu")
+    assert mask.shape == (1, 1, 5, 5)
+    assert mask[0, 0, 2, 3] == float("-inf"), "position 2 should not attend to position 3"
+    assert mask[0, 0, 2, 2] == 0.0, "position 2 should attend to itself"
+    assert mask[0, 0, 4, 0] == 0.0, "position 4 should attend to position 0"
+
+
+def test_causal_mask_blocks_future_tokens():
+    """修改未来位置的 token 不影响前面位置的 logits"""
+    model = GleamLMModel(
+        vocab_size=12002,
+        d_model=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=682,
+        max_seq_len=128,
+        use_flash_attn=False,
+    )
+    model.eval()
+    x = torch.randint(0, VOCAB_SIZE, (1, 5))
+    with torch.no_grad():
+        logits1, _ = model(x)
+    x_modified = x.clone()
+    x_modified[0, 3:] = torch.randint(0, VOCAB_SIZE, (2,))
+    with torch.no_grad():
+        logits2, _ = model(x_modified)
+    assert torch.allclose(logits1[0, :3], logits2[0, :3], atol=1e-5)
+
+
+# ---- 梯度流完整性 ----
+
+
+def test_all_parameters_have_gradient():
+    """所有可训练参数在 backward 后必须有非 None 且无 NaN 的梯度"""
+    model = GleamLMModel(
+        vocab_size=12002,
+        d_model=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=682,
+        max_seq_len=128,
+    )
+    model.train()
+    input_ids = torch.randint(0, VOCAB_SIZE, (2, 16))
+    logits, _ = model(input_ids)
+    loss = F.cross_entropy(
+        logits[:, :-1].reshape(-1, VOCAB_SIZE),
+        input_ids[:, 1:].reshape(-1),
+        ignore_index=0,
+    )
+    loss.backward()
+    for name, p in model.named_parameters():
+        assert p.grad is not None, f"{name} has no gradient"
+        assert not torch.isnan(p.grad).any(), f"NaN grad in {name}"
+    model.zero_grad()
+
+
+# ---- KV Cache 增量一致性 ----
+
+
+def test_kv_cache_incremental_equivalence():
+    """增量解码 final token 的 logits 与全序列前向等价"""
+    model = GleamLMModel(
+        vocab_size=12002,
+        d_model=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=682,
+        max_seq_len=128,
+        use_flash_attn=False,
+    )
+    model.eval()
+    full_ids = torch.randint(0, VOCAB_SIZE, (1, 5))
+
+    with torch.no_grad():
+        logits_full, _ = model(full_ids)
+
+    first_ids = full_ids[:, :3]
+    with torch.no_grad():
+        _, past_kv = model(first_ids)
+
+    for i in range(3, 5):
+        next_id = full_ids[:, i : i + 1]
+        with torch.no_grad():
+            logits_inc, past_kv = model(next_id, past_kv_list=past_kv)
+        assert torch.allclose(logits_full[0, i], logits_inc[0, -1], atol=1e-4)
+
+
+# ---- RoPE 缓存越界 ----
+
+
+def test_rope_cache_exceeds_preallocation():
+    """序列长度超过 rope_max_len 时应抛出 ValueError"""
+    model = GleamLMModel(
+        vocab_size=12002,
+        d_model=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=682,
+        max_seq_len=32,
+    )
+    model.eval()
+    x = torch.randint(0, VOCAB_SIZE, (1, 129))
+    with pytest.raises(ValueError):
+        with torch.no_grad():
+            model(x)
+
+
+# ---- chunked prefill 阻断 ----
+
+
+def test_chunked_prefill_blocked():
+    """past_kv 非空且 seq_len > 1 时应抛出 ValueError"""
+    model = GleamLMModel(
+        vocab_size=12002,
+        d_model=256,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=682,
+        max_seq_len=128,
+    )
+    model.eval()
+    x1 = torch.randint(0, VOCAB_SIZE, (1, 5))
+    with torch.no_grad():
+        _, past_kv = model(x1)
+    x2 = torch.randint(0, VOCAB_SIZE, (1, 2))
+    with pytest.raises(ValueError):
+        with torch.no_grad():
+            model(x2, past_kv_list=past_kv)

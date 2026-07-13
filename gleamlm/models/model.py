@@ -120,8 +120,16 @@ class GroupedQueryAttention(nn.Module):
         K = self.k_norm(K)
 
         offset = past_kv[0].size(2) if past_kv is not None else 0
+        if past_kv is not None and seq_len != 1:
+            raise ValueError(
+                f"Chunked prefill not yet supported. "
+                f"seq_len must be 1 when past_kv is provided, got {seq_len}."
+            )
         Q, K = apply_rotary_emb(Q, K, rope_cos, rope_sin, offset)
 
+        # 教学简化：每次增量解码通过 torch.cat 重新分配并拷贝全部历史 KV。
+        # 工业界（vLLM/SGLang/HF StaticCache）使用预分配固定 size buffer +
+        # copy_ 原地更新，或 PagedAttention 避免内存碎片和全量拷贝。
         if past_kv is not None:
             past_k, past_v = past_kv
             K = torch.cat([past_k, K], dim=2)
@@ -234,11 +242,14 @@ class GleamLMModel(nn.Module):
     ) -> None:
         super().__init__()
         self.d_model = d_model
+        self.vocab_size = vocab_size
         self.num_layers = num_layers
         self.head_dim = d_model // num_heads
         self.pad_token_id = pad_token_id
         self.max_seq_len = max_seq_len
+        self.rope_max_len = max_seq_len * 4
         self.use_gradient_checkpointing = use_gradient_checkpointing
+        self._use_flash_attn = use_flash_attn
 
         self.token_embed = nn.Embedding(vocab_size, d_model, padding_idx=pad_token_id)
 
@@ -280,23 +291,40 @@ class GleamLMModel(nn.Module):
             nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
 
     def _create_attn_mask(
-        self, seq_len: int, device: torch.device, offset: int = 0
+        self,
+        seq_len: int,
+        device: torch.device,
+        offset: int = 0,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """构建注意力掩码。
-        offset=0（预填充）：返回下三角 causal mask，阻止 token 关注未来位置。
-        offset>0（增量解码）：返回全通 mask，当前 token 可关注所有历史 token。
+        """构建注意力掩码，可选合并 padding mask。
+
+        attention_mask: (B, seq_len), 1=有效 0=pad。None 时仅返回 causal/attn mask。
         """
         total = offset + seq_len
         mask = torch.triu(
             torch.full((seq_len, total), float("-inf"), device=device), diagonal=offset + 1
         )
-        return mask.unsqueeze(0).unsqueeze(0)
+        mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, total)
+        if attention_mask is not None:
+            pad_mask = (attention_mask == 0).unsqueeze(1).unsqueeze(-1)
+            mask = mask.expand(pad_mask.size(0), -1, -1, -1)
+            mask = mask.masked_fill(pad_mask, float("-inf"))
+        return mask
 
     def forward(
-        self, input_ids: torch.Tensor, past_kv_list: PastKeyValueList | None = None
+        self,
+        input_ids: torch.Tensor,
+        past_kv_list: PastKeyValueList | None = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, PastKeyValueList]:
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
+        if attention_mask is not None and attention_mask.shape != (batch_size, seq_len):
+            raise ValueError(
+                f"attention_mask shape {tuple(attention_mask.shape)} does not "
+                f"match input_ids shape {(batch_size, seq_len)}"
+            )
         x = self.token_embed(input_ids)
         x = self.emb_dropout(x)
 
@@ -314,7 +342,22 @@ class GleamLMModel(nn.Module):
         else:
             offset = 0
 
-        attn_mask = self._create_attn_mask(seq_len, device, offset=offset)
+        total_len = offset + seq_len
+        if total_len > self.rope_cos.size(0):
+            raise ValueError(
+                f"Sequence length {total_len} exceeds pre-allocated RoPE cache "
+                f"({self.rope_cos.size(0)}). Increase max_seq_len in config or "
+                f"set a larger multiplier in GleamLMModel.__init__."
+            )
+
+        if attention_mask is not None:
+            attn_mask = self._create_attn_mask(
+                seq_len, device, offset=offset, attention_mask=attention_mask
+            )
+        elif self._use_flash_attn:
+            attn_mask = None
+        else:
+            attn_mask = self._create_attn_mask(seq_len, device, offset=offset)
 
         new_kv_list: PastKeyValueList = []
         for i, layer in enumerate(self.layers):
@@ -338,6 +381,6 @@ class GleamLMModel(nn.Module):
         return logits, new_kv_list
 
     def get_num_params(self) -> tuple[int, int]:
-        total = sum(p.numel() for p in self.parameters())
-        trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
-        return total, trainable
+        total_params = sum(p.numel() for p in self.parameters())
+        total_buffers = sum(b.numel() for b in self.buffers())
+        return total_params, total_params + total_buffers
