@@ -120,11 +120,6 @@ class GroupedQueryAttention(nn.Module):
         K = self.k_norm(K)
 
         offset = past_kv[0].size(2) if past_kv is not None else 0
-        if past_kv is not None and seq_len != 1:
-            raise ValueError(
-                f"Chunked prefill not yet supported. "
-                f"seq_len must be 1 when past_kv is provided, got {seq_len}."
-            )
         Q, K = apply_rotary_emb(Q, K, rope_cos, rope_sin, offset)
 
         # 教学简化：每次增量解码通过 torch.cat 重新分配并拷贝全部历史 KV。
@@ -144,6 +139,7 @@ class GroupedQueryAttention(nn.Module):
                 V,
                 dropout_p=self.attn_dropout if self.training else 0.0,
                 is_causal=(past_kv is None),
+                attn_mask=None if mask is None else mask,
                 enable_gqa=True,
             )
             output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
@@ -354,7 +350,7 @@ class GleamLMModel(nn.Module):
             attn_mask = self._create_attn_mask(
                 seq_len, device, offset=offset, attention_mask=attention_mask
             )
-        elif self._use_flash_attn:
+        elif self._use_flash_attn and not (past_kv_list is not None and seq_len > 1):
             attn_mask = None
         else:
             attn_mask = self._create_attn_mask(seq_len, device, offset=offset)

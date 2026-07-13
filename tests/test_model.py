@@ -524,11 +524,11 @@ def test_rope_cache_exceeds_preallocation():
             model(x)
 
 
-# ---- chunked prefill 阻断 ----
+# ---- chunked prefill ----
 
 
-def test_chunked_prefill_blocked():
-    """past_kv 非空且 seq_len > 1 时应抛出 ValueError"""
+def test_chunked_prefill_causal():
+    """chunked prefill 的 logits 与全序列前向等价"""
     model = GleamLMModel(
         vocab_size=12002,
         d_model=256,
@@ -537,12 +537,16 @@ def test_chunked_prefill_blocked():
         num_kv_heads=2,
         d_ff=682,
         max_seq_len=128,
+        use_flash_attn=False,
     )
     model.eval()
-    x1 = torch.randint(0, VOCAB_SIZE, (1, 5))
+    full_ids = torch.randint(0, VOCAB_SIZE, (1, 8))
     with torch.no_grad():
-        _, past_kv = model(x1)
-    x2 = torch.randint(0, VOCAB_SIZE, (1, 2))
-    with pytest.raises(ValueError):
-        with torch.no_grad():
-            model(x2, past_kv_list=past_kv)
+        logits_full, _ = model(full_ids)
+    first_ids = full_ids[:, :5]
+    with torch.no_grad():
+        _, past_kv = model(first_ids)
+    second_ids = full_ids[:, 5:]
+    with torch.no_grad():
+        logits_chunked, _ = model(second_ids, past_kv_list=past_kv)
+    assert torch.allclose(logits_full[0, 5], logits_chunked[0, 0], atol=1e-4)
