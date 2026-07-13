@@ -61,4 +61,8 @@ AGENTS.md
 # Temporary files
 temp_*
 infer_result.txt
+
+# 变体测试生成数据
+data/test_splits/
+data/splits/*.npy
 *.backup

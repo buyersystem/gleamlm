@@ -86,9 +86,7 @@ GleamLM/
 │   ├── infer.py                 # 推理（KV Cache + 交互式对话 + SFT 模式）
 │   ├── sft.py                   # SFT 指令微调（导入 gleamlm.training.sft_trainer）
 │   ├── dpo.py                   # DPO 偏好对齐（导入 gleamlm.training.dpo_trainer）
-│   ├── quantize.py              # 量化导出（薄包装，委托 gleamlm.deploy.quantize）
 │   ├── quick_test_sft_dpo.py    # SFT+DPO 全链路快速验证
-│   ├── evaluation/              # PPL 评估 + 生成样例
 │   └── checkpoints/             # 模型权重 + TensorBoard 日志
 │
 ├── gleamlm-lite/                # 87M 实验版（~200 行配置包装）
@@ -99,8 +97,7 @@ GleamLM/
 │   ├── test_train.py            # 轻量训练冒烟测试
 │   ├── data/                    # Lite 专用数据
 │   │   ├── sft_api_new.jsonl    # SFT API 原始数据
-│   │   ├── sft_api_clean.jsonl  # 清洗后数据
-│   │   └── clean_sft_api.py     # 数据清洗脚本
+│   │   └── sft_api_clean.jsonl  # 清洗后数据
 │   └── checkpoints/             # 模型权重 + SFT/DPO checkpoint
 │
 ├── configs/                     # YAML 配置继承
@@ -115,12 +112,15 @@ GleamLM/
 │   ├── gen_sft.py               # 统一 SFT 数据生成入口（--mode hardcoded|api）
 │   ├── generate_sft_data.py     # DeepSeek API 蒸馏 SFT 数据（API 模式核心逻辑）
 │   ├── clean_sft_data.py        # SFT 数据格式清洗
+│   ├── clean_sft_api.py         # Lite SFT API 数据 markdown 清洗
 │   └── generate_rejected.py     # 生成 DPO rejected 数据
 │
 ├── scripts/                     # 评估 + 验证脚本
 │   ├── eval_ppl.py              # PPL 评估
 │   ├── eval_knowledge.py        # 知识评估
 │   ├── eval_layer_dropout.py    # 层 dropout 测试
+│   ├── generate_samples.py      # 文本样例生成（统一入口）
+│   ├── quantize.py              # 模型量化导出（统一入口）
 │   ├── verify_both.py           # 40M+87M 双模型验证
 │   └── verify_lite.py           # 87M 单独验证
 │
@@ -239,7 +239,7 @@ python gleamlm-nano/sft.py --data_path ./gleamlm-nano/data/sft_data.jsonl --mode
 
 # Lite（使用清洗后的数据）
 # 如有 markdown 污染，先执行清洗：
-python gleamlm-lite/data/clean_sft_api.py
+python data_tools/clean_sft_api.py
 python gleamlm-lite/sft.py --data_path gleamlm-lite/data/sft_api_clean.jsonl --model_path gleamlm-lite/checkpoints/best_model.pt --epochs 2 --lr 2e-5
 ```
 
@@ -260,21 +260,18 @@ FP32 → FP16，体积减半，推理精度基本无损。
 
 ```bash
 # 通用（推荐）
-python gleamlm/deploy/quantize.py --input gleamlm-nano/checkpoints/best_model.pt --output gleamlm-nano/checkpoints/model_fp16.pt
-python gleamlm/deploy/quantize.py --input gleamlm-lite/checkpoints/best_model.pt --output gleamlm-lite/checkpoints/model_fp16.pt
+python scripts/quantize.py --input gleamlm-nano/checkpoints/best_model.pt --output gleamlm-nano/checkpoints/model_fp16.pt
+python scripts/quantize.py --input gleamlm-lite/checkpoints/best_model.pt --output gleamlm-lite/checkpoints/model_fp16.pt
 
 # DPO 模型
-python gleamlm/deploy/quantize.py --input gleamlm-nano/checkpoints/dpo/dpo_best.pt --output gleamlm-nano/checkpoints/dpo/dpo_fp16.pt
-
-# 或使用变体脚本（兼容旧版）
-python gleamlm-nano/quantize.py --input gleamlm-nano/checkpoints/best_model.pt --output gleamlm-nano/checkpoints/model_fp16.pt
+python scripts/quantize.py --input gleamlm-nano/checkpoints/dpo/dpo_best.pt --output gleamlm-nano/checkpoints/dpo/dpo_fp16.pt
 ```
 
 ### 7. 运行测试
 
 ```bash
 pip install -e ".[dev]"
-pytest tests/ gleamlm-nano/tests/ gleamlm-lite/tests/ -v
+pytest tests/ -v
 ```
 
 ---
