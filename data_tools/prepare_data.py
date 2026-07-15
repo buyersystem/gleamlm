@@ -124,7 +124,7 @@ def main():
             clean_file(
                 src,
                 clean,
-                min_len=10,
+                min_len=30,
                 max_len=2000,
                 convert_zh=True,
                 min_zh_ratio=0.15 if s["name"] == "wiki" else 0.0,
