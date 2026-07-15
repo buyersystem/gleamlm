@@ -47,7 +47,8 @@ dpo:
   data_path: data/nano/dpo_data.jsonl
 
 data_sources:
-  - {name: wiki, type: text, ratio: 0.30}
-  - {name: baike, type: text, ratio: 0.12}
-  - {name: news, type: news, ratio: 0.43}
-  - {name: qa, type: qa, ratio: 0.15}
+  - {name: edu, type: text, ratio: 0.35}
+  - {name: news, type: news, ratio: 0.20}
+  - {name: wiki, type: text, ratio: 0.20}
+  - {name: baike, type: text, ratio: 0.15}
+  - {name: qa, type: qa, ratio: 0.10}
