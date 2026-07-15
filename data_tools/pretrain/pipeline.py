@@ -2,8 +2,9 @@
 
 流程:
   step 1: 粗精确去重 (MD5)  — 先剔除完全重复，减少后续清洗/去重计算量
-  step 2: 基础清洗           — 去乱码、繁转简、过滤广告/低质
-  step 3: SimHash 模糊去重 / QA过滤 — 跨文本段落级去重
+  step 2: 基础清洗           — 去乱码、繁转简、过滤广告/低质（全源 min_zh_ratio=0.15）
+  step 3: SimHash 逐源去重   — 各源独立全局查重
+  step 4: SimHash 跨源去重   — 所有源合并指纹，跨源剔除重复
 
 输出 → data/raw/{name}_dedup.txt（供 build.py 混合切分使用）
 
@@ -27,6 +28,8 @@ SOURCES = [
     {"name": "qa", "type": "qa"},
 ]
 
+MIN_Zh_RATIO = 0.15
+
 
 def _raw_path(input_dir, name):
     return os.path.join(input_dir, f"{name}_raw.txt")
@@ -45,7 +48,9 @@ def _final_path(input_dir, name):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="数据预处理管道（去重→清洗→模糊去重）")
+    parser = argparse.ArgumentParser(
+        description="数据预处理管道（去重→清洗→SimHash 逐源+跨源去重）"
+    )
     parser.add_argument("--input", default="data/raw", help="原始数据目录")
     parser.add_argument("--skip_exact_dedup", action="store_true")
     parser.add_argument("--skip_clean", action="store_true")
@@ -53,19 +58,18 @@ def main():
     parser.add_argument("--exact_mode", default="exact", choices=["exact", "prefix"])
     parser.add_argument("--prefix_len", type=int, default=100)
     parser.add_argument("--simhash_threshold", type=int, default=3)
-    parser.add_argument("--simhash_window", type=int, default=1000)
     args = parser.parse_args()
 
     raw_dir = args.input
+    threshold = args.simhash_threshold
     names = [s["name"] for s in SOURCES]
     print(f"Sources: {names}")
-    print(f"Input: {raw_dir}")
 
     # ──── step 1: 粗精确去重 ────
     if args.skip_exact_dedup:
-        print("\n[1/3] 跳过精确去重（--skip_exact_dedup）")
+        print("\n[1/4] 跳过精确去重（--skip_exact_dedup）")
     else:
-        print("\n[1/3] 粗精确去重（MD5 全文去重）")
+        print("\n[1/4] 粗精确去重（MD5 全文去重）")
         for s in SOURCES:
             raw = _raw_path(raw_dir, s["name"])
             deduped = _raw_dedup_path(raw_dir, s["name"])
@@ -81,9 +85,9 @@ def main():
 
     # ──── step 2: 清洗 ────
     if args.skip_clean:
-        print("\n[2/3] 跳过清洗（--skip_clean）")
+        print("\n[2/4] 跳过清洗（--skip_clean）")
     else:
-        print("\n[2/3] 基础清洗（去乱码、繁转简、过滤低质）")
+        print(f"\n[2/4] 基础清洗（min_zh_ratio={MIN_Zh_RATIO}, 去乱码、繁转简、过滤低质）")
         for s in SOURCES:
             src = _raw_dedup_path(raw_dir, s["name"])
             if not os.path.exists(src):
@@ -102,16 +106,17 @@ def main():
                 min_len=30,
                 max_len=3000,
                 convert_zh=True,
-                min_zh_ratio=0.15 if s["name"] in ("wiki", "edu") else 0.0,
+                min_zh_ratio=MIN_Zh_RATIO,
                 filter_ads=s["name"] == "news",
                 filter_wiki_junk=s["name"] == "wiki",
             )
 
-    # ──── step 3: SimHash 模糊去重 / QA过滤 ────
+    # ──── step 3: SimHash 逐源去重 + QA过滤 ────
+    all_fingerprints: set[int] = set()
     if args.skip_simhash:
-        print("\n[3/3] 跳过模糊去重（--skip_simhash）")
+        print("\n[3/4] 跳过 SimHash 去重（--skip_simhash）")
     else:
-        print("\n[3/3] SimHash 模糊去重 / QA过滤")
+        print("\n[3/4] SimHash 逐源去重 / QA过滤")
         for s in SOURCES:
             src = _clean_path(raw_dir, s["name"])
             if not os.path.exists(src):
@@ -128,17 +133,40 @@ def main():
                 print(f"  QA过滤: {s['name']}")
                 filter_qa(src, final)
             else:
-                print(
-                    f"  SimHash: {s['name']} "
-                    f"(threshold={args.simhash_threshold}, window={args.simhash_window})"
-                )
-                dedup_file(
+                print(f"  SimHash: {s['name']} (threshold={threshold})")
+                fps = dedup_file(
                     src,
                     final,
                     mode="simhash",
-                    simhash_threshold=args.simhash_threshold,
-                    simhash_window=args.simhash_window,
+                    simhash_threshold=threshold,
                 )
+                all_fingerprints.update(fps)
+
+        print(
+            f"\n  Collected fingerprints: {len(all_fingerprints):,} across {len(SOURCES)} sources"
+        )
+
+    # ──── step 4: 跨源 SimHash 全局去重 ────
+    if args.skip_simhash:
+        print("\n[4/4] 跳过跨源去重（--skip_simhash）")
+    else:
+        print("\n[4/4] 跨源 SimHash 全局去重")
+        for s in SOURCES:
+            final = _final_path(raw_dir, s["name"])
+            if not os.path.exists(final) or s["type"] == "qa":
+                continue
+            tmp = final + ".tmp"
+            print(f"  Cross-dedup: {s['name']} (against {len(all_fingerprints):,} fingerprints)")
+            returned = dedup_file(
+                final,
+                tmp,
+                mode="simhash",
+                simhash_threshold=threshold,
+                existing_fingerprints=all_fingerprints,
+            )
+            os.replace(tmp, final)
+            all_fingerprints.update(returned)
+            print(f"  Updated fingerprints: {len(all_fingerprints):,}")
 
     print("  完成")
 

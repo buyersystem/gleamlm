@@ -1,9 +1,9 @@
-"""通用文本去重。支持精确去重、前缀去重和 SimHash 模糊去重。
+"""通用文本去重。支持精确去重、前缀去重和 SimHash 全局模糊去重。
 
 模式:
   exact  — MD5 全文哈希，剔除完全重复文档
   prefix — 前 N 字符 MD5 哈希（去重标题相同的内容）
-  simhash — SimHash 指纹 + 滑动窗口 Hamming 距离（跨文本段落级去重）
+  simhash — SimHash 指纹 + 全局 Hamming 距离（跨文本段落级去重）
 """
 
 from __future__ import annotations
@@ -44,19 +44,20 @@ def dedup_file(
     mode: str = "exact",
     prefix_len: int = 100,
     simhash_threshold: int = 3,
-    simhash_window: int = 1000,
-) -> None:
+    existing_fingerprints: set[int] | None = None,
+) -> set[int]:
     total = 0
     kept = 0
     deduped = 0
     seen: set[str] = set()
-    simhash_history: list[int] = []
+    fingerprints: set[int] = existing_fingerprints or set()
 
     print(f"Dedup: {input_path}")
     if mode == "simhash":
-        print(f"  mode=simhash, threshold={simhash_threshold}, window={simhash_window}")
-    else:
-        print(f"  mode={mode}, prefix_len={prefix_len}")
+        print(
+            f"  mode=simhash, threshold={simhash_threshold}, "
+            f"initial fingerprints={len(fingerprints)}"
+        )
 
     with (
         open(input_path, encoding="utf-8") as fin,
@@ -70,16 +71,10 @@ def dedup_file(
 
             if mode == "simhash":
                 fp = simhash(text)
-                is_dup = any(
-                    hamming_distance(fp, prev) <= simhash_threshold
-                    for prev in simhash_history[-simhash_window:]
-                )
-                if is_dup:
+                if _is_similar(fp, fingerprints, simhash_threshold):
                     deduped += 1
                     continue
-                simhash_history.append(fp)
-                if len(simhash_history) > simhash_window:
-                    simhash_history.pop(0)
+                fingerprints.add(fp)
                 fout.write(text + "\n")
                 kept += 1
 
@@ -109,9 +104,14 @@ def dedup_file(
 
     pct = 100 * kept / max(1, total)
     dedup_pct = 100 * deduped / max(1, total)
-    print(f"\nDone: {total:,} lines → {kept:,} kept ({pct:.1f}%)")
+    print(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
     print(f"  Deduplicated: {deduped:,} ({dedup_pct:.1f}%)")
     print(f"Output: {output_path}")
+    return fingerprints
+
+
+def _is_similar(fp: int, fingerprints: set[int], threshold: int) -> bool:
+    return any(hamming_distance(fp, prev) <= threshold for prev in fingerprints)
 
 
 def main() -> None:
@@ -126,22 +126,13 @@ def main() -> None:
         help="exact=精确全文去重, prefix=前N字符, simhash=模糊去重",
     )
     parser.add_argument(
-        "--prefix_len",
-        type=int,
-        default=100,
-        help="prefix 模式下的字符数（默认100）",
+        "--prefix_len", type=int, default=100, help="prefix 模式下的字符数（默认100）"
     )
     parser.add_argument(
         "--simhash_threshold",
         type=int,
         default=3,
         help="SimHash Hamming 距离阈值，<=此值视为重复（默认3）",
-    )
-    parser.add_argument(
-        "--simhash_window",
-        type=int,
-        default=1000,
-        help="SimHash 滑动窗口大小（默认1000）",
     )
     args = parser.parse_args()
 
@@ -151,7 +142,6 @@ def main() -> None:
         args.mode,
         args.prefix_len,
         args.simhash_threshold,
-        args.simhash_window,
     )
 
 
