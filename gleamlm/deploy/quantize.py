@@ -2,7 +2,7 @@
 
 Usage:
     python gleamlm/deploy/quantize.py --input path/to/model.pt --output path/to/fp16.pt
-    python -m gleamlm.deploy.quantize --input gleamlm-lite/checkpoints/best_model.pt
+    python -m gleamlm.deploy.quantize --input checkpoints/lite/best_model.pt
 """
 
 from __future__ import annotations

@@ -1,4 +1,13 @@
-"""GleamLM-Pro 126M 训练脚本。WSD LR + Flash Attention + Z-Loss + Dropout=0"""
+"""GleamLM 统一预训练脚本。通过 --variant 选择配置。
+
+用法:
+    python scripts/train.py --variant nano
+    python scripts/train.py --variant lite --load_checkpoint checkpoints/lite/checkpoint_epoch_1.pt
+"""
+
+import argparse
+import math
+import os
 
 import torch
 import torch.distributed as dist
@@ -14,9 +23,6 @@ except ImportError:
     SummaryWriter = None
     TB_AVAILABLE = False
 
-import math
-import os
-
 from gleamlm.dataset.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
@@ -30,92 +36,39 @@ from gleamlm.training.base_trainer import (
     train_one_epoch,
     wrap_for_distributed,
 )
+from gleamlm.utils.config import load_config_as_args
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
 
 
 def main():
-    _script_dir = os.path.dirname(os.path.abspath(__file__))
-    _root_dir = os.path.dirname(_script_dir)
-
-    import argparse
-
-    parser = argparse.ArgumentParser(description="GleamLM-Pro 126M Training")
-
-    # 路径
+    parser = argparse.ArgumentParser(description="GleamLM 预训练")
     parser.add_argument(
-        "--data_dir", type=str, default=os.path.join(_root_dir, "data", "pro_data")
+        "--variant", type=str, choices=["nano", "lite", "pro"], required=True, help="模型变体"
     )
     parser.add_argument(
-        "--tokenizer_path",
-        type=str,
-        default=os.path.join(_root_dir, "gleamlm", "tokenizer", "checkpoints", "bbpe_12k"),
+        "--config_dir", type=str, default=os.path.join(_ROOT_DIR, "configs"), help="YAML 配置目录"
     )
     parser.add_argument(
-        "--checkpoint_dir", type=str, default=os.path.join(_script_dir, "checkpoints")
+        "--load_checkpoint", type=str, default=None, help="断点续训 checkpoint 路径"
     )
-    parser.add_argument("--load_checkpoint", type=str, default=None)
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=os.path.join(_root_dir, "configs", "pro.yaml"),
-        help="YAML 配置文件路径",
-    )
+    parser.add_argument("--data_dir", type=str, default=None, help="覆写数据目录")
+    parser.add_argument("--checkpoint_dir", type=str, default=None, help="覆写 checkpoint 输出目录")
 
-    # 模型结构（Pro 126M: 18L×768d, GQA 12/6, d_ff=2048）
-    parser.add_argument("--vocab_size", type=int, default=12002)
-    parser.add_argument("--d_model", type=int, default=768)
-    parser.add_argument("--num_layers", type=int, default=18)
-    parser.add_argument("--num_heads", type=int, default=12)
-    parser.add_argument("--num_kv_heads", type=int, default=6)
-    parser.add_argument("--d_ff", type=int, default=2048)
-    parser.add_argument("--max_seq_len", type=int, default=4096)
-    parser.add_argument("--dropout", type=float, default=0.0)
-    parser.add_argument("--use_flash_attn", action="store_true", default=True)
-    parser.add_argument("--no_flash_attn", dest="use_flash_attn", action="store_false")
-    parser.set_defaults(use_flash_attn=True)
+    cli_args, _ = parser.parse_known_args()
+    config_path = os.path.join(cli_args.config_dir, f"{cli_args.variant}.yaml")
+    args = load_config_as_args(config_path, model_name=cli_args.variant, cli_overrides=True)
 
-    # 训练参数（WSD 调度，YAML 中配置）
-    parser.add_argument("--epochs", type=int, default=3)
-    parser.add_argument("--batch_size", type=int, default=2)
-    parser.add_argument("--accumulate_grad", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--warmup_ratio", type=float, default=0.03)
-    parser.add_argument("--min_lr_ratio", type=float, default=0.05)
-    parser.add_argument("--label_smoothing", type=float, default=0.1)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--clip_grad", type=float, default=1.0)
-    parser.add_argument("--z_loss_weight", type=float, default=1e-4)
-    parser.add_argument("--seed", type=int, default=42)
-
-    # 精度
-    parser.add_argument("--bf16", action="store_true", default=True)
-    parser.add_argument("--no_bf16", dest="bf16", action="store_false")
-    parser.set_defaults(bf16=True)
-    parser.add_argument("--max_train_chars", type=int, default=5_300_000_000)
-    parser.add_argument(
-        "--ids_prefix", type=str, default="", help="预分词文件前缀，用于区分不同分词器"
-    )
-
-    # 配置加载
-    config_args, _ = parser.parse_known_args()
-
-    if config_args.config:
-        from gleamlm.utils.config import load_config_as_args
-
-        args = load_config_as_args(config_args.config, cli_overrides=True)
-        defaults = {
-            a.dest: parser.get_default(a.dest)
-            for a in parser._actions
-            if a.dest != "help" and a.dest != "config"
-        }
-        for key, val in defaults.items():
-            if not hasattr(args, key):
-                setattr(args, key, val)
-    else:
-        args = parser.parse_args()
+    if cli_args.load_checkpoint:
+        args.load_checkpoint = cli_args.load_checkpoint
+    if cli_args.data_dir:
+        args.data_dir = cli_args.data_dir
+    if cli_args.checkpoint_dir:
+        args.checkpoint_dir = cli_args.checkpoint_dir
 
     set_seed(args.seed)
 
-    # DDP 初始化
     args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     args.world_size = int(os.environ.get("WORLD_SIZE", 1))
     args.rank = int(os.environ.get("RANK", 0))
@@ -127,35 +80,52 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.set_device(args.local_rank)
 
+    if device.type == "cpu" and args.local_rank == 0:
+        print("WARNING: CUDA not available. Training on CPU will be extremely slow.")
+
+    variant_name = cli_args.variant.upper()
     if args.local_rank == 0:
         print("=" * 60)
-        print("GleamLM-Pro 126M 训练")
+        print(
+            f"GleamLM-{variant_name} {getattr(args, 'd_model', '?')}d x {getattr(args, 'num_layers', '?')}L 训练"
+        )
         print("=" * 60)
         print(
-            f"  模型: d={args.d_model}, L={args.num_layers}, heads={args.num_heads}/{args.num_kv_heads}"
-        )
-        print(f"  词表: {args.vocab_size}, seq={args.max_seq_len}, dropout={args.dropout}")
-        print(
-            f"  批次: {args.batch_size} x accum {args.accumulate_grad} = effective {args.batch_size * args.accumulate_grad}"
+            f"  d_model={args.d_model}, layers={args.num_layers}, "
+            f"heads={args.num_heads}(Q)/{args.num_kv_heads}(KV), "
+            f"seq_len={args.max_seq_len}"
         )
         print(
-            f"  学习率: {args.lr:.0e}, WSD (warmup={args.warmup_ratio}, stable_ratio=0.80, min_lr_ratio={args.min_lr_ratio})"
+            f"  lr={args.lr:.0e}, type={getattr(args, 'type', 'cosine')}, "
+            f"batch={args.batch_size}, accum={args.accumulate_grad}, "
+            f"epochs={args.epochs}"
         )
-        print(f"  Flash Attn: {args.use_flash_attn}, Z-Loss: {args.z_loss_weight}")
-        print(f"  设备: {device}")
+        print(
+            f"  Flash Attn: {getattr(args, 'use_flash_attn', False)}, "
+            f"BF16: {getattr(args, 'bf16', False)}, "
+            f"Z-Loss: {getattr(args, 'z_loss_weight', 0)}"
+        )
+        print(f"  Data: {args.data_dir}")
+        print(f"  Checkpoint: {args.checkpoint_dir}")
+
+    train_txt = os.path.join(args.data_dir, "train.txt")
+    if not os.path.exists(train_txt):
+        raise FileNotFoundError(
+            f"Training data not found: {train_txt}\n"
+            f"Please prepare data first or specify --data_dir."
+        )
 
     tokenizer = BBPETokenizer.load(args.tokenizer_path)
-
     if args.local_rank == 0:
-        print(f"分词器词表大小: {tokenizer.get_vocab_size()}")
+        print(f"Tokenizer vocab size: {tokenizer.get_vocab_size()}")
 
     train_dataset = LMDataset(
         args.data_dir,
         tokenizer,
         args.max_seq_len,
         "train",
-        max_chars=args.max_train_chars,
-        ids_prefix=args.ids_prefix,
+        max_chars=getattr(args, "max_train_chars", 1_200_000_000),
+        ids_prefix=getattr(args, "ids_prefix", ""),
     )
     val_dataset = LMDataset(
         args.data_dir,
@@ -163,7 +133,7 @@ def main():
         args.max_seq_len,
         "valid",
         augment=False,
-        ids_prefix=args.ids_prefix,
+        ids_prefix=getattr(args, "ids_prefix", ""),
     )
 
     if args.world_size > 1:
@@ -213,13 +183,14 @@ def main():
         dropout=args.dropout,
         max_seq_len=args.max_seq_len,
         pad_token_id=tokenizer.pad_id,
-        tie_weights=True,
-        use_flash_attn=args.use_flash_attn,
+        tie_weights=getattr(args, "tie_weights", True),
+        use_flash_attn=getattr(args, "use_flash_attn", False),
+        use_gradient_checkpointing=getattr(args, "use_gradient_checkpointing", False),
     ).to(device)
 
     if args.local_rank == 0:
         total, trainable = model.get_num_params()
-        print(f"模型参数: {total / 1e6:.2f}M total, {trainable / 1e6:.2f}M trainable")
+        print(f"Model parameters: {total / 1e6:.2f}M total, {trainable / 1e6:.2f}M trainable")
 
     if args.world_size > 1:
         model = wrap_for_distributed(model, args)
@@ -231,33 +202,30 @@ def main():
     optimizer, scheduler = create_optimizer_and_scheduler(model, train_loader, args)
     scaler = create_scaler()
 
-    # 断点续训
     start_epoch = 0
     global_step = 0
     best_val_loss = float("inf")
 
     if args.load_checkpoint and os.path.exists(args.load_checkpoint):
         if args.local_rank == 0:
-            print(f"加载 checkpoint: {args.load_checkpoint}")
-        ckpt_info = load_checkpoint(model, optimizer, scheduler, scaler,
-                                     args.load_checkpoint, device, args.world_size)
+            print(f"Loading checkpoint: {args.load_checkpoint}")
+        ckpt_info = load_checkpoint(
+            model, optimizer, scheduler, scaler, args.load_checkpoint, device, args.world_size
+        )
         start_epoch = ckpt_info["start_epoch"]
         global_step = ckpt_info["global_step"]
         best_val_loss = ckpt_info["best_val_loss"]
         if args.local_rank == 0:
-            print(f"  从 epoch {start_epoch}, step {global_step} 续训")
+            print(f"Resumed from epoch {start_epoch}, step {global_step}")
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
     writer = None
-    if args.local_rank == 0:
-        if TB_AVAILABLE:
-            log_dir = os.path.join(args.checkpoint_dir, "runs")
-            os.makedirs(log_dir, exist_ok=True)
-            writer = SummaryWriter(log_dir)
-            print(f"TensorBoard: tensorboard --logdir {log_dir}")
-        else:
-            print("警告: tensorboard 不可用")
+    if args.local_rank == 0 and TB_AVAILABLE:
+        log_dir = os.path.join(args.checkpoint_dir, "runs")
+        os.makedirs(log_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir)
+        print(f"TensorBoard: tensorboard --logdir {log_dir}")
 
     for epoch in range(start_epoch, args.epochs):
         if args.world_size > 1:
@@ -290,10 +258,8 @@ def main():
 
         if args.local_rank == 0:
             print(
-                f"Epoch {epoch}: "
-                f"train_loss={train_loss:.4f}, "
-                f"val_loss={val_loss:.4f}, "
-                f"val_ppl={val_ppl:.2f}"
+                f"Epoch {epoch}: train_loss={train_loss:.4f}, "
+                f"val_loss={val_loss:.4f}, val_ppl={val_ppl:.2f}"
             )
 
             if writer is not None:
@@ -304,17 +270,32 @@ def main():
             if val_loss > 0 and val_loss < best_val_loss:
                 best_val_loss = val_loss
                 save_checkpoint(
-                    model, optimizer, scheduler, scaler,
+                    model,
+                    optimizer,
+                    scheduler,
+                    scaler,
                     os.path.join(args.checkpoint_dir, "best_model.pt"),
-                    epoch, global_step, args.world_size,
-                    extra={"train_loss": train_loss, "val_loss": val_loss, "val_ppl": val_ppl, "args": args},
+                    epoch,
+                    global_step,
+                    args.world_size,
+                    extra={
+                        "train_loss": train_loss,
+                        "val_loss": val_loss,
+                        "val_ppl": val_ppl,
+                        "args": args,
+                    },
                 )
-                print(f"  保存最佳模型 (val_loss={val_loss:.4f}, val_ppl={val_ppl:.2f})")
+                print(f"  Saved best model (val_loss={val_loss:.4f}, val_ppl={val_ppl:.2f})")
 
             save_checkpoint(
-                model, optimizer, scheduler, scaler,
+                model,
+                optimizer,
+                scheduler,
+                scaler,
                 os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt"),
-                epoch, global_step, args.world_size,
+                epoch,
+                global_step,
+                args.world_size,
             )
 
     if args.world_size > 1:
@@ -325,10 +306,9 @@ def main():
 
     if args.local_rank == 0:
         print("=" * 60)
-        print("训练完成!")
-        print(f"最佳 val_loss: {best_val_loss:.4f}, 最佳 val_ppl: {math.exp(best_val_loss):.2f}")
-        print(f"模型保存在: {args.checkpoint_dir}")
-        print("=" * 60)
+        print("Training completed!")
+        print(f"Best val_loss: {best_val_loss:.4f}, best val_ppl: {math.exp(best_val_loss):.2f}")
+        print(f"Model saved to: {args.checkpoint_dir}")
 
 
 if __name__ == "__main__":

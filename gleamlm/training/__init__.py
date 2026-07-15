@@ -1,4 +1,4 @@
-"""GleamLM shared training modules. Extracted from gleamlm-nano/ and gleamlm-lite/."""
+"""GleamLM shared training modules."""
 
 from gleamlm.training.base_trainer import (
     create_scaler,

@@ -11,7 +11,6 @@ from typing import Any
 import yaml
 
 DEFAULT_TOKENIZER_PATH = str(files("gleamlm") / "tokenizer" / "checkpoints" / "bbpe_12k")
-DEFAULT_DATA_DIR = os.path.join(os.getcwd(), "data", "nano_data")
 
 _NO_PREFIX_SECTIONS: set[str] = {"model", "training", "data", "advanced", "lr"}
 
@@ -77,14 +76,14 @@ def load_yaml(path: str) -> dict:
 
 
 def _resolve_paths(cfg_dict: dict, model_name: str) -> None:
-    """自动补全 data 块下的空路径。"""
+    """自动补全 data 块下的空路径 (基于 model_name 变体)。"""
     d = cfg_dict.setdefault("data", {})
     if not d.get("data_dir"):
-        d["data_dir"] = DEFAULT_DATA_DIR
+        d["data_dir"] = os.path.join(os.getcwd(), "data", f"{model_name}_data")
     if not d.get("tokenizer_path"):
         d["tokenizer_path"] = DEFAULT_TOKENIZER_PATH
     if not d.get("checkpoint_dir"):
-        d["checkpoint_dir"] = os.path.join(os.getcwd(), f"gleamlm-{model_name}", "checkpoints")
+        d["checkpoint_dir"] = os.path.join(os.getcwd(), "checkpoints", model_name)
 
 
 def _parse_cli_overrides(cfg_dict: dict) -> dict:
@@ -239,7 +238,8 @@ def to_namespace(cfg: _DictWrapper) -> argparse.Namespace:
                         if k in result:
                             warnings.warn(
                                 f"[to_namespace] 键冲突: '{k}' 被 section '{section_name}' 覆盖，"
-                                f"原值来自另一 section", stacklevel=2
+                                f"原值来自另一 section",
+                                stacklevel=2,
                             )
                         result[k] = v
             else:
@@ -247,7 +247,8 @@ def to_namespace(cfg: _DictWrapper) -> argparse.Namespace:
                 for k in prefixed:
                     if k in result:
                         warnings.warn(
-                            f"[to_namespace] 键冲突: '{k}' 从 prefixed section 覆盖已存在的键", stacklevel=2
+                            f"[to_namespace] 键冲突: '{k}' 从 prefixed section 覆盖已存在的键",
+                            stacklevel=2,
                         )
                 result.update(prefixed)
         else:

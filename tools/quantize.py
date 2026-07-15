@@ -1,7 +1,7 @@
 """GleamLM 模型量化导出。FP32 → FP16，体积减半。
 
 用法：
-    python scripts/quantize.py --input checkpoints/best_model.pt --output checkpoints/model_fp16.pt
+    python tools/quantize.py --input checkpoints/best_model.pt --output checkpoints/model_fp16.pt
 """
 
 import argparse

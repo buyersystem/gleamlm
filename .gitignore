@@ -4,23 +4,16 @@ __pycache__/
 *.pyo
 
 # Model checkpoints
-gleamlm-nano/checkpoints/*
-!gleamlm-nano/checkpoints/.gitkeep
-gleamlm-lite/checkpoints/*
-!gleamlm-lite/checkpoints/.gitkeep
-gleamlm-pro/checkpoints/*
-!gleamlm-pro/checkpoints/.gitkeep
+checkpoints/*
+!checkpoints/*/.gitkeep
 
 # Training data (exclude large datasets from version control)
 data/
 !data/.gitkeep
 !data/lite_data/
 !data/nano_data/
+!data/pro_data/
 !data/raw/.gitkeep
-!gleamlm-pro/data/.gitkeep
-gleamlm-nano/data/raw/*
-gleamlm-nano/data/splits/*
-gleamlm-lite/data/splits/*
 
 # Tokenizer checkpoints (keep 12K, ignore test)
 

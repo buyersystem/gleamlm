@@ -1,7 +1,7 @@
 """Unified autoregressive token generator — the single KV-cache loop used by all callers.
 
 Replaces the duplicated per-file generate loops in generate_response(), TextStreamer.generate(),
-knowledge._simple_generate(), and scripts/eval_knowledge.generate().
+knowledge._simple_generate(), and tools/eval_knowledge.generate().
 """
 
 from __future__ import annotations

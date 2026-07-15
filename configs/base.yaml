@@ -59,6 +59,28 @@ advanced:
   pin_memory: true
   num_workers: 0
 
+# ---- SFT 微调 ----
+sft:
+  epochs: 3
+  batch_size: 8
+  accumulate_grad: 4
+  lr: 5.0e-6
+  warmup_ratio: 0.02
+  weight_decay: 0.01
+  max_seq_len: 1024
+  inject_system_ratio: 0.2
+  data_path: ""
+
+# ---- DPO 偏好对齐 ----
+dpo:
+  epochs: 1
+  batch_size: 2
+  accumulate_grad: 2
+  lr: 1.0e-7
+  beta: 0.1
+  max_seq_len: 1024
+  data_path: ""
+
 # ---- 分布式 ----
 distributed:
   backend: auto   # auto: Windows 自动回退 gloo，Linux 使用 nccl

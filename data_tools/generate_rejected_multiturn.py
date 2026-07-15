@@ -5,9 +5,9 @@ Output: DPO JSONL (messages + chosen + rejected format)
 
 Usage:
     python data_tools/generate_rejected_multiturn.py \
-        --input gleamlm-lite/data/sft_multiturn.jsonl \
-        --model gleamlm-lite/checkpoints/sft6/sft_best.pt \
-        --output gleamlm-lite/data/dpo_multiturn.jsonl \
+        --input data/lite/sft_multiturn.jsonl \
+        --model checkpoints/lite/sft6/sft_best.pt \
+        --output data/lite/dpo_multiturn.jsonl \
         --limit 300
 """
 

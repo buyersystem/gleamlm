@@ -69,7 +69,7 @@ gleamlm = ["tokenizer/checkpoints/bbpe_12k/*.json"]
 [tool.ruff]
 target-version = "py310"
 line-length = 100
-exclude = ["gleamlm-lite", "gleamlm-pro"]
+exclude = []
 
 [tool.ruff.lint]
 select = [
@@ -90,16 +90,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/__init__.py" = ["F401"]  # re-exports
-"gleamlm-nano/tests/_run_tests.py" = ["E402"]  # path setup before imports
-"gleamlm-nano/train.py" = ["E402"]  # path setup before imports
-"gleamlm-nano/sft.py" = ["E402"]  # path setup before imports
-"gleamlm-nano/dpo.py" = ["E402"]  # path setup before imports
-"gleamlm-nano/infer.py" = ["E402"]  # path setup before imports
-"gleamlm-nano/quick_test_sft_dpo.py" = ["E402", "E701", "E702"]  # quick smoke test script
-"scripts/eval_ppl.py" = ["E402"]  # path setup before imports
-"scripts/eval_knowledge.py" = ["SIM115"]  # stdout redirect
-"scripts/eval_layer_dropout.py" = ["SIM115"]  # stdout redirect
-"scripts/_check_stats.py" = ["E741"]  # list comprehension
+"tools/eval_ppl.py" = ["E402"]  # path setup before imports
+"tools/eval_knowledge.py" = ["SIM115"]  # stdout redirect
+"tools/eval_layer_dropout.py" = ["SIM115"]  # stdout redirect
 "tests/test_tokenizer.py" = ["SIM115"]  # NamedTemporaryFile manual cleanup
 "tests/verify_flash_attn.py" = ["E741"]  # loss loop variable
 "data_tools/extract_parquet.py" = ["F401", "B018"]  # availability probe
@@ -120,13 +113,12 @@ python_version = "3.12"
 strict = true
 disallow_any_generics = false
 exclude = [
-    "gleamlm-nano/",
-    "gleamlm-lite/",
-    "gleamlm-pro/",
-    "scripts/",
+    "experimental/",
+    "tools/",
     "data_tools/",
     "tests/",
     "configs/",
+    "scripts/",
 ]
 
 [[tool.mypy.overrides]]

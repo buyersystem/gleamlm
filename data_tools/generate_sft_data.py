@@ -3,7 +3,7 @@
 
 用法：
     set DEEPSEEK_API_KEY=sk-xxxx
-    python data_tools/generate_sft_data.py --output gleamlm-lite/data/sft_api_new.jsonl --variants_per_seed 2
+    python data_tools/generate_sft_data.py --output data/lite/sft_api_new.jsonl --variants_per_seed 2
 
 依赖：pip install openai
 """

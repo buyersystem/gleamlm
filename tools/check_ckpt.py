@@ -1,5 +1,5 @@
 """快速查看 checkpoint 信息。
-用法: python scripts/check_ckpt.py [--path checkpoints/best_model.pt]
+用法: python tools/check_ckpt.py [--path checkpoints/best_model.pt]
 """
 
 import argparse

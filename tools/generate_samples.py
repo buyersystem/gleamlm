@@ -1,7 +1,7 @@
 """使用训练好的模型生成文本样例，用于人工评估
 
 用法：
-    python scripts/generate_samples.py --model checkpoints/best_model.pt --tokenizer checkpoints/
+    python tools/generate_samples.py --model checkpoints/best_model.pt --tokenizer checkpoints/
 """
 
 import argparse
@@ -61,7 +61,9 @@ def main() -> None:
     parser.add_argument("--model", type=str, required=True, help="模型 checkpoint 路径")
     parser.add_argument("--tokenizer", type=str, default=DEFAULT_TOKENIZER_PATH, help="分词器路径")
     parser.add_argument("--max_new_tokens", type=int, default=128, help="最大生成 token 数")
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     args = parser.parse_args()
 
     model, config = load_model_for_inference(args.model, args.device)
@@ -78,8 +80,11 @@ def main() -> None:
     ]
 
     generate_samples(
-        model, tokenizer, prompts,
-        max_new_tokens=args.max_new_tokens, device=args.device,
+        model,
+        tokenizer,
+        prompts,
+        max_new_tokens=args.max_new_tokens,
+        device=args.device,
     )
 
 

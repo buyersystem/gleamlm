@@ -12,12 +12,10 @@ from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-DEFAULT_CHECKPOINT_DIR = os.path.join(_PROJECT_ROOT, "gleamlm-nano", "checkpoints")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_PATH = f"{DEFAULT_CHECKPOINT_DIR}/sft/sft_best.pt"
 TOKENIZER_PATH = DEFAULT_TOKENIZER_PATH
-OUTPUT_FILE = "scripts/eval_knowledge_result.txt"
+OUTPUT_FILE = "tools/eval_knowledge_result.txt"
 
 # A1: 50 fact fill-in prompts
 FACT_PROMPTS = [
@@ -195,6 +193,23 @@ def run_a2(model, tok):
 
 
 def main():
+    import argparse
+
+    p = argparse.ArgumentParser(description="GleamLM 知识评估")
+    p.add_argument("--variant", choices=["nano", "lite", "pro"], default="nano", help="模型变体")
+    p.add_argument(
+        "--model_path",
+        type=str,
+        default=None,
+        help="模型路径 (默认: checkpoints/{variant}/sft/sft_best.pt)",
+    )
+    cli = p.parse_args()
+
+    global MODEL_PATH
+    MODEL_PATH = cli.model_path or os.path.join(
+        _PROJECT_ROOT, "checkpoints", cli.variant, "sft", "sft_best.pt"
+    )
+
     f = open(OUTPUT_FILE, "w", encoding="utf-8")
     orig_stdout = sys.stdout
     sys.stdout = f

@@ -18,12 +18,10 @@ from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
-DEFAULT_CHECKPOINT_DIR = os.path.join(_PROJECT_ROOT, "gleamlm-nano", "checkpoints")
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_PATH = f"{DEFAULT_CHECKPOINT_DIR}/best_model.pt"
 TOKENIZER_PATH = DEFAULT_TOKENIZER_PATH
-OUTPUT_FILE = "scripts/eval_layer_result.txt"
+OUTPUT_FILE = "tools/eval_layer_result.txt"
 
 # Test prompts covering different aspects
 TEST_PROMPTS = [
@@ -206,6 +204,23 @@ def _has_repetition(text, max_rep=3):
 
 
 def main():
+    import argparse as _ap
+
+    _p = _ap.ArgumentParser(description="GleamLM 层丢弃评估")
+    _p.add_argument("--variant", choices=["nano", "lite", "pro"], default="nano", help="模型变体")
+    _p.add_argument(
+        "--model_path",
+        type=str,
+        default=None,
+        help="模型路径 (默认: checkpoints/{variant}/best_model.pt)",
+    )
+    cli = _p.parse_args()
+
+    global MODEL_PATH
+    MODEL_PATH = cli.model_path or os.path.join(
+        _PROJECT_ROOT, "checkpoints", cli.variant, "best_model.pt"
+    )
+
     sys.stdout = open(OUTPUT_FILE, "w", encoding="utf-8")
     results = run_layer_dropout_test()
     # Key finding

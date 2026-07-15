@@ -31,9 +31,17 @@ model:
 
 data:
   tokenizer_path: ""            # 默认: {root}/gleamlm/tokenizer/checkpoints/bbpe_12k
-  checkpoint_dir: ""            # 默认: {root}/gleamlm-nano/checkpoints
+  checkpoint_dir: ""            # 默认: {root}/checkpoints/nano
   ids_prefix: ""
 
 advanced:
   z_loss_weight: 0.0
   bf16: false                   # nano 用 fp32
+
+sft:
+  max_seq_len: 512
+  data_path: data/nano/sft_data.jsonl
+
+dpo:
+  max_seq_len: 512
+  data_path: data/nano/dpo_data.jsonl

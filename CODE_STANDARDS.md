@@ -20,7 +20,7 @@ Imports are grouped: stdlib, third-party, first-party (`gleamlm`). Sorted by `ru
 
 - The shared library `gleamlm/` requires full type annotations on all public functions and methods. Checked by **mypy** in strict mode.
 - Uses `from __future__ import annotations` for forward references.
-- Wrapper projects (`gleamlm-nano/`, scripts, tools) should add annotations gradually.
+- Wrapper projects (`scripts/`, `tools/`, `data_tools/`) should add annotations gradually.
 
 ## Naming
 
