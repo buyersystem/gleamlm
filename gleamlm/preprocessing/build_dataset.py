@@ -127,7 +127,7 @@ def stream_build(
 def main() -> None:
     parser = argparse.ArgumentParser(description="构建训练数据集（流式）")
     parser.add_argument("--input", type=str, nargs="+", required=True, help="输入文本文件路径")
-    parser.add_argument("--output_dir", type=str, default="./data/nano_data")
+    parser.add_argument("--output_dir", type=str, default="./data/nano/pretrain")
     parser.add_argument("--train_ratio", type=float, default=0.9)
     parser.add_argument("--valid_ratio", type=float, default=0.05)
     parser.add_argument("--ratios", type=float, nargs="+", default=None, help="数据源配比")

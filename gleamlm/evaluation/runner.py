@@ -34,7 +34,9 @@ def main() -> None:
         default="ppl,knowledge",
         help="逗号分隔：ppl,knowledge,ceval,cmmlu",
     )
-    parser.add_argument("--data_dir", type=str, required=True, help="数据目录（如 data/lite_data）")
+    parser.add_argument(
+        "--data_dir", type=str, required=True, help="数据目录（如 data/lite/pretrain）"
+    )
     parser.add_argument("--ceval_dir", type=str, default="")
     parser.add_argument("--cmmlu_dir", type=str, default="")
     parser.add_argument("--batch_size", type=int, default=4)

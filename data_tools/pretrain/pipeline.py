@@ -60,7 +60,7 @@ def main():
     )
     parser.add_argument("--config_dir", default="configs", help="YAML 配置目录")
     parser.add_argument("--input", default="data/raw", help="原始数据目录")
-    parser.add_argument("--output", default=None, help="输出目录（默认: data/{variant}_data）")
+    parser.add_argument("--output", default=None, help="输出目录（默认: data/{variant}/pretrain）")
     # 跳过控制
     parser.add_argument("--skip_exact_dedup", action="store_true")
     parser.add_argument("--skip_clean", action="store_true")
@@ -83,7 +83,7 @@ def main():
         print("ERROR: 未找到 data_sources 配置")
         sys.exit(1)
 
-    data_dir = args.output or os.path.join("data", f"{args.variant}_data")
+    data_dir = args.output or os.path.join("data", args.variant, "pretrain")
     raw_dir = args.input
     print(f"Variant: {args.variant}, sources: {[s['name'] for s in sources]}")
     print(f"Input: {raw_dir}, Output: {data_dir}")

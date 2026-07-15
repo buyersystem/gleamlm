@@ -131,6 +131,7 @@ def main():
     )
     parser.add_argument("--tokenizer_path", type=str, default=DEFAULT_TOKENIZER_PATH)
     parser.add_argument("--output", type=str, default="data/dpo_data.jsonl", help="输出文件")
+    parser.add_argument("--limit", type=int, default=0, help="最大样本数")
     # 生成参数
     parser.add_argument("--limit", type=int, default=0, help="最大样本数 (0=all)")
     parser.add_argument(

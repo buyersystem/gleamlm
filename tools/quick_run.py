@@ -44,7 +44,7 @@ def prepare_small_data(n_train=2000, n_valid=500):
     os.makedirs(TEST_DATA_DIR, exist_ok=True)
 
     for split, n in [("train", n_train), ("valid", n_valid)]:
-        src = f"data/nano_data/{split}.txt"
+        src = f"data/nano/pretrain/{split}.txt"
         dst = f"{TEST_DATA_DIR}/{split}.txt"
 
         if not os.path.exists(src):

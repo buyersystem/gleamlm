@@ -57,7 +57,7 @@ DATA_DIR = "./data"
 LITE_DIR = "./gleamlm-lite/data"
 
 # 预训练数据：Lite 五源混合 → 合成例句回退
-REAL_PRETRAIN = os.path.join(DATA_DIR, "lite_data", "train.txt")
+REAL_PRETRAIN = os.path.join(DATA_DIR, "lite", "pretrain", "train.txt")
 PRETRAIN_DATA = REAL_PRETRAIN  # 实际使用的路径
 
 # SFT 数据：Lite API 清洗后数据（2300 条）→ 合成回退
