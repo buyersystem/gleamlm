@@ -53,6 +53,17 @@ def extract_news(input_path, output_path):
 
 def extract_baike(input_path, output_path):
     """从百度百科 JSON/JSONL 提取纯文本（title + summary + text）"""
+    # 自动解压 7z
+    if input_path.endswith(".7z"):
+        import py7zr
+
+        json_path = input_path[:-3]
+        if not os.path.exists(json_path):
+            print(f"  解压 7z: {input_path} → {json_path}")
+            with py7zr.SevenZipFile(input_path, "r") as archive:
+                archive.extractall(os.path.dirname(json_path) or ".")
+        input_path = json_path
+
     items = _load_json_or_jsonl(input_path)
     count = 0
     with open(output_path, "w", encoding="utf-8") as fout:
