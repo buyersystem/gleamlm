@@ -41,7 +41,7 @@ class LMDataset(Dataset):
         if not os.path.exists(text_file):
             raise FileNotFoundError(
                 f"Data file not found: {text_file}\n"
-                f"Please run data_tools/build_dataset.py first to prepare the data."
+                f"Please run data_tools/pretrain/build.py first to prepare the data."
             )
 
         if os.path.exists(ids_file):

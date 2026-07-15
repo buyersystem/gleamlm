@@ -12,7 +12,7 @@ import random
 from typing import TextIO
 
 
-def stream_build(
+def stream_split(
     input_paths: list[str],
     output_dir: str,
     train_ratio: float = 0.9,
@@ -134,7 +134,7 @@ def main() -> None:
     parser.add_argument("--buf_size", type=int, default=50000, help="打乱缓冲区大小")
     args = parser.parse_args()
 
-    stream_build(
+    stream_split(
         args.input,
         args.output_dir,
         args.train_ratio,

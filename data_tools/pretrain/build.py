@@ -10,7 +10,7 @@ import argparse
 import os
 import sys
 
-from gleamlm.preprocessing.build_dataset import stream_build
+from gleamlm.preprocessing.mix_split import stream_split
 from gleamlm.utils.config import load_config
 
 
@@ -103,7 +103,7 @@ def main():
         print("ERROR: 有效数据源为 0")
         sys.exit(1)
 
-    stream_build(
+    stream_split(
         input_paths=valid_files,
         output_dir=data_dir,
         ratios=valid_ratios if valid_ratios else None,
