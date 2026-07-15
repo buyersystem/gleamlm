@@ -19,7 +19,7 @@ import re
 import sys
 import time
 
-from data_tools._api_client import DEFAULT_MODEL, chat_completion, get_client
+from data_tools.shared.api_client import DEFAULT_MODEL, chat_completion, get_client
 
 SYSTEM_PROMPT = (
     "你是一个对话数据构造助手。给你一段单轮问答，请生成 1-2 个后续的追问答复，"

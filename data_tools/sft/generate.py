@@ -18,15 +18,20 @@ import re
 import sys
 import time
 
-from data_tools._api_client import DEFAULT_BASE_URL, DEFAULT_MODEL, chat_completion, get_client
-from data_tools._sft_seeds import SEEDS
-from data_tools._sft_templates import (
+from data_tools.sft._seeds import SEEDS
+from data_tools.sft._templates import (
     A_DATA,
     B_DATA,
     C_DATA,
     EXTRA_PREFIXES,
     INSERT_WORDS,
     PREFIXES,
+)
+from data_tools.shared.api_client import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    chat_completion,
+    get_client,
 )
 
 random.seed(42)

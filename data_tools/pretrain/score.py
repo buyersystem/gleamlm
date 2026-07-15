@@ -24,7 +24,12 @@ import random
 import sys
 import time
 
-from data_tools._api_client import DEFAULT_BASE_URL, DEFAULT_MODEL, chat_completion, get_client
+from data_tools.shared.api_client import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    chat_completion,
+    get_client,
+)
 
 SCORING_SYSTEM_PROMPT = """你是一个专业的中文文本质量评估器。请根据以下标准对文本评分（1-5 分）：
 

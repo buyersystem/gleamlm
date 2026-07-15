@@ -95,8 +95,8 @@ ignore = [
 "tools/eval_layer_dropout.py" = ["SIM115"]  # stdout redirect
 "tests/test_tokenizer.py" = ["SIM115"]  # NamedTemporaryFile manual cleanup
 "tests/verify_flash_attn.py" = ["E741"]  # loss loop variable
-"data_tools/extract_parquet.py" = ["F401", "B018"]  # availability probe
-"data_tools/prepare_data.py" = ["B007"]  # enumerate src iteration
+"data_tools/pretrain/extract_parquet.py" = ["F401", "B018"]  # availability probe
+"data_tools/pretrain/pipeline.py" = ["B007"]  # enumerate src iteration
 "gleamlm/utils/config.py" = ["N806"]  # NO_PREFIX convention
 
 [tool.ruff.lint.isort]

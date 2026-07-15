@@ -16,7 +16,7 @@ import os
 import sys
 import time
 
-from data_tools._api_client import DEFAULT_MODEL, chat_completion, get_client
+from data_tools.shared.api_client import DEFAULT_MODEL, chat_completion, get_client
 
 LONG_FORM_TOPICS = [
     "人工智能的发展历史",

@@ -107,9 +107,20 @@ GleamLM/
 │   └── verify_paths.py          # 路径验证
 │
 ├── data_tools/                  # 数据获取 & SFT/DPO 数据生成
-│   ├── prepare_data.py          # 一键管道编排
-│   ├── download_data.py         # 多源数据下载
-│   └── gen_sft.py               # SFT 数据生成
+│   ├── pretrain/                # 预训练数据管线
+│   │   ├── download.py          # 多源数据下载
+│   │   ├── extract_parquet.py   # Parquet → txt
+│   │   ├── pipeline.py          # 一键管道（去重→清洗→SimHash→混合切分）
+│   │   └── score.py             # 质量评分
+│   ├── sft/                     # SFT 数据生成
+│   │   ├── generate.py          # 统一入口（硬编码/API）
+│   │   ├── generate_longform.py # 长文 SFT
+│   │   ├── generate_multiturn.py# 多轮 SFT
+│   │   └── clean_format.py      # 格式清洗
+│   ├── dpo/                     # DPO 数据生成
+│   │   └── generate_rejected.py # rejected 数据生成
+│   └── shared/                  # 共享模块
+│       └── api_client.py        # DeepSeek API 客户端
 │
 ├── tests/                       # 核心库测试
 │   ├── test_model.py            # 模型前向/反向/KV Cache 测试
