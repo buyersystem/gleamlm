@@ -21,7 +21,7 @@ from gleamlm.training.dpo_trainer import (
     evaluate_dpo,
     train_one_epoch_dpo,
 )
-from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config
+from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config_as_args
 from gleamlm.utils.torch_utils import get_lr_cosine
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -49,32 +49,30 @@ def main():
     parser.add_argument("--output_dir", type=str, default=None, help="DPO 模型保存目录")
     parser.add_argument("--resume", type=str, default=None, help="从 checkpoint 续训")
 
-    args = parser.parse_args()
+    cli_args = parser.parse_args()
 
-    config_path = os.path.join(args.config_dir, f"{args.variant}.yaml")
-    cfg = load_config(config_path, model_name=args.variant)
+    config_path = os.path.join(cli_args.config_dir, f"{cli_args.variant}.yaml")
+    args = load_config_as_args(config_path, model_name=cli_args.variant, cli_overrides=True)
 
-    model_cfg = cfg.model
-    dpo_cfg = cfg.dpo
+    # 从配置读取所有参数（dpo 块已加入 NO_PREFIX，自动展平到 namespace）
+    model_path = cli_args.model_path or os.path.join(args.checkpoint_dir, "sft", "sft_best.pt")
+    data_path = cli_args.data_path or getattr(args, "data_path", "")
+    output_dir = cli_args.output_dir or os.path.join(args.checkpoint_dir, "dpo")
 
-    model_path = args.model_path or os.path.join(
-        _ROOT_DIR, "checkpoints", args.variant, "sft", "sft_best.pt"
-    )
-    data_path = args.data_path or dpo_cfg.data_path
-    output_dir = args.output_dir or os.path.join(_ROOT_DIR, "checkpoints", args.variant, "dpo")
-
-    lr = dpo_cfg.lr
-    beta = dpo_cfg.beta
-    epochs = dpo_cfg.epochs
-    batch_size = dpo_cfg.batch_size
-    accumulate_grad = dpo_cfg.accumulate_grad
-    max_seq_len = dpo_cfg.max_seq_len
-    clip_grad = getattr(dpo_cfg, "clip_grad", 1.0)
+    lr = args.lr
+    beta = args.beta
+    epochs = args.epochs
+    batch_size = args.batch_size
+    accumulate_grad = args.accumulate_grad
+    max_seq_len = args.max_seq_len
+    warmup_ratio = getattr(args, "warmup_ratio", 0.02)
+    min_lr_ratio = getattr(args, "min_lr_ratio", 0.05)
+    clip_grad = getattr(args, "clip_grad", 1.0)
 
     set_seed(42)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    variant_name = args.variant.upper()
+    variant_name = cli_args.variant.upper()
     print("=" * 60)
     print(f"GleamLM-{variant_name} DPO 偏好对齐")
     print("=" * 60)
@@ -83,7 +81,7 @@ def main():
     print(f"Model: {model_path}")
     print(f"LR: {lr:.1e}, Beta: {beta}, Epochs: {epochs}, Batch: {batch_size}")
 
-    tokenizer = BBPETokenizer.load(args.tokenizer_path)
+    tokenizer = BBPETokenizer.load(cli_args.tokenizer_path)
     print(f"Tokenizer vocab: {tokenizer.get_vocab_size()}")
 
     sft_ckpt = torch.load(model_path, map_location=device, weights_only=False)
@@ -91,30 +89,30 @@ def main():
     if "args" in sft_ckpt:
         sft_args = sft_ckpt["args"]
         model_kwargs = {
-            "vocab_size": getattr(sft_args, "vocab_size", model_cfg.vocab_size),
-            "d_model": getattr(sft_args, "d_model", model_cfg.d_model),
-            "num_layers": getattr(sft_args, "num_layers", model_cfg.num_layers),
-            "num_heads": getattr(sft_args, "num_heads", model_cfg.num_heads),
-            "num_kv_heads": getattr(sft_args, "num_kv_heads", model_cfg.num_kv_heads),
-            "d_ff": getattr(sft_args, "d_ff", model_cfg.d_ff),
-            "dropout": getattr(sft_args, "dropout", model_cfg.dropout),
+            "vocab_size": getattr(sft_args, "vocab_size", args.vocab_size),
+            "d_model": getattr(sft_args, "d_model", args.d_model),
+            "num_layers": getattr(sft_args, "num_layers", args.num_layers),
+            "num_heads": getattr(sft_args, "num_heads", args.num_heads),
+            "num_kv_heads": getattr(sft_args, "num_kv_heads", args.num_kv_heads),
+            "d_ff": getattr(sft_args, "d_ff", args.d_ff),
+            "dropout": getattr(sft_args, "dropout", args.dropout),
             "max_seq_len": getattr(sft_args, "max_seq_len", max_seq_len),
             "pad_token_id": getattr(sft_args, "pad_token_id", 0),
         }
     else:
         model_kwargs = {
-            "vocab_size": model_cfg.vocab_size,
-            "d_model": model_cfg.d_model,
-            "num_layers": model_cfg.num_layers,
-            "num_heads": model_cfg.num_heads,
-            "num_kv_heads": model_cfg.num_kv_heads,
-            "d_ff": model_cfg.d_ff,
-            "dropout": model_cfg.dropout,
+            "vocab_size": args.vocab_size,
+            "d_model": args.d_model,
+            "num_layers": args.num_layers,
+            "num_heads": args.num_heads,
+            "num_kv_heads": args.num_kv_heads,
+            "d_ff": args.d_ff,
+            "dropout": args.dropout,
             "max_seq_len": max_seq_len,
             "pad_token_id": 0,
         }
 
-    flash_attn = getattr(model_cfg, "use_flash_attn", False)
+    flash_attn = getattr(args, "use_flash_attn", False)
 
     policy_model = GleamLMModel(
         **model_kwargs,
@@ -162,7 +160,7 @@ def main():
     total_steps = math.ceil(len(dataloader) / accumulate_grad) * epochs
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer,
-        lambda step: get_lr_cosine(step, total_steps, warmup_ratio=0.01, min_lr_ratio=0.05),
+        lambda step: get_lr_cosine(step, total_steps, warmup_ratio, min_lr_ratio=min_lr_ratio),
     )
     scaler = create_scaler()
 

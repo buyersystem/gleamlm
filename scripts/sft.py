@@ -20,7 +20,7 @@ from gleamlm.training.sft_trainer import (
     evaluate_sft,
     train_one_epoch_sft,
 )
-from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config
+from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config_as_args
 from gleamlm.utils.torch_utils import get_lr_cosine
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -48,34 +48,30 @@ def main():
     parser.add_argument("--save_dir", type=str, default=None, help="SFT 模型保存目录")
     parser.add_argument("--resume", type=str, default=None, help="从 checkpoint 续训")
 
-    args = parser.parse_args()
+    cli_args = parser.parse_args()
 
-    config_path = os.path.join(args.config_dir, f"{args.variant}.yaml")
-    cfg = load_config(config_path, model_name=args.variant)
+    config_path = os.path.join(cli_args.config_dir, f"{cli_args.variant}.yaml")
+    args = load_config_as_args(config_path, model_name=cli_args.variant, cli_overrides=True)
 
-    model_cfg = cfg.model
-    sft_cfg = cfg.sft
+    # 从配置读取所有参数（sft 块已加入 NO_PREFIX，自动展平到 namespace）
+    model_path = cli_args.model_path or os.path.join(args.checkpoint_dir, "best_model.pt")
+    data_path = cli_args.data_path or getattr(args, "data_path", "")
+    save_dir = cli_args.save_dir or os.path.join(args.checkpoint_dir, "sft")
 
-    model_path = args.model_path or os.path.join(
-        _ROOT_DIR, "checkpoints", args.variant, "best_model.pt"
-    )
-    data_path = args.data_path or sft_cfg.data_path
-    save_dir = args.save_dir or os.path.join(_ROOT_DIR, "checkpoints", args.variant, "sft")
-
-    lr = sft_cfg.lr
-    epochs = sft_cfg.epochs
-    batch_size = sft_cfg.batch_size
-    accumulate_grad = sft_cfg.accumulate_grad
-    max_seq_len = sft_cfg.max_seq_len
-    warmup_ratio = sft_cfg.warmup_ratio
-    weight_decay = sft_cfg.weight_decay
-    inject_system_ratio = sft_cfg.inject_system_ratio
-    clip_grad = getattr(sft_cfg, "clip_grad", 1.0)
+    lr = args.lr
+    epochs = args.epochs
+    batch_size = args.batch_size
+    accumulate_grad = args.accumulate_grad
+    max_seq_len = args.max_seq_len
+    warmup_ratio = args.warmup_ratio
+    weight_decay = args.weight_decay
+    inject_system_ratio = getattr(args, "inject_system_ratio", 0.2)
+    clip_grad = getattr(args, "clip_grad", 1.0)
 
     set_seed(42)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    variant_name = args.variant.upper()
+    variant_name = cli_args.variant.upper()
     print("=" * 60)
     print(f"GleamLM-{variant_name} SFT 指令微调")
     print("=" * 60)
@@ -84,21 +80,21 @@ def main():
     print(f"Model: {model_path}")
     print(f"LR: {lr:.1e}, Epochs: {epochs}, Batch: {batch_size}, Seq: {max_seq_len}")
 
-    tokenizer = BBPETokenizer.load(args.tokenizer_path)
+    tokenizer = BBPETokenizer.load(cli_args.tokenizer_path)
     print(f"Tokenizer vocab size: {tokenizer.get_vocab_size()}")
 
     model = GleamLMModel(
         vocab_size=tokenizer.get_vocab_size(),
-        d_model=model_cfg.d_model,
-        num_layers=model_cfg.num_layers,
-        num_heads=model_cfg.num_heads,
-        num_kv_heads=model_cfg.num_kv_heads,
-        d_ff=model_cfg.d_ff,
-        dropout=model_cfg.dropout,
+        d_model=args.d_model,
+        num_layers=args.num_layers,
+        num_heads=args.num_heads,
+        num_kv_heads=args.num_kv_heads,
+        d_ff=args.d_ff,
+        dropout=args.dropout,
         max_seq_len=max_seq_len,
         pad_token_id=tokenizer.pad_id,
-        tie_weights=getattr(model_cfg, "tie_weights", True),
-        use_flash_attn=getattr(model_cfg, "use_flash_attn", False),
+        tie_weights=getattr(args, "tie_weights", True),
+        use_flash_attn=getattr(args, "use_flash_attn", False),
     ).to(device)
 
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
@@ -140,9 +136,9 @@ def main():
     start_epoch = 0
     best_loss = float("inf")
 
-    if args.resume:
-        print(f"\nResuming from: {args.resume}")
-        resume_ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+    if cli_args.resume:
+        print(f"\nResuming from: {cli_args.resume}")
+        resume_ckpt = torch.load(cli_args.resume, map_location=device, weights_only=False)
         model.load_state_dict(resume_ckpt["model_state_dict"])
         optimizer.load_state_dict(resume_ckpt["optimizer_state_dict"])
         scheduler.load_state_dict(resume_ckpt["scheduler_state_dict"])
@@ -151,7 +147,8 @@ def main():
         global_step = resume_ckpt.get("global_step", 0)
         best_loss = resume_ckpt.get("train_loss", float("inf"))
         print(
-            f"  Resumed at epoch {start_epoch}, global_step={global_step}, best_loss={best_loss:.4f}"
+            f"  Resumed at epoch {start_epoch}, global_step={global_step}, "
+            f"best_loss={best_loss:.4f}"
         )
 
     eval_prompts = [
@@ -168,10 +165,11 @@ def main():
     model.train()
 
     os.makedirs(save_dir, exist_ok=True)
-    if not args.resume:
+    if not cli_args.resume:
         global_step = 0
 
-    sft_ns = argparse.Namespace(
+    # 构造供 train_one_epoch_sft 使用的简化 namespace
+    train_ns = argparse.Namespace(
         epochs=epochs,
         batch_size=batch_size,
         accumulate_grad=accumulate_grad,
@@ -188,7 +186,7 @@ def main():
             scheduler,
             device,
             epoch,
-            sft_ns,
+            train_ns,
             global_step,
             scaler,
         )
@@ -210,7 +208,7 @@ def main():
                 "scheduler_state_dict": scheduler.state_dict(),
                 "scaler_state_dict": scaler.state_dict(),
                 "train_loss": train_loss,
-                "args": sft_ns,
+                "args": train_ns,
             },
             os.path.join(save_dir, ckpt_name),
         )
@@ -222,7 +220,7 @@ def main():
                 {
                     "epoch": epoch,
                     "model_state_dict": model.state_dict(),
-                    "args": sft_ns,
+                    "args": train_ns,
                 },
                 best_path,
             )

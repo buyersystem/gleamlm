@@ -156,7 +156,12 @@ def interactive(
 
 def main():
     parser = argparse.ArgumentParser(description="GleamLM 推理")
-    parser.add_argument("--model", type=str, required=True, help="模型 checkpoint 路径")
+    parser.add_argument(
+        "--variant", type=str, choices=["nano", "lite", "pro"], help="模型变体（自动推导模型路径）"
+    )
+    parser.add_argument(
+        "--model", type=str, default=None, help="模型 checkpoint 路径（与 --variant 二选一）"
+    )
     parser.add_argument("--prompt", type=str, default=None, help="提示文本（不提供则进入交互模式）")
     parser.add_argument("--max_new_tokens", type=int, default=256, help="最大生成 token 数")
     parser.add_argument("--temperature", type=float, default=0.8, help="温度参数")
@@ -168,6 +173,27 @@ def main():
     parser.add_argument("--sft", action="store_true", help="SFT 对话模式")
     parser.add_argument("--device", type=str, default="cuda", help="设备 (cuda/cpu)")
     args = parser.parse_args()
+
+    if args.model is None and args.variant is None:
+        print("Error: 必须指定 --model 或 --variant")
+        sys.exit(1)
+
+    if args.model is None:
+        suffix = "sft/sft_best.pt" if args.sft else "best_model.pt"
+        args.model = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "checkpoints",
+            args.variant,
+            suffix,
+        )
+        if not os.path.exists(args.model) and args.sft:
+            args.model = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "checkpoints",
+                args.variant,
+                "best_model.pt",
+            )
+            print(f"Info: SFT 模型未找到，回退到预训练模型: {args.model}")
 
     if not os.path.exists(args.model):
         print(f"Error: 模型文件不存在: {args.model}")

@@ -79,6 +79,8 @@ dpo:
   lr: 1.0e-7
   beta: 0.1
   max_seq_len: 1024
+  warmup_ratio: 0.02
+  min_lr_ratio: 0.05
   data_path: ""
 
 # ---- 分布式 ----
