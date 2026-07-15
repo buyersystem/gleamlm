@@ -13,6 +13,12 @@ except ImportError:
     HAS_ZhCONV = False
     print("提示: pip install zhconv 可启用简繁转换")
 
+_HTML_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+_URL_RE = re.compile(r"https?://\S+")
+_SPACE_RE = re.compile(r"\s+")
+_ZH_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+_EN_CHAR_RE = re.compile(r"[a-zA-Z]")
+
 AD_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"咨询.*[热热线电].*[：:]?\s*\d{3,}"),
     re.compile(r"(活动|加盟|招商|订[购车]).*[热热线电].*[：:]?\s*\d{3,}"),
@@ -53,18 +59,18 @@ def clean_text(
     if convert_zh and HAS_ZhCONV:
         text = zhconv.convert(text, "zh-cn")
 
-    text = re.sub(r"</?[a-zA-Z][^>]*>", "", text)
-    text = re.sub(r"https?://\S+", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _HTML_RE.sub("", text)
+    text = _URL_RE.sub("", text)
+    text = _SPACE_RE.sub(" ", text).strip()
 
     if len(text) < min_len or len(text) > max_len:
         return None
 
-    chinese_chars = len(re.findall(r"[\u4e00-\u9fff]", text))
+    chinese_chars = len(_ZH_CHAR_RE.findall(text))
     if min_zh_ratio > 0 and len(text) > 0 and chinese_chars / len(text) < min_zh_ratio:
         return None
 
-    english_chars = len(re.findall(r"[a-zA-Z]", text))
+    english_chars = len(_EN_CHAR_RE.findall(text))
     if chinese_chars + english_chars < len(text) * 0.3:
         return None
 

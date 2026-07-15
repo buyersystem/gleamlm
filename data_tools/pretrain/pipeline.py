@@ -105,14 +105,14 @@ def main():
                 clean,
                 min_len=30,
                 max_len=3000,
-                convert_zh=True,
+                convert_zh=(s["name"] != "edu"),
                 min_zh_ratio=MIN_Zh_RATIO,
                 filter_ads=s["name"] == "news",
                 filter_wiki_junk=s["name"] == "wiki",
             )
 
     # ──── step 3: SimHash 逐源去重 + QA过滤 ────
-    all_fingerprints: set[int] = set()
+    source_fingerprints: dict[str, set[int]] = {}
     if args.skip_simhash:
         print("\n[3/4] 跳过 SimHash 去重（--skip_simhash）")
     else:
@@ -132,6 +132,7 @@ def main():
             if s["type"] == "qa":
                 print(f"  QA过滤: {s['name']}")
                 filter_qa(src, final)
+                source_fingerprints[s["name"]] = set()
             else:
                 print(f"  SimHash: {s['name']} (threshold={threshold})")
                 fps = dedup_file(
@@ -140,33 +141,49 @@ def main():
                     mode="simhash",
                     simhash_threshold=threshold,
                 )
-                all_fingerprints.update(fps)
+                source_fingerprints[s["name"]] = fps
 
-        print(
-            f"\n  Collected fingerprints: {len(all_fingerprints):,} across {len(SOURCES)} sources"
-        )
+        processed = sum(1 for v in source_fingerprints.values() if v)
+        total_fps = sum(len(v) for v in source_fingerprints.values())
+        print(f"\n  Collected fingerprints: {total_fps:,} across {processed} sources processed")
 
     # ──── step 4: 跨源 SimHash 全局去重 ────
     if args.skip_simhash:
         print("\n[4/4] 跳过跨源去重（--skip_simhash）")
     else:
         print("\n[4/4] 跨源 SimHash 全局去重")
+        # 冻结 Step 3 指纹快照，所有源基于同一基准去重
+        snapshot: dict[str, set[int]] = {
+            name: fps_set.copy() for name, fps_set in source_fingerprints.items()
+        }
         for s in SOURCES:
             final = _final_path(raw_dir, s["name"])
-            if not os.path.exists(final) or s["type"] == "qa":
+            if not os.path.exists(final):
+                continue
+            if not source_fingerprints.get(s["name"]):
                 continue
             tmp = final + ".tmp"
-            print(f"  Cross-dedup: {s['name']} (against {len(all_fingerprints):,} fingerprints)")
-            returned = dedup_file(
-                final,
-                tmp,
-                mode="simhash",
-                simhash_threshold=threshold,
-                existing_fingerprints=all_fingerprints,
+            # 排除自身指纹，只和其他源比对（基于快照）
+            other_fps: set[int] = set()
+            for name, fps_set in snapshot.items():
+                if name != s["name"]:
+                    other_fps.update(fps_set)
+            print(
+                f"  Cross-dedup: {s['name']} (against {len(other_fps):,} fingerprints from other sources)"
             )
-            os.replace(tmp, final)
-            all_fingerprints.update(returned)
-            print(f"  Updated fingerprints: {len(all_fingerprints):,}")
+            try:
+                returned = dedup_file(
+                    final,
+                    tmp,
+                    mode="simhash",
+                    simhash_threshold=threshold,
+                    existing_fingerprints=other_fps,
+                )
+                os.replace(tmp, final)
+                source_fingerprints[s["name"]] = returned - other_fps
+            finally:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
 
     print("  完成")
 

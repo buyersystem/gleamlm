@@ -33,20 +33,21 @@ def stream_split(
 
     separator = "\n<|endoftext|>\n"
 
-    train_f = open(os.path.join(output_dir, "train.txt"), "w", encoding="utf-8")  # noqa: SIM115
-    valid_f = open(os.path.join(output_dir, "valid.txt"), "w", encoding="utf-8")  # noqa: SIM115
-    test_f = open(os.path.join(output_dir, "test.txt"), "w", encoding="utf-8")  # noqa: SIM115
-
-    readers: list[TextIO | None] = []
-    for path in input_paths:
-        readers.append(open(path, encoding="utf-8"))  # noqa: SIM115
-
     random.seed(42)
-    train_lines = valid_lines = test_lines = 0
-    total = 0
-    first_line: dict[TextIO, bool] = {train_f: True, valid_f: True, test_f: True}
 
+    train_f = valid_f = test_f = None
+    readers: list[TextIO | None] = []
     try:
+        train_f = open(os.path.join(output_dir, "train.txt"), "w", encoding="utf-8")  # noqa: SIM115
+        valid_f = open(os.path.join(output_dir, "valid.txt"), "w", encoding="utf-8")  # noqa: SIM115
+        test_f = open(os.path.join(output_dir, "test.txt"), "w", encoding="utf-8")  # noqa: SIM115
+        for path in input_paths:
+            readers.append(open(path, encoding="utf-8"))  # noqa: SIM115
+
+        train_lines = valid_lines = test_lines = 0
+        total = 0
+        first_line: dict[TextIO, bool] = {train_f: True, valid_f: True, test_f: True}
+
         active = len(readers)
         source_counts = [0] * len(readers)
 
@@ -105,9 +106,12 @@ def stream_split(
         for reader in readers:
             if reader is not None:
                 reader.close()
-        train_f.close()
-        valid_f.close()
-        test_f.close()
+        if train_f is not None:
+            train_f.close()
+        if valid_f is not None:
+            valid_f.close()
+        if test_f is not None:
+            test_f.close()
 
     print(f"\r  Processed {total:,} lines total")
     for i, (path, cnt) in enumerate(zip(input_paths, source_counts, strict=True)):

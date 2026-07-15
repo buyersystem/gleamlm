@@ -57,7 +57,10 @@ def filter_qa(
     print(f"Filtering QA data: {input_path}")
     print(f"  min_answer_len={min_answer_len}, dedup={dedup}")
 
-    with open(input_path, encoding="utf-8") as fin:
+    with (
+        open(input_path, encoding="utf-8") as fin,
+        open(output_path, "w", encoding="utf-8") as fout,
+    ):
         for line in fin:
             total += 1
             q, a = parse_qa(line)
@@ -79,6 +82,7 @@ def filter_qa(
                     continue
                 seen[q_hash] = True
 
+            fout.write(line)
             kept += 1
 
             if total % 500000 == 0:
@@ -86,29 +90,6 @@ def filter_qa(
                     f"  Processed {total:,} lines, kept {kept:,} "
                     f"(short={skipped_short:,} url={skipped_url:,} dup={skipped_dup:,})"
                 )
-
-    # Second pass: write filtered output (saves memory vs storing all lines)
-    with (
-        open(input_path, encoding="utf-8") as fin,
-        open(output_path, "w", encoding="utf-8") as fout,
-    ):
-        seen.clear()
-        # 第二个 pass 重新遍历文件；若外部进程在两次读取间修改文件，
-        # 统计数字可能与实际输出不一致。单进程批处理场景下此不触发。
-        for line in fin:
-            q, a = parse_qa(line)
-            if q is None or a is None:
-                continue
-            if len(a) < min_answer_len:
-                continue
-            if url_re.search(a) or url_re.search(q):
-                continue
-            if dedup:
-                q_hash = hashlib.md5(q.encode("utf-8")).hexdigest()
-                if q_hash in seen:
-                    continue
-                seen[q_hash] = True
-            fout.write(line)
 
     pct = 100 * kept / max(1, total)
     print(f"\nDone: {total:,} lines → {kept:,} kept ({pct:.1f}%)")

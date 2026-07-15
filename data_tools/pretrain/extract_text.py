@@ -19,6 +19,7 @@
 import argparse
 import glob
 import gzip
+import io
 import json
 import os
 import sys
@@ -176,17 +177,18 @@ def extract_edu(input_dir, output_path):
 
 
 def _open_archive(path):
-    """打开 zip 或 gz 归档, 返回逐行迭代器"""
+    """打开 zip 或 gz 归档, 返回逐行文本迭代器"""
     if path.endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8")
     if path.endswith(".zip"):
         zf = zipfile.ZipFile(path, "r")
         json_files = [n for n in zf.namelist() if n.endswith(".json")]
         if not json_files:
+            zf.close()
             return None
         train = [n for n in json_files if "train" in n.lower()]
         target = train[0] if train else max(json_files, key=lambda n: zf.getinfo(n).file_size)
-        return zf.open(target)
+        return io.TextIOWrapper(zf.open(target), encoding="utf-8")
     return None
 
 

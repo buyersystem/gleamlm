@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 
+_IO_BITS = 64
+
 
 def normalize(text: str, strip_whitespace: bool = True) -> str:
     if strip_whitespace:
@@ -18,10 +20,13 @@ def normalize(text: str, strip_whitespace: bool = True) -> str:
     return text
 
 
-def simhash(text: str, bits: int = 64) -> int:
+def simhash(text: str, bits: int = 64, n: int = 3) -> int:
+    if len(text) < n:
+        return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:16], 16)
+    tokens = [text[i : i + n] for i in range(len(text) - n + 1)]
     v = [0] * bits
-    for token in text:
-        h = hash(token)
+    for token in tokens:
+        h = int(hashlib.md5(token.encode("utf-8")).hexdigest()[:16], 16)
         for i in range(bits):
             if h & (1 << i):
                 v[i] += 1
@@ -50,7 +55,7 @@ def dedup_file(
     kept = 0
     deduped = 0
     seen: set[str] = set()
-    fingerprints: set[int] = existing_fingerprints or set()
+    fingerprints: set[int] = set(existing_fingerprints) if existing_fingerprints else set()
 
     print(f"Dedup: {input_path}")
     if mode == "simhash":
