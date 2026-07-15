@@ -7,12 +7,19 @@ __pycache__/
 checkpoints/*
 !checkpoints/*/.gitkeep
 
-# Training data (exclude large datasets from version control)
+# Training data — gitignore all, selectively un-ignore small data
 data/
 !data/.gitkeep
 !data/lite/pretrain/
 !data/nano/pretrain/
 !data/pro/pretrain/
+!data/lite/sft/
+!data/lite/dpo/
+!data/nano/sft/
+!data/nano/dpo/
+!data/pro/sft/
+!data/pro/dpo/
+!data/benchmarks/
 !data/raw/.gitkeep
 
 # Tokenizer checkpoints (keep 12K, ignore test)
@@ -55,7 +62,7 @@ AGENTS.md
 temp_*
 infer_result.txt
 
-# 变体测试生成数据
+# Stale test data patterns
 data/test_splits/
 data/splits/*.npy
 *.backup
