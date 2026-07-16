@@ -416,9 +416,8 @@ def test_flash_attn_with_attention_mask():
     )
     model.eval()
     input_ids = torch.tensor([[5, 3, 2, 0], [1, 4, 0, 0]])
-    attention_mask = torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0]])
     with torch.no_grad():
-        logits, _ = model(input_ids, attention_mask=attention_mask)
+        logits, _ = model(input_ids)
     assert logits.shape == (2, 4, 12002)
 
 

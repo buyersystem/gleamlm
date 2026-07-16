@@ -64,14 +64,13 @@ def _compute_raw_loss(
     criterion = nn.CrossEntropyLoss(reduction="sum", ignore_index=pad_token_id)
 
     pbar = tqdm(data_loader, desc="Eval", mininterval=5)
-    for input_ids, target_ids, attention_mask in pbar:
+    for input_ids, target_ids in pbar:
         if max_batches and n_batches >= max_batches:
             break
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
-        attention_mask = attention_mask.to(device)
 
-        logits, _ = model(input_ids, attention_mask=attention_mask)
+        logits, _ = model(input_ids)
         loss = criterion(logits.reshape(-1, logits.size(-1)), target_ids.reshape(-1))
 
         total_loss += loss.item()

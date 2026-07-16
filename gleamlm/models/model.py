@@ -295,65 +295,19 @@ class GleamLMModel(nn.Module):
         if self.lm_head.weight is not self.token_embed.weight:
             nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.02)
 
-    def _create_attn_mask(
-        self,
-        seq_len: int,
-        device: torch.device,
-        offset: int = 0,
-        attention_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """构建注意力掩码，可选合并 padding mask。
-
-        attention_mask: (B, seq_len), 1=有效 0=pad。None 时仅返回 causal/attn mask。
-        """
+    def _create_causal_mask(self, seq_len: int, device: torch.device, offset: int = 0) -> torch.Tensor:
+        """创建因果注意力掩码。offset > 0 时处理 KV cache 场景下的前文偏移。"""
         total = offset + seq_len
         mask = torch.triu(
             torch.full((seq_len, total), float("-inf"), device=device), diagonal=offset + 1
         )
-        mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, seq_len, total)
-        if attention_mask is not None:
-            pad_mask = (attention_mask == 0).unsqueeze(1).unsqueeze(-1)
-            mask = mask.expand(pad_mask.size(0), -1, -1, -1)
-            mask = mask.masked_fill(pad_mask, float("-inf"))
-        return mask
-
-    def _resolve_attn_mask(
-        self,
-        seq_len: int,
-        device: torch.device,
-        offset: int,
-        attention_mask: torch.Tensor | None,
-        past_kv_list: PastKeyValueList | None,
-    ) -> torch.Tensor | None:
-        """返回注意力掩码，平衡 flash/manual/padding/chunked prefill 多种路径。"""
-        if attention_mask is not None:
-            if attention_mask.eq(0).any():
-                attn_mask = self._create_attn_mask(
-                    seq_len, device, offset=offset, attention_mask=attention_mask
-                )
-            elif not self._use_flash_attn:
-                attn_mask = self._create_attn_mask(seq_len, device, offset=offset)
-            else:
-                attn_mask = None
-        elif self._use_flash_attn and not (past_kv_list is not None and seq_len > 1):
-            attn_mask = None
-        else:
-            attn_mask = self._create_attn_mask(seq_len, device, offset=offset)
-        return attn_mask
+        return mask.unsqueeze(0).unsqueeze(0)
 
     def forward(
-        self,
-        input_ids: torch.Tensor,
-        past_kv_list: PastKeyValueList | None = None,
-        attention_mask: torch.Tensor | None = None,
+        self, input_ids: torch.Tensor, past_kv_list: PastKeyValueList | None = None
     ) -> tuple[torch.Tensor, PastKeyValueList]:
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
-        if attention_mask is not None and attention_mask.shape != (batch_size, seq_len):
-            raise ValueError(
-                f"attention_mask shape {tuple(attention_mask.shape)} does not "
-                f"match input_ids shape {(batch_size, seq_len)}"
-            )
         x = self.token_embed(input_ids)
         x = self.emb_dropout(x)
 
@@ -381,8 +335,9 @@ class GleamLMModel(nn.Module):
                 f"set a larger multiplier in GleamLMModel.__init__."
             )
 
-        attn_mask = self._resolve_attn_mask(
-            seq_len, device, offset, attention_mask, past_kv_list
+        attn_mask = self._create_causal_mask(
+            seq_len, device,
+            offset=offset,
         )
 
         new_kv_list: PastKeyValueList = []

@@ -131,8 +131,8 @@ class LMDataset(Dataset):
 
 def collate_fn(
     batch: list[torch.Tensor], pad_id: int
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Padding to max within-batch length → input / target / attention_mask"""
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Padding to max within-batch length → input / target"""
     max_len = max(len(sample) for sample in batch)
 
     padded = []
@@ -146,6 +146,5 @@ def collate_fn(
 
     input_ids = batch_tensor[:, :-1].contiguous()
     target_ids = batch_tensor[:, 1:].contiguous()
-    attention_mask = (input_ids != pad_id).to(dtype=torch.long)
 
-    return input_ids, target_ids, attention_mask
+    return input_ids, target_ids

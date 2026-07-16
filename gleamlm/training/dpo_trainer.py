@@ -243,14 +243,8 @@ def train_one_epoch_dpo(
         )
 
         with safe_autocast():
-            c_logits, _ = model(
-                chosen_ids,
-                attention_mask=(chosen_ids != batch["_pad_id"]).to(dtype=torch.long),
-            )
-            r_logits, _ = model(
-                rejected_ids,
-                attention_mask=(rejected_ids != batch["_pad_id"]).to(dtype=torch.long),
-            )
+            c_logits, _ = model(chosen_ids)
+            r_logits, _ = model(rejected_ids)
 
         policy_cho = compute_log_probs(c_logits.float(), chosen_ids, chosen_mask)
         policy_rej = compute_log_probs(r_logits.float(), rejected_ids, rejected_mask)

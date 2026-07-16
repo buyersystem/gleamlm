@@ -227,8 +227,7 @@ class SFTDataset(Dataset):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         input_ids = torch.stack([item[0] for item in batch])
         labels = torch.stack([item[1] for item in batch])
-        attention_mask = (input_ids != self.pad_id).to(dtype=torch.long)
-        return input_ids, labels, attention_mask
+        return input_ids, labels
 
 
 def train_one_epoch_sft(
@@ -249,13 +248,12 @@ def train_one_epoch_sft(
 
     pbar = tqdm(train_loader, desc=f"SFT Epoch {epoch}", mininterval=3)
 
-    for batch_idx, (input_ids, labels, attention_mask) in enumerate(pbar):
+    for batch_idx, (input_ids, labels) in enumerate(pbar):
         input_ids = input_ids.to(device)
         labels = labels.to(device)
-        attention_mask = attention_mask.to(device)
 
         with safe_autocast():
-            logits, _ = model(input_ids, attention_mask=attention_mask)
+            logits, _ = model(input_ids)
             loss = F.cross_entropy(
                 logits.reshape(-1, logits.size(-1)),
                 labels.reshape(-1),

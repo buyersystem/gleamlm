@@ -207,13 +207,12 @@ def train_one_epoch(
         else train_loader
     )
 
-    for batch_idx, (input_ids, target_ids, attention_mask) in enumerate(pbar):
+    for batch_idx, (input_ids, target_ids) in enumerate(pbar):
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
-        attention_mask = attention_mask.to(device)
 
         with safe_autocast(enabled=True, dtype=amp_dtype):
-            logits, _ = model(input_ids, attention_mask=attention_mask)
+            logits, _ = model(input_ids)
             ce_loss = criterion(logits.reshape(-1, args.vocab_size), target_ids.reshape(-1))
             raw_ce = F.cross_entropy(
                 logits.reshape(-1, args.vocab_size),
