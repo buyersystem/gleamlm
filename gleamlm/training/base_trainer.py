@@ -39,7 +39,7 @@ def create_scaler() -> torch.amp.GradScaler | torch.cuda.amp.GradScaler:  # pyri
 def wrap_for_distributed(model: nn.Module, args: Any) -> nn.Module:
     if args.world_size > 1:
         if getattr(args, "use_fsdp", False):
-            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP  # noqa: N817
             from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
 
             from gleamlm.models.model import DecoderBlock
@@ -53,9 +53,7 @@ def wrap_for_distributed(model: nn.Module, args: Any) -> nn.Module:
                 use_orig_params=True,
             )
         else:
-            model = nn.parallel.DistributedDataParallel(
-                model, device_ids=[args.local_rank]
-            )
+            model = nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
     return model
 
 
@@ -201,6 +199,9 @@ def train_one_epoch(
     pad_id: int = criterion.ignore_index  # type: ignore[assignment]
     amp_dtype = torch.bfloat16 if getattr(args, "bf16", False) else torch.float16
 
+    accum_raw_ce = 0.0
+    micro_count = 0
+
     pbar = (
         tqdm(train_loader, desc=f"Epoch {epoch}", mininterval=5)
         if args.local_rank == 0
@@ -220,6 +221,8 @@ def train_one_epoch(
                 ignore_index=pad_id,
                 label_smoothing=0.0,
             )
+            accum_raw_ce += raw_ce.item()
+            micro_count += 1
             log_z = torch.logsumexp(logits, dim=-1)
             z_loss = z_loss_weight * (log_z**2).mean()
             loss = (ce_loss + z_loss) / accumulate_grad
@@ -234,15 +237,17 @@ def train_one_epoch(
             scaler.scale(loss).backward()
 
         if is_accum_step:
-            cur_loss = raw_ce.item()
+            cur_loss = accum_raw_ce / micro_count
 
             if torch.isnan(raw_ce) or torch.isinf(raw_ce):
                 print(f"\n[FATAL] NaN/Inf loss at step {global_step}, aborting")
                 raise RuntimeError(f"NaN/Inf loss at step {global_step}")
 
             if prev_loss is not None and cur_loss > prev_loss * spike_threshold:
-                print(f"\n[WARN] Loss spike at step {global_step}: "
-                      f"{prev_loss:.3f} -> {cur_loss:.3f}, skipping update")
+                print(
+                    f"\n[WARN] Loss spike at step {global_step}: "
+                    f"{prev_loss:.3f} -> {cur_loss:.3f}, skipping update"
+                )
                 optimizer.zero_grad()
                 prev_loss = cur_loss
                 continue
@@ -262,6 +267,8 @@ def train_one_epoch(
 
             global_step += 1
             prev_loss = cur_loss
+            accum_raw_ce = 0.0
+            micro_count = 0
 
             if isinstance(pbar, tqdm):
                 pbar.set_postfix(

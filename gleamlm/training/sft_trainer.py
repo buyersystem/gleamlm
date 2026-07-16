@@ -181,14 +181,9 @@ class SFTDataset(Dataset):
 
     def _multi_turn_item(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         messages = self.data[idx]["messages"]
-        last = messages[-1]
 
-        full_ids = self._encode(
-            format_chatml(messages, add_generation_prompt=False)
-        )
-        prompt_ids = self._encode(
-            format_chatml(messages[:-1], add_generation_prompt=True)
-        )
+        full_ids = self._encode(format_chatml(messages, add_generation_prompt=False))
+        prompt_ids = self._encode(format_chatml(messages[:-1], add_generation_prompt=True))
 
         P = len(prompt_ids)
 
@@ -223,8 +218,9 @@ class SFTDataset(Dataset):
         return self._single_turn_item(idx)
 
     def collate_fn(
-        self, batch: list[tuple[torch.Tensor, torch.Tensor]],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self,
+        batch: list[tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         input_ids = torch.stack([item[0] for item in batch])
         labels = torch.stack([item[1] for item in batch])
         return input_ids, labels
@@ -262,7 +258,9 @@ def train_one_epoch_sft(
 
         loss = loss / args.accumulate_grad
         world_size = getattr(args, "world_size", 1)
-        is_accum = (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(train_loader)
+        is_accum = (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(
+            train_loader
+        )
         sync_ctx = model.no_sync() if (not is_accum and world_size > 1) else nullcontext()
         with sync_ctx:
             scaler.scale(loss).backward()

@@ -57,7 +57,7 @@ class TestSFT:
 
             loader = DataLoader(ds, batch_size=2, collate_fn=ds.collate_fn)
             batch = next(iter(loader))
-            assert len(batch) == 3  # input_ids, labels, attention_mask
+            assert len(batch) == 2  # input_ids, labels
 
     def test_sft_forward_backward(self):
         set_seed(42)
@@ -81,7 +81,7 @@ class TestSFT:
             optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
 
             model.train()
-            for step, (input_ids, labels, _attn_mask) in enumerate(loader):
+            for step, (input_ids, labels) in enumerate(loader):
                 if step >= 10:
                     break
                 input_ids = input_ids.to(device)

@@ -106,6 +106,11 @@ _CONFIG_VALIDATORS = {
         "z_loss_weight": (float, lambda v: v >= 0),
         "bf16": (bool, None),
     },
+    "data": {
+        "data_dir": (str, lambda v: len(v) > 0),
+        "tokenizer_path": (str, lambda v: len(v) > 0),
+        "checkpoint_dir": (str, lambda v: len(v) > 0),
+    },
 }
 
 

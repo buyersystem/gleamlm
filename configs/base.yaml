@@ -19,7 +19,7 @@ training:
 
 # ---- 学习率 (Cosine) ----
 lr:
-  type: cosine                  # nano / lite 共用 Cosine Annealing + Warmup
+  type: cosine                  # lite 默认 Cosine Annealing + Warmup
   lr: 0.0003
   warmup_ratio: 0.01
   min_lr_ratio: 0.1
@@ -60,7 +60,7 @@ advanced:
   z_loss_weight: 0.0            # lite 覆盖为 1e-4
   bf16: true
   pin_memory: true
-  num_workers: 0
+  num_workers: 0                # Windows + memmap: 0 is fastest; Linux: try 2-4
 
 # ---- SFT 微调 ----
 sft:

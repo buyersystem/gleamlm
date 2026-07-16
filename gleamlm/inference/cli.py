@@ -71,7 +71,6 @@ def generate(
     print(f"{'=' * 60}")
     print("Generated: ", end="", flush=True)
 
-    prev_len = 0
     last_chunk = prompt
     for chunk in streamer.generate_text(
         model,
@@ -83,8 +82,7 @@ def generate(
         repetition_penalty,
         stop_on_endoftext=sft_mode,
     ):
-        new_text = chunk[prev_len:]
-        prev_len = len(chunk)
+        new_text = chunk
         last_chunk = chunk
         if sft_mode and stop_token and stop_token in new_text:
             new_text = new_text.split(stop_token)[0] + stop_token

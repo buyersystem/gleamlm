@@ -131,9 +131,8 @@ def main():
     )
     parser.add_argument("--tokenizer_path", type=str, default=DEFAULT_TOKENIZER_PATH)
     parser.add_argument("--output", type=str, default="data/dpo_data.jsonl", help="输出文件")
-    parser.add_argument("--limit", type=int, default=0, help="最大样本数")
-    # 生成参数
     parser.add_argument("--limit", type=int, default=0, help="最大样本数 (0=all)")
+    # 生成参数
     parser.add_argument(
         "--temperature", type=float, default=0.95, help="温度 (单轮 default=0.8, 多轮 default=0.95)"
     )

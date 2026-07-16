@@ -425,7 +425,7 @@ def test_flash_attn_with_attention_mask():
 
 
 def test_causal_mask_matrix_values():
-    """_create_attn_mask 返回值：未来位置应被 mask"""
+    """_create_causal_mask 返回值：未来位置应被 mask"""
     model = GleamLMModel(
         vocab_size=12002,
         d_model=256,
@@ -435,7 +435,7 @@ def test_causal_mask_matrix_values():
         d_ff=682,
         max_seq_len=128,
     )
-    mask = model._create_attn_mask(seq_len=5, device="cpu")
+    mask = model._create_causal_mask(seq_len=5, device="cpu")
     assert mask.shape == (1, 1, 5, 5)
     assert mask[0, 0, 2, 3] == float("-inf"), "position 2 should not attend to position 3"
     assert mask[0, 0, 2, 2] == 0.0, "position 2 should attend to itself"
@@ -542,9 +542,8 @@ def test_rope_cache_exceeds_preallocation():
     )
     model.eval()
     x = torch.randint(0, VOCAB_SIZE, (1, 129))
-    with pytest.raises(ValueError):
-        with torch.no_grad():
-            model(x)
+    with pytest.raises(ValueError), torch.no_grad():
+        model(x)
 
 
 # ---- chunked prefill ----
