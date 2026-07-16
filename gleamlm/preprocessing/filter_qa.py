@@ -85,10 +85,11 @@ def filter_qa(
             fout.write(line)
             kept += 1
 
-            if total % 500000 == 0:
+            if total % 100000 == 0:
                 print(
                     f"  Processed {total:,} lines, kept {kept:,} "
-                    f"(short={skipped_short:,} url={skipped_url:,} dup={skipped_dup:,})"
+                    f"(short={skipped_short:,} url={skipped_url:,} dup={skipped_dup:,})",
+                    flush=True,
                 )
 
     pct = 100 * kept / max(1, total)

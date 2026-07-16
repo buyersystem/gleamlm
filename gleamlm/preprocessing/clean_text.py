@@ -119,7 +119,7 @@ def clean_file(
                 kept += 1
 
             if total % 100000 == 0:
-                print(f"  Processed {total} lines, kept {kept} ({100 * kept / max(1, total):.1f}%)")
+                print(f"  Processed {total} lines, kept {kept} ({100 * kept / max(1, total):.1f}%)", flush=True)
 
     print(f"Done: {total} lines processed, {kept} kept ({100 * kept / max(1, total):.1f}%)")
     print(f"Output: {output_path}")

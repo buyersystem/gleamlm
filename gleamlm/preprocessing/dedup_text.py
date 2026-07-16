@@ -147,10 +147,11 @@ def dedup_file(
                 fout.write(text + "\n")
                 kept += 1
 
-            if total % 500000 == 0:
+            if total % 100000 == 0:
                 print(
                     f"  Processed {total:,} lines, kept {kept:,}, "
-                    f"dedup {deduped:,} ({100 * deduped / total:.1f}%)"
+                    f"dedup {deduped:,} ({100 * deduped / total:.1f}%)",
+                    flush=True,
                 )
 
     pct = 100 * kept / max(1, total)

@@ -18,7 +18,7 @@ import argparse
 import os
 
 from gleamlm.preprocessing.clean_text import clean_file
-from gleamlm.preprocessing.dedup_text import dedup_file
+from gleamlm.preprocessing.dedup_text import dedup_file, normalize, simhash
 from gleamlm.preprocessing.filter_qa import filter_qa
 
 SOURCES = [
@@ -46,6 +46,21 @@ def _clean_path(input_dir, name):
 
 def _final_path(input_dir, name):
     return os.path.join(input_dir, f"{name}_dedup.txt")
+
+
+def _load_fingerprints(filepath: str) -> set[int]:
+    fps: set[int] = set()
+    size_mb = os.path.getsize(filepath) / 1e6
+    print(f"  Loading fingerprints from {os.path.basename(filepath)} ({size_mb:.0f} MB)...", flush=True)
+    with open(filepath, encoding="utf-8") as f:
+        for i, line in enumerate(f, 1):
+            if i % 200000 == 0:
+                print(f"    {i:,} lines scanned, {len(fps):,} fingerprints", flush=True)
+            text = normalize(line.strip())
+            if text:
+                fps.add(simhash(text))
+    print(f"    Done: {len(fps):,} fingerprints loaded", flush=True)
+    return fps
 
 
 def main():
@@ -139,7 +154,12 @@ def main():
                 print(f"  Skip {s['name']}: {src} not found")
                 continue
             if os.path.exists(final) and os.path.getsize(final) > 0:
-                print(f"  Skip {s['name']}: {final} exists")
+                if s["type"] != "qa":
+                    fps = _load_fingerprints(final)
+                    source_fingerprints[s["name"]] = fps
+                    print(f"  Skip {s['name']}: {final} exists ({len(fps):,} fingerprints loaded)")
+                else:
+                    print(f"  Skip {s['name']}: {final} exists")
                 continue
 
             if s["type"] == "qa":
