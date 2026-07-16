@@ -5,15 +5,16 @@
 extends: base.yaml
 
 training:
-  epochs: 5
+  epochs: 1
   batch_size: 8
   accumulate_grad: 8
-  max_train_chars: 5300000000
+  max_train_chars: 2600000000
 
 lr:
-  type: cosine
-  lr: 0.0003
-  warmup_ratio: 0.01
+  type: wsd
+  lr: 0.0004
+  warmup_ratio: 0.02
+  stable_ratio: 0.80
   min_lr_ratio: 0.1
 
 model:
@@ -47,8 +48,8 @@ dpo:
   data_path: data/nano/dpo/dpo_data.jsonl
 
 data_sources:
-  - {name: edu, type: text, ratio: 0.35}
-  - {name: news, type: news, ratio: 0.20}
-  - {name: wiki, type: text, ratio: 0.20}
-  - {name: baike, type: text, ratio: 0.15}
-  - {name: qa, type: qa, ratio: 0.10}
+  - {name: edu, type: text, ratio: 0.55}
+  - {name: news, type: news, ratio: 0.05}
+  - {name: wiki, type: text, ratio: 0.15}
+  - {name: baike, type: text, ratio: 0.10}
+  - {name: qa, type: qa, ratio: 0.15}
