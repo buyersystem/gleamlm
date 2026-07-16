@@ -101,7 +101,10 @@ def _parse_cli_overrides(cfg_dict: dict) -> dict:
                 arg_type = str if isinstance(v, bool) else (type(v) if v is not None else str)
                 parser.add_argument(f"--{full_key}", type=arg_type, default=None)
                 if prefix in NO_PREFIX:
-                    parser.add_argument(f"--{k}", type=arg_type, default=None, dest=full_key)
+                    try:
+                        parser.add_argument(f"--{k}", type=arg_type, default=None, dest=full_key)
+                    except argparse.ArgumentError:
+                        pass
 
     flatten(cfg_dict)
 
@@ -233,15 +236,10 @@ def to_namespace(cfg: _DictWrapper) -> argparse.Namespace:
             if section_name in NO_PREFIX:
                 for k, v in section_data.items():
                     if isinstance(v, dict):
-                        result.update(_flatten_prefix(v, k))
+                        for k2, v2 in v.items():
+                            result.setdefault(k2, v2)
                     else:
-                        if k in result:
-                            warnings.warn(
-                                f"[to_namespace] 键冲突: '{k}' 被 section '{section_name}' 覆盖，"
-                                f"原值来自另一 section",
-                                stacklevel=2,
-                            )
-                        result[k] = v
+                        result.setdefault(k, v)
             else:
                 prefixed = _flatten_prefix(section_data, section_name)
                 for k in prefixed:

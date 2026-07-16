@@ -132,6 +132,7 @@ def main():
         tokenizer,
         args.max_seq_len,
         "valid",
+        max_chars=getattr(args, "max_train_chars", None),
         augment=False,
         ids_prefix=getattr(args, "ids_prefix", ""),
     )

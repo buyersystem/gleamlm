@@ -144,8 +144,8 @@ def collate_fn(
 
     batch_tensor = torch.stack(padded)
 
-    input_ids = batch_tensor[:, :-1]
-    target_ids = batch_tensor[:, 1:]
+    input_ids = batch_tensor[:, :-1].contiguous()
+    target_ids = batch_tensor[:, 1:].contiguous()
     attention_mask = (input_ids != pad_id).to(dtype=torch.long)
 
     return input_ids, target_ids, attention_mask
