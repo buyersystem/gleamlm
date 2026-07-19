@@ -9,9 +9,9 @@ from torch.utils.data import DataLoader
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import set_seed
-from gleamlm.training.dpo_trainer import DPODataset, compute_log_probs, dpad_collate, dpo_loss
-from gleamlm.training.sft_trainer import SFTDataset, evaluate_sft
+from gleamlm.trainer.base_trainer import set_seed
+from gleamlm.trainer.dpo_trainer import DPODataset, compute_log_probs, dpad_collate, dpo_loss
+from gleamlm.trainer.sft_trainer import SFTDataset, evaluate_sft
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 VOCAB_SIZE = 12002

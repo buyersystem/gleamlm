@@ -24,10 +24,10 @@ except ImportError:
     SummaryWriter = None
     TB_AVAILABLE = False
 
-from gleamlm.dataset.dataset import LMDataset, collate_fn
+from gleamlm.data.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import (
+from gleamlm.trainer.base_trainer import (
     create_optimizer_and_scheduler,
     create_scaler,
     evaluate,

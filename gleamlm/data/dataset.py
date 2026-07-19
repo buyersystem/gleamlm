@@ -129,9 +129,7 @@ class LMDataset(Dataset):
         return tensor
 
 
-def collate_fn(
-    batch: list[torch.Tensor], pad_id: int
-) -> tuple[torch.Tensor, torch.Tensor]:
+def collate_fn(batch: list[torch.Tensor], pad_id: int) -> tuple[torch.Tensor, torch.Tensor]:
     """Padding to max within-batch length → input / target"""
     max_len = max(len(sample) for sample in batch)
 

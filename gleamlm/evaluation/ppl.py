@@ -1,4 +1,4 @@
-"""PPL (Perplexity) 评估"""
+"""Perplexity evaluation."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from gleamlm.dataset.dataset import LMDataset, collate_fn
+from gleamlm.data.dataset import LMDataset, collate_fn
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 
 
 @dataclass
 class PPLResult:
-    """PPL 评估结果"""
+    """PPL evaluation result."""
 
     loss: float
     ppl: float
@@ -119,7 +119,7 @@ def evaluate_ppl(
     world_size: int = 1,
     local_rank: int = 0,
 ) -> PPLResult:
-    """评估模型在指定数据集上的困惑度。"""
+    """Evaluate model perplexity on a dataset."""
     ds = LMDataset(data_dir, tokenizer, max_seq_len, dataset, ids_prefix=ids_prefix, augment=False)
 
     if world_size > 1:
@@ -170,7 +170,7 @@ def evaluate_multiple(
     datasets: list[str] | None = None,
     **kwargs: Any,
 ) -> dict[str, PPLResult]:
-    """对多个数据集依次评估，返回 {name: PPLResult}。"""
+    """Evaluate perplexity on multiple datasets."""
     if datasets is None:
         datasets = ["valid", "test"]
 

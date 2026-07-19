@@ -13,8 +13,8 @@ import sys
 
 import torch
 
-from gleamlm.deploy.quantize import extract_config
 from gleamlm.models.model import GleamLMModel
+from gleamlm.utils.config import extract_checkpoint_config
 
 
 def export_safetensors(checkpoint_path: str, output_dir: str) -> None:
@@ -26,7 +26,7 @@ def export_safetensors(checkpoint_path: str, output_dir: str) -> None:
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
-    config = extract_config(ckpt)
+    config = extract_checkpoint_config(ckpt)
     config["dropout"] = 0.0
 
     model = GleamLMModel(**config)
@@ -42,9 +42,7 @@ def export_safetensors(checkpoint_path: str, output_dir: str) -> None:
         model = model.half()
 
     os.makedirs(output_dir, exist_ok=True)
-    safetensors.torch.save_file(
-        model.state_dict(), os.path.join(output_dir, "model.safetensors")
-    )
+    safetensors.torch.save_file(model.state_dict(), os.path.join(output_dir, "model.safetensors"))
 
     config["tokenizer_path"] = "tokenizer/"
     with open(os.path.join(output_dir, "config.json"), "w", encoding="utf-8") as f:
@@ -54,7 +52,7 @@ def export_safetensors(checkpoint_path: str, output_dir: str) -> None:
     file_size = os.path.getsize(os.path.join(output_dir, "model.safetensors"))
     print(f"Exported {total_params / 1e6:.1f}M params -> {output_dir}")
     print(f"  model.safetensors: {file_size / 1024 / 1024:.1f} MB")
-    print(f"  config.json")
+    print("  config.json")
 
 
 def main() -> None:

@@ -184,10 +184,10 @@ def train_one_epoch(
     writer: Any,
     scaler: Any,
 ) -> tuple[float, int]:
-    """训练一个 epoch，支持 AMP + 梯度累积 + Z-Loss + DDP。
+    """Train one epoch with AMP, gradient accumulation, Z-Loss, and DDP.
 
-    criterion: 带 label_smoothing 的 CrossEntropyLoss（用于反向传播）。
-    日志和返回的 loss 使用无平滑 raw CE，保证与 eval 可比。
+    criterion: CrossEntropyLoss with label_smoothing for backprop.
+    Logged/returned loss uses unsmoothed raw CE for eval comparability.
     """
     model.train()
     total_raw_ce = 0.0

@@ -2,7 +2,7 @@
 
 import torch
 
-from gleamlm.dataset.dataset import collate_fn
+from gleamlm.data.dataset import collate_fn
 
 
 def test_collate_fn_basic(tokenizer):

@@ -1,4 +1,4 @@
-"""PyTorch 工具函数 — 跨模块复用的通用 helper"""
+"""PyTorch utility functions."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import torch
 def get_lr_cosine(
     step: int, total_steps: int, warmup_ratio: float = 0.01, min_lr_ratio: float = 0.1
 ) -> float:
-    """Cosine Annealing + Warmup 学习率调度，返回乘数 0~1"""
+    """Cosine annealing with warmup. Returns multiplier in [0, 1]."""
     warmup_steps = int(total_steps * warmup_ratio)
 
     if step < warmup_steps:
@@ -29,7 +29,7 @@ def get_lr_wsd(
     stable_ratio: float = 0.80,
     min_lr_ratio: float = 0.05,
 ) -> float:
-    """WSD 学习率调度 (Warmup → Stable → Decay)，返回乘数 0~1"""
+    """WSD scheduler. Returns multiplier in [0, 1]."""
     warmup_steps = int(total_steps * warmup_ratio)
     stable_steps = int(total_steps * stable_ratio)
     decay_steps = total_steps - warmup_steps - stable_steps
@@ -47,7 +47,7 @@ def get_lr_wsd(
 def safe_autocast(
     enabled: bool = True, *, dtype: torch.dtype = torch.bfloat16
 ) -> Generator[None, None, None]:
-    """安全的 autocast 上下文管理器，自动选择 CUDA/CPU 后端。"""
+    """Safe autocast context manager with automatic backend selection."""
     if not enabled:
         yield
         return

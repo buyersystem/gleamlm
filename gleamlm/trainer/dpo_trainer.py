@@ -17,10 +17,10 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generate import generate_response
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.chatml import format_chatml
 from gleamlm.utils.torch_utils import safe_autocast
 
 

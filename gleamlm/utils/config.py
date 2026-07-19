@@ -1,4 +1,4 @@
-"""GleamLM YAML 配置加载器"""
+"""YAML config loader with inheritance and validation."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from importlib.resources import files
 from typing import Any
 
 import yaml
+
+from gleamlm.types import ConfigValidationError
 
 DEFAULT_TOKENIZER_PATH = str(files("gleamlm") / "tokenizer" / "checkpoints" / "bbpe_12k")
 
@@ -132,7 +134,43 @@ def _validate_config(cfg_dict: dict[str, Any]) -> None:
             if validator is not None and not validator(val):
                 errors.append(f"{section}.{key}: 值 {val!r} 超出有效范围")
     if errors:
-        raise ValueError("配置校验失败:\n" + "\n".join(f"  {e}" for e in errors))
+        raise ConfigValidationError("配置校验失败:\n" + "\n".join(f"  {e}" for e in errors))
+
+
+def extract_checkpoint_config(checkpoint: dict) -> dict[str, Any]:
+    if "args" in checkpoint:
+        args = checkpoint["args"]
+        return {
+            "vocab_size": getattr(args, "vocab_size", 12002),
+            "d_model": getattr(args, "d_model", 768),
+            "num_layers": getattr(args, "num_layers", 12),
+            "num_heads": getattr(args, "num_heads", 12),
+            "num_kv_heads": getattr(args, "num_kv_heads", 6),
+            "d_ff": getattr(args, "d_ff", 2048),
+            "dropout": 0.0,
+            "max_seq_len": getattr(args, "max_seq_len", 2048),
+            "pad_token_id": getattr(args, "pad_token_id", 0),
+            "tie_weights": getattr(args, "tie_weights", True),
+            "use_flash_attn": getattr(args, "use_flash_attn", False),
+            "use_gradient_checkpointing": getattr(args, "use_gradient_checkpointing", False),
+        }
+    if "config" in checkpoint:
+        cfg = checkpoint["config"]
+        return {
+            "vocab_size": cfg.get("vocab_size", 12002),
+            "d_model": cfg.get("d_model", 768),
+            "num_layers": cfg.get("num_layers", 12),
+            "num_heads": cfg.get("num_heads", 12),
+            "num_kv_heads": cfg.get("num_kv_heads", 6),
+            "d_ff": cfg.get("d_ff", 2048),
+            "dropout": 0.0,
+            "max_seq_len": cfg.get("max_seq_len", 2048),
+            "pad_token_id": cfg.get("pad_token_id", 0),
+            "tie_weights": cfg.get("tie_weights", True),
+            "use_flash_attn": cfg.get("use_flash_attn", False),
+            "use_gradient_checkpointing": cfg.get("use_gradient_checkpointing", False),
+        }
+    raise ConfigValidationError("checkpoint 缺少模型结构信息，需包含 'args' 或 'config' 字段")
 
 
 def load_config(config_file: str) -> _DictWrapper:
@@ -144,7 +182,6 @@ def load_config(config_file: str) -> _DictWrapper:
 def cfg_to_namespace(cfg: _DictWrapper, root_dir: str) -> argparse.Namespace:
     c = cfg
     return argparse.Namespace(
-        # ── model ──
         d_model=c.model.d_model,
         num_layers=c.model.num_layers,
         num_heads=c.model.num_heads,
@@ -157,7 +194,6 @@ def cfg_to_namespace(cfg: _DictWrapper, root_dir: str) -> argparse.Namespace:
         use_flash_attn=getattr(c.model, "use_flash_attn", False),
         use_qk_norm=getattr(c.model, "use_qk_norm", True),
         use_gradient_checkpointing=getattr(c.model, "use_gradient_checkpointing", False),
-        # ── training ──
         seed=c.training.seed,
         epochs=c.training.epochs,
         batch_size=c.training.batch_size,
@@ -169,28 +205,23 @@ def cfg_to_namespace(cfg: _DictWrapper, root_dir: str) -> argparse.Namespace:
         eval_interval=c.training.eval_interval,
         save_interval=c.training.save_interval,
         max_train_chars=c.training.max_train_chars,
-        # ── lr ──
         lr=c.lr.lr,
         type=c.lr.type,
         warmup_ratio=c.lr.warmup_ratio,
         min_lr_ratio=c.lr.min_lr_ratio,
         stable_ratio=getattr(c.lr, "stable_ratio", 0.0),
-        # ── data (paths resolved) ──
         data_dir=resolve_relative_path(root_dir, c.data.data_dir),
         tokenizer_path=resolve_relative_path(root_dir, c.data.tokenizer_path),
         checkpoint_dir=resolve_relative_path(root_dir, c.data.checkpoint_dir),
         ids_prefix=c.data.ids_prefix,
         load_checkpoint=getattr(c.data, "load_checkpoint", None),
-        # ── advanced ──
         z_loss_weight=c.advanced.z_loss_weight,
         bf16=c.advanced.bf16,
         pin_memory=c.advanced.pin_memory,
         num_workers=c.advanced.num_workers,
-        # ── optimizer (prefixed) ──
         optimizer_type=c.optimizer.type,
         optimizer_betas=c.optimizer.betas,
         optimizer_eps=c.optimizer.eps,
-        # ── sft (prefixed) ──
         sft_epochs=c.sft.epochs,
         sft_batch_size=c.sft.batch_size,
         sft_accumulate_grad=c.sft.accumulate_grad,
@@ -200,7 +231,6 @@ def cfg_to_namespace(cfg: _DictWrapper, root_dir: str) -> argparse.Namespace:
         sft_max_seq_len=c.sft.max_seq_len,
         sft_data_path=c.sft.data_path,
         sft_inject_system_ratio=getattr(c.sft, "inject_system_ratio", 0.2),
-        # ── dpo (prefixed) ──
         dpo_epochs=c.dpo.epochs,
         dpo_batch_size=c.dpo.batch_size,
         dpo_accumulate_grad=c.dpo.accumulate_grad,
@@ -210,6 +240,5 @@ def cfg_to_namespace(cfg: _DictWrapper, root_dir: str) -> argparse.Namespace:
         dpo_warmup_ratio=getattr(c.dpo, "warmup_ratio", 0.02),
         dpo_min_lr_ratio=getattr(c.dpo, "min_lr_ratio", 0.05),
         dpo_data_path=c.dpo.data_path,
-        # ── distributed (prefixed) ──
         distributed_backend=c.distributed.backend,
     )

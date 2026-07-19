@@ -10,11 +10,11 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import Any
 
 import torch
 
 from gleamlm.models.model import GleamLMModel
+from gleamlm.utils.config import extract_checkpoint_config
 
 ARCH_KEYS = [
     "vocab_size",
@@ -29,42 +29,6 @@ ARCH_KEYS = [
 ]
 
 
-def extract_config(checkpoint: dict) -> dict[str, Any]:
-    if "args" in checkpoint:
-        args = checkpoint["args"]
-        return {
-            "vocab_size": getattr(args, "vocab_size", 12002),
-            "d_model": getattr(args, "d_model", 768),
-            "num_layers": getattr(args, "num_layers", 12),
-            "num_heads": getattr(args, "num_heads", 12),
-            "num_kv_heads": getattr(args, "num_kv_heads", 6),
-            "d_ff": getattr(args, "d_ff", 2048),
-            "dropout": 0.0,
-            "max_seq_len": getattr(args, "max_seq_len", 2048),
-            "pad_token_id": getattr(args, "pad_token_id", 0),
-            "tie_weights": False,
-            "use_flash_attn": getattr(args, "use_flash_attn", False),
-        }
-    if "config" in checkpoint:
-        cfg = checkpoint["config"]
-        return {
-            "vocab_size": cfg.get("vocab_size", 12002),
-            "d_model": cfg.get("d_model", 768),
-            "num_layers": cfg.get("num_layers", 12),
-            "num_heads": cfg.get("num_heads", 12),
-            "num_kv_heads": cfg.get("num_kv_heads", 6),
-            "d_ff": cfg.get("d_ff", 2048),
-            "dropout": 0.0,
-            "max_seq_len": cfg.get("max_seq_len", 2048),
-            "pad_token_id": cfg.get("pad_token_id", 0),
-            "tie_weights": False,
-            "use_flash_attn": cfg.get("use_flash_attn", False),
-        }
-    raise ValueError(
-        "Checkpoint 缺少模型结构信息。请确保 checkpoint 包含 'args' 或 'config' 字段。"
-    )
-
-
 def quantize_to_fp16(input_path: str, output_path: str) -> None:
     """Convert FP32 model to FP16 and save.
 
@@ -74,7 +38,7 @@ def quantize_to_fp16(input_path: str, output_path: str) -> None:
     print(f"Loading checkpoint: {input_path}")
     checkpoint = torch.load(input_path, map_location="cpu", weights_only=False)
 
-    config = extract_config(checkpoint)
+    config = extract_checkpoint_config(checkpoint)
 
     model = GleamLMModel(**config)
     if "model_state_dict" not in checkpoint:

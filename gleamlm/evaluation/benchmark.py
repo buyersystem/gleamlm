@@ -1,4 +1,4 @@
-"""基准测试评估 — CEVAL / CMMLU / 多选题"""
+"""Benchmark evaluation: CEVAL, CMMLU."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from gleamlm.utils.torch_utils import safe_autocast
 
 @dataclass
 class BenchmarkResult:
-    """基准测试结果"""
+    """Benchmark result."""
 
     name: str  # ceval / cmmlu
     accuracy: float
@@ -42,7 +42,7 @@ class BenchmarkResult:
 def _mc_generate(
     model: GleamLMModel, tokenizer: BBPETokenizer, prompt: str, choices: list[str], device: str
 ) -> str:
-    """多选题生成：预填充 prompt KV Cache，仅对选项部分增量推理。
+    """Multi-choice generation with KV cache reuse for options.
 
     将 prompt 预填充一次得到 KV Cache，然后每个选项仅输入选项 token
     并复用 Cache，避免重复计算 prompt 部分。
@@ -80,7 +80,7 @@ def _mc_generate(
 
 
 def _load_ceval(data_dir: str) -> list[dict[str, Any]]:
-    """加载 CEVAL 数据集。支持单文件 ceval.json 或按学科拆分。"""
+    """Load CEVAL dataset."""
     ceval_file = os.path.join(data_dir, "ceval.json")
     if os.path.exists(ceval_file):
         with open(ceval_file, encoding="utf-8") as f:
@@ -101,7 +101,7 @@ def _load_ceval(data_dir: str) -> list[dict[str, Any]]:
 
 
 def _build_prompt(item: dict) -> str:
-    """构建多选题 prompt: 问题 + A/B/C/D 选项"""
+    """Build multi-choice prompt."""
     question = item.get("question", "")
     choices = []
     for key in ["A", "B", "C", "D"]:
@@ -124,7 +124,7 @@ def evaluate_ceval(
     max_samples: int | None = None,
     verbose: bool = True,
 ) -> BenchmarkResult:
-    """CEVAL 中文综合能力评估。
+    """CEVAL evaluation.
 
     数据集格式: [{question, A, B, C, D, answer, subject}, ...]
     """
@@ -190,7 +190,7 @@ def evaluate_cmmlu(
     device: str = "cuda",
     **kwargs: Any,
 ) -> BenchmarkResult:
-    """CMMLU 评估 — 同 CEVAL 格式，可直接复用。"""
+    """CMMLU evaluation, same format as CEVAL."""
     result = evaluate_ceval(model, tokenizer, data_dir, device, **kwargs)
     result.name = "cmmlu"
     return result

@@ -1,13 +1,13 @@
 """GleamLM shared training modules."""
 
-from gleamlm.training.base_trainer import (
+from gleamlm.trainer.base_trainer import (
     create_scaler,
     evaluate,
     load_checkpoint,
     save_checkpoint,
     set_seed,
 )
-from gleamlm.training.dpo_trainer import (
+from gleamlm.trainer.dpo_trainer import (
     DPODataset,
     compute_log_probs,
     dpad_collate,
@@ -16,7 +16,7 @@ from gleamlm.training.dpo_trainer import (
     get_reference_logps,
     train_one_epoch_dpo,
 )
-from gleamlm.training.sft_trainer import (
+from gleamlm.trainer.sft_trainer import (
     SYSTEM_PROMPTS,
     SFTDataset,
     evaluate_sft,

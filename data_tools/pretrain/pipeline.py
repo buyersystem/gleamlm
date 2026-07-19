@@ -18,7 +18,7 @@ import argparse
 import os
 import pickle
 
-from gleamlm.preprocess import clean_file, dedup_file, filter_qa, normalize, simhash
+from gleamlm.data.preprocess import clean_file, dedup_file, filter_qa, normalize, simhash
 
 SOURCES = [
     {"name": "edu", "type": "text"},

@@ -143,7 +143,7 @@ def test_train_save_load_roundtrip():
 
 def test_encode_invalid_type():
     tok = BBPETokenizer()
-    with pytest.raises(TypeError, match="Expected str"):
+    with pytest.raises(TypeError, match="expected string or bytes-like"):
         tok.encode(12345)
 
 

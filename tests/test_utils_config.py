@@ -3,6 +3,7 @@
 import os
 import tempfile
 
+from gleamlm.types import ConfigValidationError
 from gleamlm.utils.config import (
     _deep_merge,
     _DictWrapper,
@@ -185,7 +186,7 @@ def test_validate_config_type_error():
     bad["model"] = dict(bad["model"], d_model="512")
     import pytest
 
-    with pytest.raises(ValueError, match="d_model"):
+    with pytest.raises(ConfigValidationError, match="d_model"):
         _validate_config(bad)
 
 
@@ -194,7 +195,7 @@ def test_validate_config_range_error():
     bad["model"] = dict(bad["model"], num_layers=0)
     import pytest
 
-    with pytest.raises(ValueError, match="num_layers"):
+    with pytest.raises(ConfigValidationError, match="num_layers"):
         _validate_config(bad)
 
 
@@ -203,7 +204,7 @@ def test_validate_config_dropout_range():
     bad["model"] = dict(bad["model"], dropout=1.5)
     import pytest
 
-    with pytest.raises(ValueError, match="dropout"):
+    with pytest.raises(ConfigValidationError, match="dropout"):
         _validate_config(bad)
 
 
@@ -212,5 +213,5 @@ def test_validate_config_bool_field():
     bad["model"] = dict(bad["model"], tie_weights=1)
     import pytest
 
-    with pytest.raises(ValueError, match="tie_weights"):
+    with pytest.raises(ConfigValidationError, match="tie_weights"):
         _validate_config(bad)

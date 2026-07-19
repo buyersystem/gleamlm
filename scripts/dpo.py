@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import create_scaler, set_seed
-from gleamlm.training.dpo_trainer import (
+from gleamlm.trainer.base_trainer import create_scaler, set_seed
+from gleamlm.trainer.dpo_trainer import (
     DPODataset,
     dpad_collate,
     evaluate_dpo,

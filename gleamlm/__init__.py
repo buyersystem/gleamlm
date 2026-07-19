@@ -3,6 +3,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 
 from .models.model import GleamLMModel
+from .utils.config import extract_checkpoint_config
 
 try:
     __version__ = version("gleamlm")
@@ -13,7 +14,6 @@ except PackageNotFoundError:
 def load_model_for_inference(
     model_path: str, device: str = "cuda", checkpoint: dict | None = None
 ) -> tuple[GleamLMModel, dict]:
-    """从 checkpoint 加载模型用于推理/评估。"""
     import torch
 
     if checkpoint is None:
@@ -22,30 +22,14 @@ def load_model_for_inference(
         except TypeError:
             checkpoint = torch.load(model_path, map_location=device)
 
+    config = extract_checkpoint_config(checkpoint)
+
     if "args" in checkpoint:
-        args = checkpoint["args"]
-        tokenizer_path = getattr(args, "tokenizer_path", None)
-        config = {
-            "vocab_size": args.vocab_size,
-            "d_model": args.d_model,
-            "num_layers": args.num_layers,
-            "num_heads": args.num_heads,
-            "num_kv_heads": getattr(args, "num_kv_heads", args.num_heads),
-            "d_ff": args.d_ff,
-            "dropout": 0.0,
-            "max_seq_len": args.max_seq_len,
-            "pad_token_id": getattr(args, "pad_token_id", 0),
-            "tie_weights": getattr(args, "tie_weights", True),
-            "use_flash_attn": getattr(args, "use_flash_attn", False),
-            "use_gradient_checkpointing": getattr(args, "use_gradient_checkpointing", False),
-        }
+        tokenizer_path = getattr(checkpoint["args"], "tokenizer_path", None)
     elif "config" in checkpoint:
-        config = checkpoint["config"]
-        tokenizer_path = config.get("tokenizer_path", None)
+        tokenizer_path = checkpoint["config"].get("tokenizer_path", None)
     else:
-        raise ValueError(
-            "Checkpoint 缺少模型结构信息。请确保 checkpoint 包含 'args' 或 'config' 字段。"
-        )
+        tokenizer_path = None
 
     config["dropout"] = 0.0
 

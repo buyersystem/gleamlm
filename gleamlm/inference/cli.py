@@ -20,10 +20,10 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
 
 from gleamlm import load_model_for_inference
-from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.conversation import Conversation
 from gleamlm.inference.streamer import TextStreamer
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.chatml import format_chatml
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 

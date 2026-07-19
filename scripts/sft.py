@@ -14,8 +14,8 @@ from torch.utils.data import DataLoader
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import create_scaler, set_seed
-from gleamlm.training.sft_trainer import (
+from gleamlm.trainer.base_trainer import create_scaler, set_seed
+from gleamlm.trainer.sft_trainer import (
     SFTDataset,
     evaluate_sft,
     train_one_epoch_sft,

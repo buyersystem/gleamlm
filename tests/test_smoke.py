@@ -11,10 +11,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from gleamlm.dataset.dataset import LMDataset, collate_fn
+from gleamlm.data.dataset import LMDataset, collate_fn
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.training.base_trainer import set_seed
+from gleamlm.trainer.base_trainer import set_seed
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

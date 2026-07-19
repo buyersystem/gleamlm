@@ -1,4 +1,4 @@
-"""知识探针评估 — 填空测试 + 实体一致性检查"""
+"""Knowledge probe evaluation."""
 
 from __future__ import annotations
 
@@ -121,7 +121,7 @@ def _simple_generate(
 def _check_answer(
     generated: str, expected: str, hallucination_keywords: list[str] | None = None
 ) -> str:
-    """检查生成文本是否包含预期答案。返回 CORRECT / WRONG / HALLUCINATION"""
+    """Check if generated text contains the expected answer."""
     gen_lower = generated.lower().replace(" ", "")
     answers = [a.strip().lower() for a in expected.split(",")]
     for ans in answers:
@@ -145,7 +145,7 @@ def evaluate_knowledge(
     temperature: float = 0.7,
     verbose: bool = True,
 ) -> KnowledgeResult:
-    """运行知识探针评估。"""
+    """Run knowledge probe evaluation."""
     device = torch.device(device)
     if fact_prompts is None:
         fact_prompts = DEFAULT_FACT_PROMPTS

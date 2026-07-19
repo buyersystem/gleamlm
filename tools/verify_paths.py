@@ -3,7 +3,7 @@
 import argparse
 import os
 
-from gleamlm.dataset.dataset import LMDataset
+from gleamlm.data.dataset import LMDataset
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, cfg_to_namespace, load_config

@@ -1,4 +1,4 @@
-"""GleamLM Decoder-only 模型实现"""
+"""GleamLM Decoder-only Transformer model."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from gleamlm.types import PastKeyValue, PastKeyValueList
 
 
 class RMSNorm(nn.Module):
-    """RMS 归一化：x / sqrt(mean(x²) + ε) * γ"""
+    """RMS layer normalization."""
 
     def __init__(self, d_model: int, eps: float = 1e-6) -> None:
         super().__init__()
@@ -30,7 +30,6 @@ class RMSNorm(nn.Module):
 def precompute_freqs_cis(
     dim: int, max_seq_len: int, theta: float = 10000.0
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """预计算 RoPE 频率基 (cos/sin)"""
     freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
     t = torch.arange(max_seq_len, dtype=torch.float)
     freqs = torch.outer(t, freq)
@@ -43,7 +42,6 @@ def precompute_freqs_cis(
 def apply_rotary_emb(
     xq: torch.Tensor, xk: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, offset: int = 0
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """对 Q/K 施加旋转位置编码。cos/sin 长度必须 >= offset+seq_len，由调用方负责缓存扩展。"""
     seq_len = xq.size(2)
     cos = cos[offset : offset + seq_len].unsqueeze(0).unsqueeze(0)
     sin = sin[offset : offset + seq_len].unsqueeze(0).unsqueeze(0)
@@ -53,7 +51,6 @@ def apply_rotary_emb(
 
 
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
-    """将前一半和后一半维度配对旋转：dim k 与 dim k+d/2 互换并取负"""
     d2 = x.shape[-1] // 2
     x1 = x[..., :d2]
     x2 = x[..., d2:]
@@ -61,7 +58,7 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 
 class GroupedQueryAttention(nn.Module):
-    """GQA + QK-Norm + Flash Attention（可选）"""
+    """GQA with optional QK-Norm and Flash Attention."""
 
     def __init__(
         self,
@@ -171,7 +168,7 @@ class GroupedQueryAttention(nn.Module):
 
 
 class SwiGLUFFN(nn.Module):
-    """SwiGLU 前馈网络"""
+    """SwiGLU feed-forward network."""
 
     def __init__(self, d_model: int, d_ff: int, dropout: float = 0.0) -> None:
         super().__init__()
@@ -187,7 +184,7 @@ class SwiGLUFFN(nn.Module):
 
 
 class DecoderBlock(nn.Module):
-    """Decoder 层：RMSNorm → GQA → +残差 → RMSNorm → SwiGLU → +残差"""
+    """Pre-LN decoder block: RMSNorm → GQA → RMSNorm → SwiGLU."""
 
     def __init__(
         self,
@@ -227,7 +224,7 @@ class DecoderBlock(nn.Module):
 
 
 class GleamLMModel(nn.Module):
-    """V4 Deep-Narrow 架构。use_flash_attn=True 启用 PyTorch Flash Attention"""
+    """Deep-Narrow Decoder-only Transformer."""
 
     def __init__(
         self,
@@ -298,7 +295,6 @@ class GleamLMModel(nn.Module):
     def _create_causal_mask(
         self, seq_len: int, device: torch.device, offset: int = 0
     ) -> torch.Tensor:
-        """创建因果注意力掩码。offset > 0 时处理 KV cache 场景下的前文偏移。"""
         total = offset + seq_len
         mask = torch.triu(
             torch.full((seq_len, total), float("-inf"), device=device), diagonal=offset + 1

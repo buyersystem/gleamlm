@@ -1,8 +1,13 @@
-"""GleamLM 共享类型别名"""
+"""Shared type aliases."""
 
 from __future__ import annotations
 
 import torch
+
+
+class ConfigValidationError(Exception):
+    """Invalid configuration format or value."""
+
 
 PastKeyValue = tuple[torch.Tensor, torch.Tensor]
 PastKeyValueList = list[PastKeyValue]

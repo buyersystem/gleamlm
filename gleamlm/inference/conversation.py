@@ -6,10 +6,10 @@ from collections.abc import Iterator
 
 import torch
 
-from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generator import generate_tokens
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.types import PastKeyValueList
+from gleamlm.utils.chatml import format_chatml
 from gleamlm.utils.torch_utils import safe_autocast
 
 

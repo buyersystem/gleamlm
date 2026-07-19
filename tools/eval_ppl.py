@@ -6,7 +6,7 @@ import os
 import torch
 
 from gleamlm import load_model_for_inference
-from gleamlm.dataset.dataset import LMDataset, collate_fn
+from gleamlm.data.dataset import LMDataset, collate_fn
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 

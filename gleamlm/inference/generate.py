@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import torch
 
-from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generator import generate_tokens
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.chatml import format_chatml
 
 
 @torch.no_grad()

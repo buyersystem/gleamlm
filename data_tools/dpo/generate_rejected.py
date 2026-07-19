@@ -20,9 +20,9 @@ import sys
 import torch
 
 from gleamlm import load_model_for_inference
-from gleamlm.inference.chatml import format_chatml
 from gleamlm.inference.generator import generate_tokens
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.chatml import format_chatml
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 

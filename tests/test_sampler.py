@@ -3,7 +3,7 @@
 import pytest
 import torch
 
-from gleamlm.inference.sampler import sample_token
+from gleamlm.inference.generator import sample_token
 
 
 def test_temperature_one():

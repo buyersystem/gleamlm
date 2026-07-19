@@ -1,4 +1,4 @@
-"""GleamLM Byte-Level BPE Tokenizer. 基于 GPT-2 Byte-Level BPE 方案，256 字节基座 + BPE 合并规则。"""
+"""Byte-Level BPE tokenizer for GleamLM."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import re
 import time
 from collections import defaultdict
 
-# CJK 逐字 + 非 CJK 连续段预分词正则
 _PRE_TOKENIZE_RE = re.compile(
     r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]|"
     r"[\u3000-\u303f\uff00-\uffef]|"
@@ -18,11 +17,9 @@ _PRE_TOKENIZE_RE = re.compile(
 
 
 def _pre_tokenize_re(text: str) -> list[str]:
-    """正则预分词：CJK 逐字切分 + 非 CJK 连续段保持"""
     return [m.group(0) for m in _PRE_TOKENIZE_RE.finditer(text)]
 
 
-# 特殊 token：注册顺序 = ID（锁定不变）
 _SPECIAL_TOKENS = [
     "<|endoftext|>",
     "<|im_start|>",
@@ -41,9 +38,8 @@ _SPECIAL_TOKENS = [
 _NUM_SPECIAL_TOKENS = len(_SPECIAL_TOKENS)
 
 
-# BBPE Tokenizer
 class BBPETokenizer:
-    """Byte-Level BPE 分词器"""
+    """Byte-Level BPE tokenizer — CJK pre-tokenization + BPE merges."""
 
     def __init__(self) -> None:
         self.id_to_byte: dict[int, bytes] = {}
@@ -81,7 +77,6 @@ class BBPETokenizer:
         max_train_chars: int = 500_000_000,
         ratios: list[float] | None = None,
     ) -> BBPETokenizer:
-        """从文本文件训练 BBPE tokenizer"""
         tokenizer = cls()
         if ratios is None:
             ratios = [1.0 / len(text_files)] * len(text_files)
@@ -118,7 +113,7 @@ class BBPETokenizer:
         print(f"done ({time.time() - t_heap:.1f}s)")
 
         t_start = time.time()
-        pbar_interval = max(1, n_merges // 200)  # 每 0.5% 刷新进度条
+        pbar_interval = max(1, n_merges // 200)
         print(f"    Merging (pbar every {pbar_interval} steps)...", flush=True)
 
         for merge_step in range(n_merges):
@@ -126,14 +121,12 @@ class BBPETokenizer:
                 print(f"\n  No more pairs to merge at step {merge_step}")
                 break
 
-            # 惰性删除堆：跳过已失效或计数变化的条目
             while heap:
                 neg_count, best_pair = heapq.heappop(heap)
                 if best_pair not in pair_to_positions:
-                    continue  # 已移除的 pair
+                    continue
                 actual_count = len(pair_to_positions[best_pair])
                 if actual_count != -neg_count:
-                    # 计数过时，压入新值
                     heapq.heappush(heap, (-actual_count, best_pair))
                     continue
                 break
@@ -147,7 +140,6 @@ class BBPETokenizer:
                 print(f"\n  All pairs have count=1 at step {merge_step}, stopping")
                 break
 
-            # 创建新 token
             new_id = tokenizer._next_id
             tokenizer.merges[best_pair] = new_id
             tokenizer.merge_pairs[new_id] = best_pair
@@ -156,23 +148,20 @@ class BBPETokenizer:
             )
             tokenizer._next_id += 1
 
-            # 更新受影响的序列
             affected = pair_to_positions.pop(best_pair)
-            # 按 word_idx 分组，从后往前更新避免索引偏移
             by_word: dict[int, list[int]] = defaultdict(list)
             for wid, pos in affected:
                 by_word[wid].append(pos)
 
             for wid, pos_list in by_word.items():
                 seq = byte_sequences[wid]
-                pos_list.sort(reverse=True)  # 从后往前
+                pos_list.sort(reverse=True)
                 for pos in pos_list:
                     if pos >= len(seq) - 1:
                         continue
                     if (seq[pos], seq[pos + 1]) != best_pair:
                         continue
 
-                    # 移除旧 pair 索引（O(1) dict pop）
                     if pos > 0:
                         old_left = (seq[pos - 1], seq[pos])
                         if old_left in pair_to_positions:
@@ -187,22 +176,18 @@ class BBPETokenizer:
                             if not pair_to_positions[old_right]:
                                 del pair_to_positions[old_right]
 
-                    # 合并: seq[pos], seq[pos+1] → new_id
                     seq[pos] = new_id
                     del seq[pos + 1]
 
-                    # 新 pair: (seq[pos-1], new_id)（O(1) dict insert）
                     if pos > 0:
                         new_pair = (seq[pos - 1], new_id)
                         pair_to_positions[new_pair][(wid, pos - 1)] = True
                         heapq.heappush(heap, (-len(pair_to_positions[new_pair]), new_pair))
-                    # 新 pair: (new_id, seq[pos+1])
                     if pos < len(seq) - 1:
                         new_pair = (new_id, seq[pos + 1])
                         pair_to_positions[new_pair][(wid, pos)] = True
                         heapq.heappush(heap, (-len(pair_to_positions[new_pair]), new_pair))
 
-            # 进度条
             step = merge_step + 1
             if step % pbar_interval == 0 or step == n_merges:
                 pct = step / n_merges * 100
@@ -214,7 +199,6 @@ class BBPETokenizer:
                 eta_str = (
                     f"{eta / 60:.0f}m{eta % 60:02.0f}s" if eta < 3600 else f"{eta / 3600:.1f}h"
                 )
-                # 写临时文件避免 Windows GBK 编码问题
                 print(
                     f"\r  [{bar}] {pct:5.1f}% ({step}/{n_merges}) | "
                     f"pair=({best_pair[0]},{best_pair[1]}) cnt={best_count} | "
@@ -223,9 +207,8 @@ class BBPETokenizer:
                     flush=True,
                 )
 
-            # 里程碑日志（换行打印，不覆盖进度条）
             if step % 1000 == 0:
-                print()  # 换行
+                print()
 
         print(f"\n  Trained {len(tokenizer.merges)} merges, vocab_size={tokenizer._next_id}")
 
@@ -237,7 +220,6 @@ class BBPETokenizer:
     def _pre_tokenize_files(
         self, text_files: list[str], max_chars: int = 500_000_000, ratios: list[float] | None = None
     ) -> list[list[int]]:
-        """按配比从多文件中采样读取 → 预分词 → 转字节序列"""
         byte_sequences: list[list[int]] = []
         if ratios is None:
             ratios = [1.0 / len(text_files)] * len(text_files)
@@ -290,7 +272,6 @@ class BBPETokenizer:
         return byte_sequences
 
     def _pre_tokenize(self, text: str) -> list[str]:
-        """将文本拆分为 word 列表（C 级字符类正则）"""
         return self._pre_tokenize_fn(text)
 
     def _add_special_tokens(self) -> None:
@@ -323,7 +304,6 @@ class BBPETokenizer:
         self.im_end_id = self.special_tokens.get("<|im_end|>", 2)
 
     def _build_special_regex(self) -> None:
-        """构建用于切分特殊 token 的正则（按长度降序，最长匹配优先）"""
         if not self.special_tokens:
             self._special_regex = None
             return
@@ -331,7 +311,6 @@ class BBPETokenizer:
         self._special_regex: re.Pattern[str] | None = re.compile("(" + "|".join(escaped) + ")")  # type: ignore[assignment,no-redef]
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> list[int]:
-        """文本 → token ID 序列"""
 
         ids = []
         if add_bos:
@@ -343,10 +322,8 @@ class BBPETokenizer:
             if not part:
                 continue
             if part in self.special_tokens:
-                # 特殊 token → 直接映射 ID
                 ids.append(self.special_tokens[part])
             else:
-                # 普通文本 → 预分词 → 逐词 BPE 编码
                 words = self._pre_tokenize(part)
                 for word in words:
                     byte_seq = list(word.encode("utf-8"))
@@ -358,7 +335,6 @@ class BBPETokenizer:
         return ids
 
     def _apply_bpe_to_bytes(self, byte_seq: list[int]) -> list[int]:
-        """对字节序列应用 BPE 合并"""
         if not byte_seq:
             return []
 
@@ -385,7 +361,6 @@ class BBPETokenizer:
         return seq
 
     def decode(self, ids: list[int], skip_special: bool = True) -> str:
-        """Token ID 序列 → 文本"""
         byte_buffer = bytearray()
 
         for tid in ids:
@@ -401,22 +376,18 @@ class BBPETokenizer:
     def encode_batch(
         self, texts: list[str], add_bos: bool = False, add_eos: bool = False
     ) -> list[list[int]]:
-        """批量编码"""
         return [self.encode(t, add_bos=add_bos, add_eos=add_eos) for t in texts]
 
     def token_to_id(self, token: str) -> int:
-        """特殊 token 字符串 → ID"""
         return self.special_tokens.get(token, self.unk_id)
 
     def get_vocab_size(self) -> int:
-        """返回词表大小"""
         return self._next_id
 
     def __len__(self) -> int:
         return self.get_vocab_size()
 
     def save(self, save_dir: str) -> None:
-        """保存 tokenizer 到目录"""
         os.makedirs(save_dir, exist_ok=True)
 
         data = {
@@ -435,7 +406,6 @@ class BBPETokenizer:
 
     @classmethod
     def load(cls, save_dir: str) -> BBPETokenizer:
-        """从目录加载 tokenizer"""
         path = os.path.join(save_dir, "bbpe_tokenizer.json")
         if not os.path.exists(path):
             raise FileNotFoundError(f"Tokenizer not found: {path}")
