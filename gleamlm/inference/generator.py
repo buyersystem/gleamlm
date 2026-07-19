@@ -32,24 +32,7 @@ def generate_tokens(
     past_kv: PastKeyValueList | None = None,
     _kv_sink: list[PastKeyValueList | None] | None = None,
 ) -> Iterator[int]:
-    """Autoregressive token generation with KV cache.
-
-    Yields one token ID at a time. Stops when a token in `stop_ids` is produced
-    or `max_new_tokens` is reached.
-
-    Args:
-        model: The GleamLMModel (or DDP-wrapped).
-        prompt_ids: Pre-encoded prompt token IDs (without BOS/EOS padding).
-        device: torch device.
-        max_new_tokens: Maximum tokens to generate.
-        temperature, top_k, top_p, repetition_penalty: Sampling parameters.
-        penalty_window: Sliding window size for repetition penalty (0 = all tokens).
-        stop_ids: Set of token IDs that trigger generation stop. None = no early stop.
-        use_amp: If True, wraps forward pass in torch.amp.autocast.
-        amp_dtype: AMP dtype (bfloat16, float16). None = default autocast behaviour.
-        past_kv: Initial KV cache from previous turns (multi-turn conversation).
-        _kv_sink: Optional mutable list; [0] receives final KV cache after generation ends.
-    """
+    """KV Cache 自回归生成，逐 token yield。遇 stop_ids 或达 max_new_tokens 停止。"""
     model.eval()
     generated_ids: list[int] = prompt_ids.copy()
 

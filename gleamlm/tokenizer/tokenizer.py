@@ -22,8 +22,6 @@ def _pre_tokenize_re(text: str) -> list[str]:
     return [m.group(0) for m in _PRE_TOKENIZE_RE.finditer(text)]
 
 
-# （当前预分词完全由正则 _PRE_TOKENIZE_RE 完成）
-
 # 特殊 token：注册顺序 = ID（锁定不变）
 _SPECIAL_TOKENS = [
     "<|endoftext|>",
@@ -74,8 +72,6 @@ class BBPETokenizer:
     def _offset_raw_bytes(self, raw: list[int]) -> list[int]:
         return [b + self._byte_offset for b in raw]
 
-    # 训练
-
     @classmethod
     def train_from_files(
         cls,
@@ -105,19 +101,15 @@ class BBPETokenizer:
         n_merges = vocab_size - tokenizer._next_id
         print(f"  Step 2/3: Training {n_merges} BPE merges...")
 
-        # 构建 pair → 出现位置的索引（用 dict/set 实现 O(1) 增删）
         print("    Building pair index...", end=" ", flush=True)
         t_idx = time.time()
-        pair_to_positions: dict[tuple[int, int], dict[tuple[int, int], bool]] = defaultdict(
-            dict
-        )  # pair -> {(wid,pos): True}
+        pair_to_positions: dict[tuple[int, int], dict[tuple[int, int], bool]] = defaultdict(dict)
         for wid, seq in enumerate(byte_sequences):
             for i in range(len(seq) - 1):
                 pair = (seq[i], seq[i + 1])
                 pair_to_positions[pair][(wid, i)] = True
         print(f"{len(pair_to_positions):,} unique pairs ({time.time() - t_idx:.1f}s)")
 
-        # 初始化最大堆：(-count, pair)，用于 O(log P) 找最频繁 pair
         print("    Building max-heap...", end=" ", flush=True)
         t_heap = time.time()
         heap: list[tuple[int, tuple[int, int]]] = []
@@ -330,8 +322,6 @@ class BBPETokenizer:
         self.im_start_id = self.special_tokens.get("<|im_start|>", 1)
         self.im_end_id = self.special_tokens.get("<|im_end|>", 2)
 
-    # 编码 / 解码
-
     def _build_special_regex(self) -> None:
         """构建用于切分特殊 token 的正则（按长度降序，最长匹配优先）"""
         if not self.special_tokens:
@@ -341,14 +331,7 @@ class BBPETokenizer:
         self._special_regex: re.Pattern[str] | None = re.compile("(" + "|".join(escaped) + ")")  # type: ignore[assignment,no-redef]
 
     def encode(self, text: str, add_bos: bool = False, add_eos: bool = False) -> list[int]:
-        """文本 → token ID 序列
-
-        先用正则按特殊 token 边界切分文本，再对每段普通文本
-        独立预分词 + BPE 编码。这确保特殊 token 无论在 CJK
-        还是非 CJK 上下文中都能被正确识别。
-        """
-        if not isinstance(text, str):
-            raise TypeError(f"Expected str, got {type(text)}")
+        """文本 → token ID 序列"""
 
         ids = []
         if add_bos:
@@ -411,12 +394,9 @@ class BBPETokenizer:
             if tid in self.id_to_byte:
                 byte_buffer.extend(self.id_to_byte[tid])
             else:
-                # 回退到 <unk> 的字节表示
                 byte_buffer.extend(b"?")
 
         return byte_buffer.decode("utf-8", errors="replace")
-
-    # 便捷方法
 
     def encode_batch(
         self, texts: list[str], add_bos: bool = False, add_eos: bool = False
@@ -434,8 +414,6 @@ class BBPETokenizer:
 
     def __len__(self) -> int:
         return self.get_vocab_size()
-
-    # 持久化
 
     def save(self, save_dir: str) -> None:
         """保存 tokenizer 到目录"""

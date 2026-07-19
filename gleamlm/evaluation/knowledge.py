@@ -90,8 +90,7 @@ def _simple_generate(
     temperature: float = 0.7,
     top_k: int = 50,
 ) -> str:
-    if isinstance(device, str):
-        device = torch.device(device)
+    device = torch.device(device)
     prompt_ids = tokenizer.encode(prompt)
 
     stop_ids = {
@@ -138,7 +137,7 @@ def _check_answer(
 def evaluate_knowledge(
     model: GleamLMModel,
     tokenizer: BBPETokenizer,
-    device: str = "cuda",
+    device: str | torch.device = "cuda",
     fact_prompts: list[tuple[str, str]] | None = None,
     entity_probes: dict[str, list[str]] | None = None,
     hallucination_keywords: list[str] | None = None,
@@ -147,6 +146,7 @@ def evaluate_knowledge(
     verbose: bool = True,
 ) -> KnowledgeResult:
     """运行知识探针评估。"""
+    device = torch.device(device)
     if fact_prompts is None:
         fact_prompts = DEFAULT_FACT_PROMPTS
     if entity_probes is None:

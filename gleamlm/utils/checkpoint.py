@@ -12,16 +12,7 @@ def assert_same_architecture(
     current_config: dict[str, int],
     source: str = "checkpoint",
 ) -> None:
-    """Verify that checkpoint and current model architectures match.
-
-    Args:
-        checkpoint_config: Architecture params from the checkpoint (e.g. {'vocab_size': 12002, ...}).
-        current_config: Architecture params for the current model.
-        source: Label for the checkpoint source in error messages.
-
-    Raises:
-        ValueError: If any critical architecture parameter mismatches.
-    """
+    """比对 checkpoint 与当前模型的架构参数，不匹配时抛出 ValueError。"""
     critical_keys = [
         "vocab_size",
         "d_model",
