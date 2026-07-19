@@ -1,1 +1,7 @@
+# Editable install with train extras (TensorBoard)
+-e .[train]
+
+# For development: pip install -e .[train,dev]
+# For data tools:  pip install -e .[train,data]
+# For evaluation:  pip install -e .[train,data,quality,tools]
 -e .[train]
