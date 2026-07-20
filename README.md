@@ -56,98 +56,42 @@
 ```
 GleamLM/
 ├── gleamlm/                     # 共享核心库
+│   ├── api.py                   # 推理便捷入口（GleamLM 类）
+│   ├── types.py                 # 类型别名 + ConfigValidationError
+│   ├── __init__.py              # load_model_for_inference
 │   ├── models/model.py          # GleamLMModel（RMSNorm/RoPE/GQA/SwiGLU/QK-Norm）
-│   ├── tokenizer/tokenizer.py   # BBPE 12K 分词器（纯 Python 零依赖）
-│   ├── dataset/dataset.py       # LMDataset（memmap 滑动窗口 + 预分词缓存）
-│   ├── training/                # 共享训练模块（提取自 nano/lite）
-│   │   ├── base_trainer.py      # set_seed / evaluate / checkpoint save/load / optimizer/scheduler/dataloader
-│   │   ├── sft_trainer.py       # SFTDataset / train_one_epoch_sft / evaluate_sft
-│   │   └── dpo_trainer.py       # DPODataset / dpad_collate / dpo_loss / train_one_epoch_dpo
-│   ├── inference/               # KV Cache 流式生成 + 多采样策略
+│   ├── tokenizer/               # BBPE 12K 分词器（纯 Python 零依赖）
+│   ├── data/                    # 数据管线
+│   │   ├── dataset.py           # LMDataset（memmap 滑动窗口 + 预分词缓存）
+│   │   └── preprocess.py        # 清洗 / 去重 / QA过滤 / 混合切分
+│   ├── trainer/                 # 训练器
+│   │   ├── base_trainer.py      # 预训练循环（AMP/DDP/GradAccum）
+│   │   ├── sft_trainer.py       # SFTDataset + train_one_epoch_sft
+│   │   └── dpo_trainer.py       # DPODataset + dpo_loss
+│   ├── inference/               # KV Cache 流式生成
+│   │   ├── generator.py         # generate_tokens + sample_token
 │   │   ├── generate.py          # generate_response (ChatML + KV Cache)
-│   │   ├── sampler.py           # temperature / top-k / top-p / repetition_penalty
-│   │   ├── streamer.py          # TextStreamer（流式输出 + stop_on_endoftext）
-│   │   └── cli.py               # 统一推理 CLI（支持 --variant nano|lite|pro）
-│   ├── preprocessing/           # 数据预处理库
-│   │   ├── clean_text.py        # 文本清洗（HTML剥离/长度过滤/繁简转换）
-│   │   ├── dedup_text.py        # 去重（MD5 exact / prefix）
-│   │   ├── filter_qa.py         # QA 质量过滤
-│   │   └── build_dataset.py     # 多源字符加权混合 + train/valid/test 切分
-│   ├── deploy/                 # 模型部署工具
-│   │   └── quantize.py          # FP32 → FP16（变体无关，自动识别架构）
-│   └── utils/                   # 工具模块
-│       ├── config.py            # YAML 配置加载 / deep merge / CLI override
-│       ├── torch_utils.py       # Cosine LR / WSD LR / safe_autocast / Z-Loss
-│       ├── paths.py             # 统一路径常量 (get_root_dir / get_default_checkpoint_dir)
-│       └── checkpoint.py        # assert_same_architecture（checkpoint 加载前架构校验）
+│   │   ├── streamer.py          # TextStreamer（流式输出）
+│   │   ├── conversation.py      # 多轮对话管理
+│   │   └── cli.py               # 统一推理 CLI
+│   ├── evaluation/              # PPL / 知识探针 / CEVAL / CMMLU
+│   ├── deploy/                  # 量化 / Safetensors 导出
+│   └── utils/                   # config / LR调度 / chatml
 │
-├── scripts/                      # 统一训练入口（--variant nano|lite|pro）
-│   ├── train.py                  # 预训练（AMP + DDP + Cosine/WSD + 断点续训）
-│   ├── sft.py                    # SFT 指令微调（ChatML + loss mask）
-│   ├── dpo.py                    # DPO 偏好对齐（policy + 冻结 ref）
-│   └── infer.py                  # 推理（KV Cache + 交互式 + SFT 模式）
+├── scripts/                     # 训练/推理脚本
+│   ├── train.py                 # 预训练（--variant nano|lite|pro）
+│   ├── sft.py                   # SFT 指令微调
+│   ├── dpo.py                   # DPO 偏好对齐
+│   └── infer.py                 # 推理
 │
 ├── configs/                     # YAML 配置继承
-│   ├── base.yaml                # 全局默认值（含 sft/dpo 块）
-│   ├── nano.yaml                # 40M 配置
-│   ├── lite.yaml                # 87M 配置
-│   └── pro.yaml                 # 126M 配置
-│
-├── experimental/                 # 实验性工具
-│   └── gleamlm_hf_fixed.py      # HuggingFace 迁移尝试验证
-│
-├── tools/                       # 评估 + 验证工具
-│   ├── eval_ppl.py              # PPL 评估
-│   ├── eval_knowledge.py        # 知识评估
-│   ├── eval_layer_dropout.py    # 层 dropout 测试
-│   ├── generate_samples.py      # 文本样例生成
-│   ├── quantize.py              # 模型量化导出
-│   ├── check_ckpt.py            # Checkpoint 信息查看
-│   ├── quick_run.py             # 快速训练+验证一体化
-│   └── verify_paths.py          # 路径验证
+│   ├── base.yaml / nano.yaml / lite.yaml / pro.yaml
 │
 ├── data_tools/                  # 数据获取 & SFT/DPO 数据生成
-│   ├── pretrain/                # 预训练数据管线
-│   │   ├── download.py          # 多源数据下载
-│   │   ├── extract_parquet.py   # Parquet → txt
-│   │   ├── pipeline.py          # 一键管道（去重→清洗→SimHash→混合切分）
-│   │   └── score.py             # 质量评分
-│   ├── sft/                     # SFT 数据生成
-│   │   ├── generate.py          # 统一入口（硬编码/API）
-│   │   ├── generate_longform.py # 长文 SFT
-│   │   ├── generate_multiturn.py# 多轮 SFT
-│   │   └── clean_format.py      # 格式清洗
-│   ├── dpo/                     # DPO 数据生成
-│   │   └── generate_rejected.py # rejected 数据生成
-│   └── shared/                  # 共享模块
-│       └── api_client.py        # DeepSeek API 客户端
-│
-├── tests/                       # 核心库测试
-│   ├── test_model.py            # 模型前向/反向/KV Cache 测试
-│   ├── test_tokenizer.py        # Tokenizer 冒烟测试
-│   ├── test_dataset.py          # 数据集和 collate_fn 测试
-│   ├── test_sampler.py          # 采样策略 / repetition_penalty 回归测试
-│   ├── test_utils_config.py     # 配置加载 / deep merge / CLI override 测试
-│   └── test_evaluation.py       # 评估模块测试
-│
-├── data/
-│   ├── nano_data/               # Nano 训练/验证/测试 + .npy 缓存
-│   ├── lite_data/               # Lite 训练/验证/测试 + .npy 缓存
-│   ├── pro_data/                # Pro 训练/验证/测试 + .npy 缓存
-│   ├── nano/                    # Nano SFT/DPO 数据
-│   ├── lite/                    # Lite SFT/DPO 数据
-│   └── pro/                     # Pro SFT/DPO 数据
-│
+├── tools/                       # 评估 + 验证工具
+├── tests/                       # 核心库测试（121 项）
 ├── checkpoints/                 # 模型输出（按变体分目录）
-│   ├── nano/
-│   │   ├── best_model.pt
-│   │   ├── sft/
-│   │   └── dpo/
-│   ├── lite/
-│   └── pro/
-│
-├── docs/                        # 开发文档
-├── requirements.txt             # Python 依赖
+├── docs/                        # 开发文档 + 课程文档
 └── README.md
 ```
 
@@ -170,13 +114,13 @@ pip install -r requirements.txt
 ```bash
 # 下载原始数据（仅首次）
 pip install py7zr kagglehub
-python data_tools/download_data.py
+python data_tools/pretrain/download.py
 
-# 一键：清洗 → 去重 → QA过滤 → 字符加权配比 → 混合切分
-python data_tools/prepare_data.py --input data/raw --output data/nano_data
+# 一键管道：清洗 → 去重 → SimHash → 字符加权配比 → 混合切分
+python data_tools/pretrain/pipeline.py
 
-# 自定义配比（字符占比）
-python data_tools/prepare_data.py --ratios 0.30 0.12 0.43 0.15
+# 选项：仅构建（不重复跑清洗/去重）
+python data_tools/pretrain/build.py --variant nano --max_chars 2600000000
 ```
 
 ### 2. 预训练
@@ -202,7 +146,9 @@ tensorboard --logdir ./checkpoints/nano/runs
 # 统一 CLI
 python scripts/infer.py --model checkpoints/nano/best_model.pt
 python scripts/infer.py --model checkpoints/lite/sft/sft_best.pt --sft  # SFT 对话
-python scripts/infer.py --model checkpoints/lite/best_model.pt  # 交互模式
+
+# API 一行入口
+python -c "from gleamlm.api import GleamLM; m = GleamLM.from_checkpoint('checkpoints/nano/best_model.pt'); print(m.generate('你好'))"
 ```
 
 ### 4. SFT 指令微调
@@ -251,7 +197,7 @@ pytest tests/ -v
 
 ### GleamLM-Nano 字符加权配比
 
-各源行均字符差异巨大（新闻 ~752 字/行 vs 维基 ~123 字/行），`prepare_data.py` 自动按字符占比换算行数配比：
+各源行均字符差异巨大（新闻 ~752 字/行 vs 维基 ~123 字/行），`build.py` 自动按字符占比换算行数配比：
 
 | 源 | 目标字符比 | 行均字符 | → 行数配比 |
 |---|---|---|---|
@@ -392,7 +338,7 @@ SFT 数据采用 DeepSeek API 蒸馏的 2300 条高质量中文问答（`data/sf
 | **B 类 · 知识回答** | 30% | 3000 | 历史（25 条基础）、地理（19 条）、科学（25 条）、文化（18 条），通过模板扩展至 3000 条 |
 | **C 类 · 创作与闲聊** | 30% | 3000 | 描写创作（夕阳、大海、星空等）、情感感悟（孤独、成长、友情等）、日常聊天、观点讨论 |
 
-数据格式为**标准 ChatML**（V4 BBPE 12K 词表原生支持 `<|im_start|>` / `<|im_end|>` 特殊 token）：
+数据格式为**标准 ChatML**（BBPE 12K 词表原生支持 `<|im_start|>` / `<|im_end|>` 特殊 token）：
 
 ```
 <|im_start|>system
@@ -425,7 +371,7 @@ python scripts/sft.py --variant nano --resume checkpoints/nano/sft/sft_epoch_1.p
 | 预计耗时 | ~55 分钟 | 单卡 12GB |
 | 续训 | `--resume PATH` | 从 checkpoint 恢复 optimizer/scheduler/scaler 状态续训 |
 
-- **ChatML + loss mask**：BBPE 原生支持 `<|im_start|>`（ID=1）、`<|im_end|>`（ID=2），无需格式绕过
+- **ChatML + loss mask**：BBPE 原生支持 `<|im_start|>`（ID=1）、`<|im_end|>`（ID=2），`<|endoftext|>`（ID=0）为文档分隔符 + PAD
 - **评估方式**：对比微调前后对同一 prompt 的生成质量，检验是否从"续写"转为"直接回答"
 
 **SFT 训练结果**（lr=5e-6, epochs=3）：
@@ -453,7 +399,7 @@ python scripts/sft.py --variant nano --resume checkpoints/nano/sft/sft_epoch_1.p
 #### DPO 偏好对齐
 
 ```bash
-python scripts/dpo.py --variant nano --model_path checkpoints/nano/sft/sft_best.pt
+python scripts/dpo.py --variant nano
 ```
 
 | 参数 | 值 | 说明 |
