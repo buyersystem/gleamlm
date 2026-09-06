@@ -78,7 +78,7 @@ class ONNXInference:
         try:
             import onnxruntime as ort
         except ImportError:
-            raise ImportError("onnxruntime not installed. pip install onnxruntime-gpu")
+            raise ImportError("onnxruntime not installed. pip install onnxruntime-gpu") from None
 
         self._sess = ort.InferenceSession(
             onnx_path,
@@ -87,13 +87,18 @@ class ONNXInference:
 
     def run(self, input_ids: torch.Tensor) -> torch.Tensor:
         result = self._sess.run(
-            ["logits"], {"input_ids": input_ids.numpy().astype("int64")},
+            ["logits"],
+            {"input_ids": input_ids.numpy().astype("int64")},
         )
         return torch.from_numpy(result[0])
 
     @torch.no_grad()
     def generate(
-        self, prompt: str, tokenizer: Any, max_new_tokens: int = 128, temperature: float = 0.0,
+        self,
+        prompt: str,
+        tokenizer: Any,
+        max_new_tokens: int = 128,
+        temperature: float = 0.0,
     ) -> str:
         input_ids = tokenizer.encode(prompt)
         for _ in range(max_new_tokens):

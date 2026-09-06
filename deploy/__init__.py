@@ -5,7 +5,7 @@ quantize.py     — FP16 / INT8 / INT4 量化 (torchao)
 export_onnx.py  — ONNX 导出 + 推理 (prefill-only)
 """
 
-from gleamlm.deploy.export import convert_checkpoint, get_vllm_config, VLLMEngine
+from gleamlm.deploy.export import VLLMEngine, convert_checkpoint, get_vllm_config
 from gleamlm.deploy.quantize import quantize_ckpt
 
 __all__ = [

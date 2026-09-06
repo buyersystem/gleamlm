@@ -67,31 +67,40 @@ def convert(megatron_ckpt: str, output_dir: str, tokenizer_dir: str | None, voca
 
     # ── 逐层 ──
     for n in range(num_layers):
-        lk = lambda s: layer_key(n, s)  # noqa: E731
         # norm（RMSNorm 无 bias）
-        hf_sd[f"model.layers.{n}.input_layernorm.weight"] = sd[lk("input_layernorm.weight")]
-        hf_sd[f"model.layers.{n}.post_attention_layernorm.weight"] = sd[lk("pre_mlp_layernorm.weight")]
+        hf_sd[f"model.layers.{n}.input_layernorm.weight"] = sd[
+            layer_key(n, "input_layernorm.weight")
+        ]
+        hf_sd[f"model.layers.{n}.post_attention_layernorm.weight"] = sd[
+            layer_key(n, "pre_mlp_layernorm.weight")
+        ]
 
         # attention: QKV 拆分（megatron Q→K→V 连续）
-        qkv = sd[lk("self_attention.linear_qkv.weight")]  # [Q+K+V, H]
+        qkv = sd[layer_key(n, "self_attention.linear_qkv.weight")]  # [Q+K+V, H]
         q_out = num_heads * (hidden_size // num_heads)
         kv_out = num_kv_heads * (hidden_size // num_heads)
-        q, k, v = qkv[:q_out], qkv[q_out:q_out + kv_out], qkv[q_out + kv_out:]
+        q, k, v = qkv[:q_out], qkv[q_out : q_out + kv_out], qkv[q_out + kv_out :]
         hf_sd[f"model.layers.{n}.self_attn.q_proj.weight"] = q
         hf_sd[f"model.layers.{n}.self_attn.k_proj.weight"] = k
         hf_sd[f"model.layers.{n}.self_attn.v_proj.weight"] = v
-        hf_sd[f"model.layers.{n}.self_attn.o_proj.weight"] = sd[lk("self_attention.linear_proj.weight")]
+        hf_sd[f"model.layers.{n}.self_attn.o_proj.weight"] = sd[
+            layer_key(n, "self_attention.linear_proj.weight")
+        ]
         # QK-Norm
-        hf_sd[f"model.layers.{n}.self_attn.q_norm.weight"] = sd[lk("self_attention.q_layernorm.weight")]
-        hf_sd[f"model.layers.{n}.self_attn.k_norm.weight"] = sd[lk("self_attention.k_layernorm.weight")]
+        hf_sd[f"model.layers.{n}.self_attn.q_norm.weight"] = sd[
+            layer_key(n, "self_attention.q_layernorm.weight")
+        ]
+        hf_sd[f"model.layers.{n}.self_attn.k_norm.weight"] = sd[
+            layer_key(n, "self_attention.k_layernorm.weight")
+        ]
 
         # MLP: gate/up 拆分（chunk 切半，与 megatron 原生 glu 一致）
-        fc1 = sd[lk("mlp.linear_fc1.weight")]
+        fc1 = sd[layer_key(n, "mlp.linear_fc1.weight")]
         half = fc1.shape[0] // 2
         gate, up = fc1[:half], fc1[half:]
         hf_sd[f"model.layers.{n}.mlp.gate_proj.weight"] = gate
         hf_sd[f"model.layers.{n}.mlp.up_proj.weight"] = up
-        hf_sd[f"model.layers.{n}.mlp.down_proj.weight"] = sd[lk("mlp.linear_fc2.weight")]
+        hf_sd[f"model.layers.{n}.mlp.down_proj.weight"] = sd[layer_key(n, "mlp.linear_fc2.weight")]
 
     # ── 最后 norm ──
     hf_sd["model.norm.weight"] = sd["decoder.final_layernorm.weight"]
@@ -126,16 +135,20 @@ def convert(megatron_ckpt: str, output_dir: str, tokenizer_dir: str | None, voca
 
     # ── safetensors（tied: 不写 lm_head，靠 tie_word_embeddings 重建）──
     from safetensors.torch import save_file
+
     save_file(hf_sd, os.path.join(output_dir, "model.safetensors"))
 
     # ── tokenizer ──
     if tokenizer_dir:
         from gleamlm.tokenizer.tokenizer import BBPETokenizer
+
         BBPETokenizer.load(tokenizer_dir).export_to_hf_format(output_dir)
 
     print(f"megatron → Qwen3 HF 导出完成: {megatron_ckpt} → {output_dir}")
-    print(f"  {num_layers}L × {hidden_size}d, GQA {num_heads}/{num_kv_heads}, "
-          f"ffn {ffn_hidden}, head_dim {head_dim}, rope_theta {rope_theta}")
+    print(
+        f"  {num_layers}L × {hidden_size}d, GQA {num_heads}/{num_kv_heads}, "
+        f"ffn {ffn_hidden}, head_dim {head_dim}, rope_theta {rope_theta}"
+    )
     print(f"  {len(hf_sd)} 个权重键（lm_head 已省略，tied 由 config 重建）")
     return output_dir
 

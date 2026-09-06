@@ -47,12 +47,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import torch
 from datasets import Dataset
 from transformers import AutoTokenizer
+from trl import GRPOConfig, GRPOTrainer
 
+from gleamlm.utils.config import extract_checkpoint_config
 from hf.hf_config import GleamLMConfig, gleamlm_config_from_core
 from hf.hf_model import GleamLMForCausalLM, load_from_checkpoint
-from gleamlm.utils.config import extract_checkpoint_config
-
-from trl import GRPOConfig, GRPOTrainer
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -77,7 +76,7 @@ def default_reward(prompts, completions, **kwargs):
     if ground_truth is not None:
         # 规则匹配: 精确命中 +1，否则 0；空回答 -1 惩罚
         rewards = []
-        for c, gt in zip(completions, ground_truth):
+        for c, gt in zip(completions, ground_truth, strict=False):
             if not c:
                 rewards.append(-1.0)
             elif gt and str(gt).strip() in c:
@@ -91,28 +90,44 @@ def default_reward(prompts, completions, **kwargs):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="GRPO RLHF for GleamLM (TRL)")
-    parser.add_argument("--model_path", type=str, required=True,
-                        help="GleamLM checkpoint (.pt) or HF model dir")
-    parser.add_argument("--config_path", type=str, default=None,
-                        help="Directory with config.json (if non-.pt model)")
-    parser.add_argument("--data_path", type=str, required=True,
-                        help="GRPO queries (JSONL: {prompt/instruction})")
+    parser.add_argument(
+        "--model_path", type=str, required=True, help="GleamLM checkpoint (.pt) or HF model dir"
+    )
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        default=None,
+        help="Directory with config.json (if non-.pt model)",
+    )
+    parser.add_argument(
+        "--data_path", type=str, required=True, help="GRPO queries (JSONL: {prompt/instruction})"
+    )
     parser.add_argument("--output_dir", type=str, default="./grpo_out")
-    parser.add_argument("--tokenizer_path", type=str, required=True,
-                        help="HF-format tokenizer dir (tokenizer.json)")
+    parser.add_argument(
+        "--tokenizer_path", type=str, required=True, help="HF-format tokenizer dir (tokenizer.json)"
+    )
     # GRPO 核心超参
-    parser.add_argument("--lr", type=float, default=1e-6,
-                        help="GRPO learning rate (通常 1e-6)")
+    parser.add_argument("--lr", type=float, default=1e-6, help="GRPO learning rate (通常 1e-6)")
     parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=4,
-                        help="每个 device 的 prompt batch size")
+    parser.add_argument(
+        "--batch_size", type=int, default=4, help="每个 device 的 prompt batch size"
+    )
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    parser.add_argument("--num_generations", type=int, default=4,
-                        help="每个 prompt 采样的 response 数量 (group_size)")
-    parser.add_argument("--beta", type=float, default=0.04,
-                        help="KL penalty 系数 (GRPO: 推荐 0.01-0.1)")
-    parser.add_argument("--max_prompt_length", type=int, default=256,
-                        help="Prompt 截断长度（GRPOConfig 无此参数，由 tokenizer truncation 控制）")
+    parser.add_argument(
+        "--num_generations",
+        type=int,
+        default=4,
+        help="每个 prompt 采样的 response 数量 (group_size)",
+    )
+    parser.add_argument(
+        "--beta", type=float, default=0.04, help="KL penalty 系数 (GRPO: 推荐 0.01-0.1)"
+    )
+    parser.add_argument(
+        "--max_prompt_length",
+        type=int,
+        default=256,
+        help="Prompt 截断长度（GRPOConfig 无此参数，由 tokenizer truncation 控制）",
+    )
     parser.add_argument("--max_completion_length", type=int, default=256)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--save_interval", type=int, default=200)

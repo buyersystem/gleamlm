@@ -22,7 +22,6 @@ import json
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -32,11 +31,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
+from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.chatml import format_chatml
+from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
 from hf.hf_config import gleamlm_config_from_core
 from hf.hf_model import GleamLMForCausalLM, load_from_checkpoint
-from gleamlm.utils.chatml import format_chatml
-from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
 
 
 class CompletionRequest(BaseModel):
@@ -47,7 +46,7 @@ class CompletionRequest(BaseModel):
     top_p: float = 0.9
     top_k: int = 50
     repetition_penalty: float = 1.15  # 对齐训练评估默认值
-    stop: Optional[list[str]] = None
+    stop: list[str] | None = None
     stream: bool = False
 
 
@@ -64,7 +63,7 @@ class ChatRequest(BaseModel):
     top_p: float = 0.9
     top_k: int = 50
     repetition_penalty: float = 1.15  # 对齐训练评估默认值
-    stop: Optional[list[str]] = None
+    stop: list[str] | None = None
     stream: bool = False
 
 
@@ -88,7 +87,7 @@ class ModelServer:
         self.model.eval()
 
         total = sum(p.numel() for p in self.model.parameters())
-        print(f"Server loaded: {total/1e6:.2f}M on {self.device}")
+        print(f"Server loaded: {total / 1e6:.2f}M on {self.device}")
 
 
 server = ModelServer()
@@ -123,9 +122,7 @@ def _sample_token(logits: torch.Tensor, params, generated: list[int] | None = No
     if penalty != 1.0 and generated:
         for gid in set(generated):
             scores = logits[..., gid]
-            logits[..., gid] = torch.where(
-                scores < 0, scores * penalty, scores / penalty
-            )
+            logits[..., gid] = torch.where(scores < 0, scores * penalty, scores / penalty)
     if params.top_k > 0:
         vals, _ = logits.topk(params.top_k, dim=-1)
         logits = logits.masked_fill(logits < vals[:, -1:], float("-inf"))
@@ -135,7 +132,7 @@ def _sample_token(logits: torch.Tensor, params, generated: list[int] | None = No
     return torch.multinomial(probs, 1)
 
 
-def _apply_stop(text: str, stops: Optional[list[str]]) -> str:
+def _apply_stop(text: str, stops: list[str] | None) -> str:
     """按 stop 字符串截断文本（支持跨 token 边界拼接后命中）。"""
     if not stops:
         return text
@@ -219,12 +216,15 @@ async def _stream(input_ids: torch.Tensor, params, prompt_len: int, chat: bool):
 
 @app.post("/v1/completions")
 async def completions(req: CompletionRequest):
-    input_ids = torch.tensor([[server.tokenizer.bos_id] + server.tokenizer.encode(req.prompt)], device=server.device)
+    input_ids = torch.tensor(
+        [[server.tokenizer.bos_id] + server.tokenizer.encode(req.prompt)], device=server.device
+    )
     prompt_len = input_ids.size(1)
     _check_request(req, prompt_len)
     if req.stream:
-        return StreamingResponse(_stream(input_ids, req, prompt_len, chat=False),
-                                 media_type="text/event-stream")
+        return StreamingResponse(
+            _stream(input_ids, req, prompt_len, chat=False), media_type="text/event-stream"
+        )
     tokens = _generate(input_ids, req, prompt_len)
     text = server.tokenizer.decode(tokens, skip_special=True)
     text = _apply_stop(text, req.stop)
@@ -241,12 +241,17 @@ async def chat_completions(req: ChatRequest):
     prompt_len = input_ids.size(1)
     _check_request(req, prompt_len)
     if req.stream:
-        return StreamingResponse(_stream(input_ids, req, prompt_len, chat=True),
-                                 media_type="text/event-stream")
+        return StreamingResponse(
+            _stream(input_ids, req, prompt_len, chat=True), media_type="text/event-stream"
+        )
     tokens = _generate(input_ids, req, prompt_len)
     text = server.tokenizer.decode(tokens, skip_special=True)
     text = _apply_stop(text, req.stop)
-    return {"id": "chat-1", "object": "chat.completion", "choices": [{"message": {"role": "assistant", "content": text}}]}
+    return {
+        "id": "chat-1",
+        "object": "chat.completion",
+        "choices": [{"message": {"role": "assistant", "content": text}}],
+    }
 
 
 @app.get("/health")

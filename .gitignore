@@ -14,19 +14,10 @@ hf/checkpoints/
 # Weights & Biases (local run dirs, never commit)
 wandb/
 
-# Training data — gitignore all, selectively un-ignore small data
+# Training data — 根 data/ 整目录忽略（仅 .gitkeep 级反忽略有效；已排除的父目录
+# 下子目录无法用 ! 重新包含，需入库的小文件请用 git add -f 显式添加）
 data/
 !data/.gitkeep
-!data/lite/pretrain/
-!data/nano/pretrain/
-!data/pro/pretrain/
-!data/lite/sft/
-!data/lite/dpo/
-!data/nano/sft/
-!data/nano/dpo/
-!data/pro/sft/
-!data/pro/dpo/
-!data/benchmarks/
 !data/raw/.gitkeep
 # gleamlm/data/ 是核心库数据层（dataset/pack/pipeline/preprocess），
 # 上面的 data/ 模式会递归匹配任意层级的同名目录，必须显式反忽略
@@ -78,6 +69,10 @@ AGENTS.md
 *.log
 temp_*
 infer_result.txt
+
+# Local experiment output dirs
+logs/
+eval_results/
 
 # Stale test data patterns
 data/test_splits/

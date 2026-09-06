@@ -8,7 +8,6 @@
     python -m vllm.entrypoints.openai.api_server --model ./exported/ --trust-remote-code
 """
 
-import json
 import os
 import sys
 from typing import Any
@@ -17,9 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import torch
 
-from hf.hf_config import gleamlm_config_from_core
-from hf.hf_model import GleamLMForCausalLM
 from gleamlm.utils.config import extract_checkpoint_config
+from hf.hf_config import gleamlm_config_from_core
 
 
 def convert_checkpoint(
@@ -64,11 +62,13 @@ def convert_checkpoint(
         hf_sd.pop("model.lm_head.weight", None)
 
     from safetensors.torch import save_file
+
     save_file(hf_sd, os.path.join(output_dir, "model.safetensors"))
 
     # 导出 HF tokenizer
     if tokenizer_dir:
         from gleamlm.tokenizer.tokenizer import BBPETokenizer
+
         BBPETokenizer.load(tokenizer_dir).export_to_hf_format(output_dir)
 
     print(f"Checkpoint converted: {gleamlm_ckpt_path} → {output_dir}")
@@ -116,16 +116,21 @@ class VLLMEngine:
         try:
             from vllm import AsyncLLMEngine, SamplingParams
             from vllm.engine.arg_utils import AsyncEngineArgs
+
             self._sampling_params_cls = SamplingParams
             args = AsyncEngineArgs(**self.engine_kwargs)
             self._engine = AsyncLLMEngine.from_engine_args(args)
         except ImportError:
-            raise ImportError("vLLM not installed. Install with: pip install vllm")
+            raise ImportError("vLLM not installed. Install with: pip install vllm") from None
 
-    async def generate(self, prompt: str, max_tokens: int = 512, temperature: float = 0.0, **kwargs):
+    async def generate(
+        self, prompt: str, max_tokens: int = 512, temperature: float = 0.0, **kwargs
+    ):
         self._lazy_init()
         params = self._sampling_params_cls(
-            max_tokens=max_tokens, temperature=temperature, **kwargs,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            **kwargs,
         )
         request_id = f"req_{id(prompt)}"
         async for result in self._engine.generate(prompt, params, request_id):
@@ -140,6 +145,7 @@ class VLLMEngine:
 
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser(description="GleamLM HF format export")
     p.add_argument("--input", type=str, required=True, help="Checkpoint .pt path")
     p.add_argument("--output", type=str, required=True, help="Output directory")

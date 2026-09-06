@@ -1,4 +1,3 @@
-
 """全量 SFT 微调脚本 — TRL SFTTrainer（无 LoRA）。
 
 对比:
@@ -57,15 +56,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config_path", type=str, default=None, help="Directory with config.json")
     parser.add_argument("--data_path", type=str, required=True, help="SFT data (JSONL)")
     parser.add_argument("--output_dir", type=str, default="./sft_out")
-    parser.add_argument("--lr", type=float, default=5e-6, help="全量 SFT 用小 lr（vs LoRA 的 5e-5）")
+    parser.add_argument(
+        "--lr", type=float, default=5e-6, help="全量 SFT 用小 lr（vs LoRA 的 5e-5）"
+    )
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
     parser.add_argument("--max_seq_length", type=int, default=1024)
     parser.add_argument("--warmup_ratio", type=float, default=0.02)
     parser.add_argument("--weight_decay", type=float, default=0.01)
-    parser.add_argument("--tokenizer_path", type=str, default=None,
-                        help="Directory with tokenizer.json (HF format)")
+    parser.add_argument(
+        "--tokenizer_path", type=str, default=None, help="Directory with tokenizer.json (HF format)"
+    )
     return parser.parse_args()
 
 
@@ -93,12 +95,13 @@ def main() -> None:
     raw_data = load_jsonl(args.data_path)
     dataset = Dataset.from_list(raw_data)
 
-    if not args.tokenizer_path:
+    if (
+        not args.tokenizer_path
+        and os.path.isdir(args.model_path)
+        and os.path.exists(os.path.join(args.model_path, "tokenizer.json"))
+    ):
         # HF 目录输入自带 tokenizer.json 时默认复用（与 dpo/from_pretrained 链路一致）
-        if os.path.isdir(args.model_path) and os.path.exists(
-            os.path.join(args.model_path, "tokenizer.json")
-        ):
-            args.tokenizer_path = args.model_path
+        args.tokenizer_path = args.model_path
     if not args.tokenizer_path:
         raise ValueError(
             "SFT needs an HF-format tokenizer (tokenizer.json). "

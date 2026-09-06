@@ -171,7 +171,7 @@ GleamLM/
 ├── eval/                          # 评测入口（lm-evaluation-harness：CEVAL / CMMLU / MMLU）
 ├── tests/                         # 单元测试 + 集成测试
 ├── tools/                         # 辅助工具（checkpoint 检查/转换、快速运行、RAG demo）
-├── CODE_STANDARDS.md / CONTEXT.md # 编码规范 / 项目上下文
+├── CONTEXT.md                   # 项目上下文（术语表 + 领域约定，编码规范见 docs/GleamLM设计文档.md §15）
 ├── requirements.txt
 ├── pyproject.toml
 ├── LICENSE

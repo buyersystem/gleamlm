@@ -12,7 +12,7 @@ except ImportError:
     from transformers.generation_utils import GenerationMixin
 
 from gleamlm.models.attention_variants import AliBiGQA, NoPEGQA, SlidingWindowGQA
-from gleamlm.models.model import GQA, MLP, MoE, GleamLMModel
+from gleamlm.models.model import GQA, MLP, GleamLMModel, MoE
 
 from .hf_config import GleamLMConfig
 
@@ -55,7 +55,7 @@ def load_from_checkpoint(model, checkpoint: dict, strict: bool = False):
     sd = checkpoint.get("model_state_dict") or checkpoint.get("model") or checkpoint
     if isinstance(sd, dict):
         if any(k.startswith("module.") for k in sd):
-            sd = {k[len("module."):]: v for k, v in sd.items()}
+            sd = {k[len("module.") :]: v for k, v in sd.items()}
         sd = {f"model.{k}" if not k.startswith("model.") else k: v for k, v in sd.items()}
     return model.load_state_dict(sd, strict=strict)
 
@@ -94,11 +94,13 @@ class GleamLMForCausalLM(PreTrainedModel, GenerationMixin):
                     **cfg,
                     **(
                         {"attn_variant": attn_by_name.get(cfg["attn_variant"], GQA)}
-                        if isinstance(cfg.get("attn_variant"), str) else {}
+                        if isinstance(cfg.get("attn_variant"), str)
+                        else {}
                     ),
                     **(
                         {"ffn_variant": ffn_by_name.get(cfg["ffn_variant"], MLP)}
-                        if isinstance(cfg.get("ffn_variant"), str) else {}
+                        if isinstance(cfg.get("ffn_variant"), str)
+                        else {}
                     ),
                 }
                 for cfg in layer_configs
@@ -129,15 +131,19 @@ class GleamLMForCausalLM(PreTrainedModel, GenerationMixin):
         self.post_init()
 
     def forward(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor | None = None,
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
         past_key_values: list[tuple[torch.Tensor, torch.Tensor]] | DynamicCache | None = None,
-        labels: torch.Tensor | None = None, output_hidden_states: bool = False,
+        labels: torch.Tensor | None = None,
+        output_hidden_states: bool = False,
         **kwargs,
     ) -> CausalLMOutputWithPast:
         use_dynamic_cache = isinstance(past_key_values, DynamicCache)
         past_kv_list = _legacy_cache_from_hf(past_key_values)
         logits, new_kv, aux_loss, hidden = self.model(
-            input_ids, past_kv_list=past_kv_list,
+            input_ids,
+            past_kv_list=past_kv_list,
             attention_mask=attention_mask,
             use_cache=kwargs.get("use_cache", True),
             output_hidden_states=output_hidden_states,
@@ -189,9 +195,10 @@ class GleamLMForCausalLM(PreTrainedModel, GenerationMixin):
     ):
         has_past = False
         if isinstance(past_key_values, DynamicCache):
-            has_past = bool(past_key_values.layers and any(
-                layer.keys is not None for layer in past_key_values.layers
-            ))
+            has_past = bool(
+                past_key_values.layers
+                and any(layer.keys is not None for layer in past_key_values.layers)
+            )
         elif past_key_values is not None:
             has_past = len(past_key_values) > 0
 

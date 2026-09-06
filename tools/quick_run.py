@@ -96,14 +96,14 @@ def main():
 
     # 验证已有模型
     if args.verify_only:
-        print(f"\n>>> 验证已有模型: {ckpt_dir}/best_model.pt")
+        print(f"\n>>> 验证已有模型: {ckpt_dir}/final.pt")
         run(
-            f"python -m tools.eval_runner --model {ckpt_dir}/best_model.pt --data_dir data/{v}/pretrain --benchmarks ppl --max_batches 50 --batch_size 4",
+            f"python -m tools.eval_runner --model {ckpt_dir}/final.pt --data_dir data/{v}/pretrain --benchmarks ppl --max_batches 50 --batch_size 4",
             "PPL 评估 (50 batches)",
             conda_env=args.conda_env,
         )
         run(
-            f"python -m gleamlm.inference.cli --model {ckpt_dir}/best_model.pt --prompt \"介绍一下你自己\"",
+            f'python -m gleamlm.inference.cli --model {ckpt_dir}/final.pt --prompt "介绍一下你自己"',
             "生成样例",
             conda_env=args.conda_env,
         )
@@ -115,44 +115,31 @@ def main():
         print("  Level 1: 冒烟测试 (验证代码能跑通)")
         print("=" * 60)
 
-        ckpt_path = f"{ckpt_dir}/best_model.pt"
-        ckpt_backup = f"{ckpt_dir}/best_model.pt.backup"
-        if os.path.exists(ckpt_path):
-            shutil.copy(ckpt_path, ckpt_backup)
-            print("  已备份: best_model.pt -> best_model.pt.backup")
-
         prepare_small_data(n_train=2000, n_valid=500)
 
         ok = run(
-            f"python scripts/train.py --variant {v} "
-            f"--data_dir {TEST_DATA_DIR} --epochs 2 --batch_size 8 --accumulate_grad 4 "
-            f"--checkpoint_dir ./{TEST_CKPT_DIR}",
+            f"python manual/pretrain.py --model manual/configs/{v}.yaml "
+            f"--data {TEST_DATA_DIR}/train.txt --output_dir ./{TEST_CKPT_DIR} "
+            f"--epochs 2 --batch_size 8 --accumulate 4 --no-pbar",
             "训练 2 epochs (预计 ~30s)",
             conda_env=args.conda_env,
         )
         if not ok:
             print("\n[!] 训练失败")
-            if os.path.exists(ckpt_backup):
-                shutil.copy(ckpt_backup, ckpt_path)
             return
 
         run(
-            f"python -m tools.eval_runner --model {TEST_CKPT_DIR}/best_model.pt "
+            f"python -m tools.eval_runner --model {TEST_CKPT_DIR}/final.pt "
             f"--data_dir {TEST_DATA_DIR} "
             f"--benchmarks ppl --max_batches 30 --batch_size 4",
             "PPL 评估",
             conda_env=args.conda_env,
         )
         run(
-            f"python -m gleamlm.inference.cli --model {TEST_CKPT_DIR}/best_model.pt --prompt \"介绍一下你自己\"",
+            f'python -m gleamlm.inference.cli --model {TEST_CKPT_DIR}/final.pt --prompt "介绍一下你自己"',
             "生成样例",
             conda_env=args.conda_env,
         )
-
-        if os.path.exists(ckpt_backup):
-            shutil.copy(ckpt_backup, ckpt_path)
-            os.remove(ckpt_backup)
-            print("  已恢复: best_model.pt")
 
         if os.path.exists(TEST_CKPT_DIR):
             shutil.rmtree(TEST_CKPT_DIR)
@@ -166,45 +153,32 @@ def main():
         print("  Level 2: 小规模训练 + 验证")
         print("=" * 60)
 
-        ckpt_path = f"{ckpt_dir}/best_model.pt"
-        ckpt_backup = f"{ckpt_dir}/best_model.pt.backup"
-        if os.path.exists(ckpt_path):
-            shutil.copy(ckpt_path, ckpt_backup)
-            print("  已备份: best_model.pt -> best_model.pt.backup")
-
         prepare_small_data(n_train=10000, n_valid=2000)
 
         ok = run(
-            f"python scripts/train.py --variant {v} "
-            f"--data_dir {TEST_DATA_DIR} --epochs 5 --batch_size 8 --accumulate_grad 8 "
-            f"--checkpoint_dir ./{TEST_CKPT_DIR}",
+            f"python manual/pretrain.py --model manual/configs/{v}.yaml "
+            f"--data {TEST_DATA_DIR}/train.txt --output_dir ./{TEST_CKPT_DIR} "
+            f"--epochs 5 --batch_size 8 --accumulate 8 --no-pbar",
             "训练 5 epochs (预计 ~5min)",
             conda_env=args.conda_env,
         )
         if not ok:
             print("\n[!] 训练失败")
-            if os.path.exists(ckpt_backup):
-                shutil.copy(ckpt_backup, ckpt_path)
             return
 
         print("\n>>> 开始完整验证...")
         run(
-            f"python -m tools.eval_runner --model {TEST_CKPT_DIR}/best_model.pt "
+            f"python -m tools.eval_runner --model {TEST_CKPT_DIR}/final.pt "
             f"--data_dir {TEST_DATA_DIR} "
             f"--benchmarks ppl --max_batches 100 --batch_size 4",
             "PPL 评估 (100 batches)",
             conda_env=args.conda_env,
         )
         run(
-            f"python -m gleamlm.inference.cli --model {TEST_CKPT_DIR}/best_model.pt --prompt \"介绍一下你自己\"",
+            f'python -m gleamlm.inference.cli --model {TEST_CKPT_DIR}/final.pt --prompt "介绍一下你自己"',
             "生成样例",
             conda_env=args.conda_env,
         )
-
-        if os.path.exists(ckpt_backup):
-            shutil.copy(ckpt_backup, ckpt_path)
-            os.remove(ckpt_backup)
-            print("  已恢复: best_model.pt")
 
         if os.path.exists(TEST_CKPT_DIR):
             shutil.rmtree(TEST_CKPT_DIR)
@@ -218,7 +192,7 @@ def main():
         print("  Level 3: 全量正式训练")
         print("=" * 60)
 
-        cmd = f"python scripts/train.py --variant {v}"
+        cmd = f"python manual/pretrain.py --model manual/configs/{v}.yaml"
         ok = run(cmd, f"全量训练 ({v})", conda_env=args.conda_env)
         if not ok:
             print("\n[!] 训练异常退出")
@@ -226,12 +200,12 @@ def main():
 
         print("\n>>> 训练完成，开始验证...")
         run(
-            f"python -m tools.eval_runner --model {ckpt_dir}/best_model.pt --data_dir data/{v}/pretrain --benchmarks ppl --batch_size 4",
+            f"python -m tools.eval_runner --model {ckpt_dir}/final.pt --data_dir data/{v}/pretrain --benchmarks ppl --batch_size 4",
             "完整 PPL 评估",
             conda_env=args.conda_env,
         )
         run(
-            f"python -m gleamlm.inference.cli --model {ckpt_dir}/best_model.pt --prompt \"介绍一下你自己\"",
+            f'python -m gleamlm.inference.cli --model {ckpt_dir}/final.pt --prompt "介绍一下你自己"',
             "生成样例",
             conda_env=args.conda_env,
         )

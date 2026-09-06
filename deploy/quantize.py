@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import torch
 
 try:
-    from torchao.quantization import quantize_, int4_weight_only, int8_weight_only
+    from torchao.quantization import int4_weight_only, int8_weight_only, quantize_
 except ImportError:
     quantize_ = None
     int4_weight_only = None

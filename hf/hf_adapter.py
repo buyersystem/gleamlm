@@ -8,7 +8,6 @@ HuggingFace tokenizers 适配器。
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -16,7 +15,11 @@ from typing import Any
 class HFBBPETokenizer:
     def __init__(self, tokenizer: Any) -> None:
         self._tokenizer = tokenizer
-        self._has_transformers_wrapper = "transformers" in type(tokenizer).__module__ if hasattr(type(tokenizer), "__module__") else False
+        self._has_transformers_wrapper = (
+            "transformers" in type(tokenizer).__module__
+            if hasattr(type(tokenizer), "__module__")
+            else False
+        )
         self._special_ids = self._extract_special_ids()
 
     def _extract_special_ids(self) -> dict[str, int]:
@@ -88,7 +91,7 @@ class HFBBPETokenizer:
         try:
             from tokenizers import Tokenizer as HFTokenizer
         except ImportError:
-            raise ImportError("需要安装 HuggingFace tokenizers: pip install tokenizers")
+            raise ImportError("需要安装 HuggingFace tokenizers: pip install tokenizers") from None
 
         json_path = os.path.join(save_dir, "tokenizer.json")
         legacy_path = os.path.join(save_dir, "bbpe_tokenizer.json")
@@ -97,8 +100,8 @@ class HFBBPETokenizer:
             hf_tok = HFTokenizer.from_file(json_path)
         elif os.path.exists(legacy_path):
             raise FileNotFoundError(
-                f"发现 bbpe_tokenizer.json（原生格式）。"
-                f"请先用 gleamlm/tokenizer 下的工具转换为 HF 格式。"
+                "发现 bbpe_tokenizer.json（原生格式）。"
+                "请先用 gleamlm/tokenizer 下的工具转换为 HF 格式。"
             )
         else:
             raise FileNotFoundError(f"未找到 tokenizer 文件。需要 {json_path}（HF 格式）")

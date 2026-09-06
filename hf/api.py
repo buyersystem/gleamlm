@@ -4,11 +4,12 @@ import os
 
 import torch
 
+from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
+
 from .hf_adapter import HFBBPETokenizer
 from .hf_config import gleamlm_config_from_core
 from .hf_model import GleamLMForCausalLM, load_from_checkpoint
-from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
 
 
 class GleamLM:
@@ -70,8 +71,10 @@ class GleamLM:
                 print(f"[warn] failed to load tokenizer from {path}: {exc}")
                 continue
 
-        print("[warn] no tokenizer found; generate() will fail. "
-              "Provide tokenizer_path or place tokenizer next to checkpoint.")
+        print(
+            "[warn] no tokenizer found; generate() will fail. "
+            "Provide tokenizer_path or place tokenizer next to checkpoint."
+        )
         return None
 
     @staticmethod
