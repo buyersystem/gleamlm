@@ -33,6 +33,9 @@ gleamlm.egg-info/
 # Documentation
 docs/
 
+# Architecture Decision Records（本地决策档案，随设计文档体系不入库）
+adr/
+
 # TensorBoard logs
 **/runs/
 

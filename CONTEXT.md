@@ -57,7 +57,7 @@
 - **Orchestration-visible principle**: `main()` must be readable without jumping to other files. Steps are listed explicitly; implementation details are delegated to `gleamlm/` imports.
 - **Deletion test**: If removing a function from `gleamlm/` would break variant scripts, it belongs in `gleamlm/`. If it would only affect one variant, it belongs in that variant's directory.
 
-See ADR-0011 for the full design rationale.
+See `adr/0011-library-vs-recipe-architecture.md` for the full design rationale (ADR archive lives at repo root `adr/`, local-only like the design doc).
 
 ## Model Variants
 
