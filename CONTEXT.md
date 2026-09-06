@@ -31,7 +31,7 @@
 
 - **AMP (Automatic Mixed Precision)**: BF16/FP16 training with `GradScaler`.
 - **DDP (Distributed Data Parallel)**: Single-command multi-GPU via `torchrun`.
-- **memmap dataset**: Tokenized data stored as `.npy` files, loaded via `np.load(..., mmap_mode='r')`. ~1 MB RAM for any dataset size.
+- **memmap dataset**: Tokenized data stored as Megatron-standard `.bin/.idx`, memory-mapped via `np.memmap` (`IndexedMMapDataset`). ~1 MB RAM for any dataset size.
 - **Gradient accumulation**: `effective_batch = micro_batch × accumulate_grad`.
 - **Z-Loss**: Regularizer `1e-4 * mean(logsumexp(logits)^2)`, prevents logit explosion.
 - **WSD scheduler**: Warmup → Stable → Decay (3-phase learning rate).
