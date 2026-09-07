@@ -31,7 +31,7 @@
 
   # 多卡 + torch.compile（Ampere+ GPU 额外加速 ~30%）
   torchrun --nproc_per_node=4 manual/pretrain.py \
-      --model manual/configs/lite.yaml --data ./data --compile --num_workers 4
+      --model manual/configs/lite.yaml --data ./data --compile
 
   # 注: 0.6B 不走手写轨，由工业轨训练 (industrial/: Megatron 预训练 + HF 微调/对齐)
   #     手写轨覆盖 Nano 40M / Lite 87M / Pro 126M

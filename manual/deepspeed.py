@@ -1,11 +1,12 @@
 """
 DeepSpeed 分布式训练示例 — 对比 ZeRO-2 / ZeRO-3 + CPU offload
 
-单机 8 卡 (0.6B+):
-  deepspeed manual/deepspeed.py --data ./data --deepspeed_config manual/configs/deepspeed_zero2.json
+单机多卡 (ZeRO-2):
+  deepspeed manual/deepspeed.py --model manual/configs/lite.yaml --data ./data \
+    --deepspeed_config manual/configs/deepspeed_zero2.json
 
-双机 16 卡 (1B+, CPU offload):
-  deepspeed manual/deepspeed.py --data ./data \
+更大规模 (ZeRO-3 + CPU offload):
+  deepspeed manual/deepspeed.py --model manual/configs/lite.yaml --data ./data \
     --deepspeed_config manual/configs/deepspeed_config.json
 
 选型: DDP + activation checkpointing 先 → 不够上 ZeRO-2 (分片 optimizer states ~70% 显存)

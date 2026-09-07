@@ -1,11 +1,12 @@
 """
 FSDP 分布式训练示例 — ZeRO-2 / ZeRO-3 分片策略
 
-单机 8 卡 (0.6B):
-  torchrun --nproc_per_node=8 manual/fsdp.py --data ./data --variant 0.6b
+单机 8 卡 (Lite 87M):
+  torchrun --nproc_per_node=8 manual/fsdp.py --model manual/configs/lite.yaml --data ./data
 
-双机 16 卡 (1B+):
-  torchrun --nnodes=2 --nproc_per_node=8 manual/fsdp.py --data ./data --variant 1b
+ZeRO-3 (参数+梯度+优化器全分片, --full_shard):
+  torchrun --nproc_per_node=8 manual/fsdp.py --model manual/configs/lite.yaml --data ./data \
+    --full_shard
 """
 
 # 选型按单卡显存容量: DDP (每卡全量，仅 all-reduce 梯度，通信最小) →

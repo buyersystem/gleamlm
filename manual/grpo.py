@@ -10,7 +10,10 @@ GRPO vs PPO:
   GRPO:    无 value network，优势 = group 内归一化奖励 — 1 个 loss 项
           更简单、更稳定、收敛更快
 
-用法:"""
+用法:
+  python manual/grpo.py --model checkpoints/nano/sft/sft_best.pt \
+      --data data/rlhf.jsonl --output_dir checkpoints/nano/grpo
+"""
 
 # RLHF 流水线: SFT → RM → RL。PPO 需 4 个模型 (policy+ref+reward+value)，
 # value network 与 policy 同尺寸显存翻倍；GRPO 砍掉 value network，

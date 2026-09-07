@@ -7,7 +7,10 @@ PPO 四件套:
   3) entropy bonus:      鼓励探索，防止过早收敛
   4) old policy sync:    每步把 current policy 复制到 old policy
 
-用法:"""
+用法:
+  python manual/ppo.py --model checkpoints/nano/sft/sft_best.pt \
+      --data data/rlhf.jsonl --output_dir checkpoints/nano/ppo
+"""
 
 import argparse
 import os

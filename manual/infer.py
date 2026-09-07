@@ -1,8 +1,9 @@
 """GleamLM 统一推理脚本。支持交互式生成和多种采样策略。
 
 用法:
-    python manual/infer.py --model checkpoints/nano/best_model.pt
-    python manual/infer.py --model checkpoints/lite/sft/sft_best.pt --sft
+    python manual/infer.py --model checkpoints/nano/final.pt
+    python manual/infer.py --model checkpoints/nano/sft/sft_best.pt --sft
+    python manual/infer.py --variant nano --sft  # --variant 自动推导 checkpoints/{variant} 路径
 """
 
 import argparse

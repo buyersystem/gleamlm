@@ -5,7 +5,10 @@ Knowledge Distillation — 大模型 (Teacher) 教小模型 (Student)。
   L = α * L_hard(Student, labels) + (1-α) * L_soft(Student, Teacher)
   L_soft = KL(σ(T_logits / τ) || σ(S_logits / τ)) * τ²
 
-用法:"""
+用法:
+  python manual/distill.py --teacher <teacher.pt> --student <student.pt> \
+      --data <text.txt> --output_dir ./checkpoints/distill
+"""
 
 import argparse
 import json
@@ -56,12 +59,18 @@ def collate_fn(batch, tokenizer, max_seq_len):
     input_ids = [x + [pad_id] * (max_len - len(x)) for x in all_ids]
     return torch.tensor(input_ids)
 
+
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = BBPETokenizer.load(args.tokenizer_path or DEFAULT_TOKENIZER_PATH)
 
     dataset = DistillDataset(args.data, max_seq_len=args.seq_len)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=lambda b: collate_fn(b, tokenizer, args.seq_len))
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=lambda b: collate_fn(b, tokenizer, args.seq_len),
+    )
 
     def _load_model(path):
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
@@ -92,7 +101,9 @@ def train(args):
     optimizer = torch.optim.AdamW(student.parameters(), lr=args.lr, weight_decay=0.01)
     t_params = sum(p.numel() for p in teacher.parameters())
     s_params = sum(p.numel() for p in student.parameters())
-    print(f"Distill — Teacher: {t_params/1e6:.2f}M, Student: {s_params/1e6:.2f}M, τ={args.temperature}, α={args.alpha}")
+    print(
+        f"Distill — Teacher: {t_params / 1e6:.2f}M, Student: {s_params / 1e6:.2f}M, τ={args.temperature}, α={args.alpha}"
+    )
     os.makedirs(args.output_dir, exist_ok=True)
 
     for epoch in range(args.epochs):
@@ -105,7 +116,9 @@ def train(args):
                 t_logits, _, _, _ = teacher(input_ids)
 
             s_logits, _, aux_loss, _ = student(input_ids)
-            loss = distill_loss(s_logits, t_logits, labels, temperature=args.temperature, alpha=args.alpha)
+            loss = distill_loss(
+                s_logits, t_logits, labels, temperature=args.temperature, alpha=args.alpha
+            )
             loss = loss + aux_loss * 0.01
 
             loss.backward()

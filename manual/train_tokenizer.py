@@ -4,7 +4,7 @@ BBPE tokenizer 训练/扩展脚本
 用法:
   # 按 variant 配比从零训练 (从 manual/configs/{variant}.yaml 读 data_sources)
   python manual/train_tokenizer.py --variant nano --vocab_size 12002 \
-    --save_dir gleamlm/tokenizer/checkpoints/bbpe_12k --max-chars 200000000
+    --save_dir gleamlm/tokenizer/checkpoints/bbpe_12k --max_chars 200000000
 
   # 从 data_dir 目录训练 (所有 .txt 等分)
   python manual/train_tokenizer.py --vocab_size 24002 \

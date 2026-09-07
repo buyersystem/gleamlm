@@ -23,15 +23,14 @@ Megatron-Core 预训练 — 最小训练循环（对照工业级预训练框架�
     --config industrial/configs/0.6b.yaml \
     --data data/processed/wiki_zh
 
-  # 多卡数据并行（对应手写轨 torchrun 版本）:
+  # 多卡（对应手写轨 torchrun 版本）:
   torchrun --nproc_per_node=4 industrial/pretrain.py \
     --config industrial/configs/0.6b.yaml \
     --data data/processed/wiki_zh
 
-  # 张量并行 2 + 流水线并行 2（Megatron 招牌 3D 并行，8 卡）:
-  torchrun --nproc_per_node=8 industrial/pretrain.py \
-    --config industrial/configs/0.6b.yaml \
-    --data data/processed/wiki_zh
+  # 并行拓扑取 --config YAML 的 parallel 段（TP=1/PP=1 即纯数据并行）;
+  # 改 0.6b.yaml 的 tensor_model_parallel_size / pipeline_model_parallel_size
+  # 即为 Megatron 招牌 3D 并行（如 8 卡: TP2 × PP2 × DP2）
 
 生产级用法（Megatron-LM 官方入口，功能最全，直接可跑）:
   torchrun --nproc_per_node=8 pretrain_gpt.py \

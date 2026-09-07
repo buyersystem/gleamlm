@@ -1,8 +1,9 @@
 """GleamLM 统一评估入口 — PPL + lm-eval 标准 benchmark。
 
 用法:
-    python -m tools.eval_runner --model checkpoints/best_model.pt --data_dir data/lite/pretrain
-    python -m tools.eval_runner --model checkpoints/best_model.pt --benchmarks ceval,cmmlu
+    python -m tools.eval_runner --model checkpoints/nano/final.pt --data_dir data/lite/pretrain
+    python -m tools.eval_runner --model checkpoints/nano/sft/sft_best.pt \
+        --data_dir data/lite/pretrain --benchmarks ceval,cmmlu
 """
 
 import argparse
@@ -27,7 +28,9 @@ def main() -> None:
         default="ppl",
         help="逗号分隔：ppl, ceval, cmmlu, mmlu, all",
     )
-    parser.add_argument("--data_dir", type=str, required=True, help="数据目录（如 data/lite/pretrain）")
+    parser.add_argument(
+        "--data_dir", type=str, required=True, help="数据目录（如 data/lite/pretrain）"
+    )
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--max_seq_len", type=int, default=0, help="0=从模型配置检测")
     parser.add_argument("--max_batches", type=int, default=None, help="PPL 最大批次数")
