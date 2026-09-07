@@ -209,9 +209,8 @@ tok = BBPETokenizer.load(DEFAULT_TOKENIZER_PATH)   # 包内自带词表
 print(tok.decode(tok.encode("你好, 世界", add_bos=True)))
 ```
 
-> 完整接口参考（模块地图 / 签名 / 示例）见 [docs/api.md](docs/api.md)。
 > 仓库其余目录（`manual/` 训练脚本、`industrial/` 工业轨、`hf/` HF 生态桥）不在 PyPI 包内；
-> PyPI 包仅含核心库层，两者边界见 `adr/0011-library-vs-recipe-architecture.md`。
+> PyPI 包仅含核心库层，完整接口文档完善后提供。
 
 ---
 
