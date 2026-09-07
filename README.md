@@ -109,7 +109,7 @@ GleamLM/
 │   ├── models/                    # ③ 模型架构
 │   │   ├── model.py               #   GleamLMModel（GQA / RoPE / SwiGLU / MoE / QK-Norm）
 │   │   ├── attention_variants.py  #   NoPE / ALiBi / Sliding Window GQA
-│   │   └── mamba.py               #   Mamba-1 教学实现
+│   │   └── mamba_hybrid.py        #   Mamba-1 教学块 + Mamba×GQA 块级混合解码器
 │   ├── trainer/                   # ④ 训练支撑
 │   │   ├── base_trainer.py        #   预训练原子原语（optimizer_step / GradScaler）
 │   │   ├── rl_trainer.py          #   PPO / GRPO 训练支撑 + 共享奖励函数
