@@ -233,6 +233,8 @@ pip install -e ".[train,dev]"
 
 WebUI 是浏览器里的图形化训练控制台：预训练 / SFT / DPO / OPD / GRPO / PPO / LoRA 各阶段任务卡一键启动，实时 loss / lr 曲线与训练日志、实验历史管理；推理 tab 加载 checkpoint 即可对话。
 
+<img src="./assets/GUI.jpg" />
+
 ```bash
 # ① 安装依赖（FastAPI + uvicorn + transformers）
 pip install -e ".[serve]"
