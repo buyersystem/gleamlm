@@ -227,7 +227,9 @@ def main():
         global_step = 0
 
     # 模型结构快照: 供下游 (dpo/opd/ppo/grpo/serve) 经 extract_checkpoint_config 精确重建。
-    # 字段与 GleamLMModel 构建参数一一对应，纯 dict（weights_only 安全）。
+    # 字段与 GleamLMModel 构建参数一一对应，纯 dict（weights_only 安全）；
+    # weight_decay 为训练超参随 checkpoint 传递 (dpo 读取), 旧 checkpoint 缺键
+    # 时下游回落 YAML。
     _ckpt_cfg = {
         "vocab_size": tokenizer.get_vocab_size(),
         "d_model": cfg.model.d_model,
@@ -240,6 +242,7 @@ def main():
         "pad_token_id": tokenizer.pad_id,
         "tie_weights": cfg.model.tie_weights,
         "use_flash_attn": cfg.model.use_flash_attn,
+        "weight_decay": weight_decay,
     }
 
     log_interval = 50

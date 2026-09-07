@@ -1,4 +1,3 @@
-
 """DPO (Direct Preference Optimization) 对齐脚本 — TRL DPOTrainer。
 
 用法:
@@ -49,7 +48,9 @@ def load_jsonl(path: str) -> list[dict]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DPO for GleamLM")
-    parser.add_argument("--model_path", type=str, required=True, help="Base model (HF format or .pt)")
+    parser.add_argument(
+        "--model_path", type=str, required=True, help="Base model (HF format or .pt)"
+    )
     parser.add_argument("--lora_path", type=str, default=None, help="LoRA adapter path")
     parser.add_argument("--config_path", type=str, default=None, help="Directory with config.json")
     parser.add_argument("--data_path", type=str, required=True, help="DPO data (JSONL)")
@@ -59,9 +60,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
     parser.add_argument("--max_seq_length", type=int, default=1024)
-    parser.add_argument("--beta", type=float, default=0.1, help="DPO beta (KL penalty)")
-    parser.add_argument("--tokenizer_path", type=str, default=None,
-                        help="Directory with tokenizer.json (HF format)")
+    # beta 定稿 0.3 (与 manual 轨同步): 曾默认 0.1 致 KL 约束偏弱、输出漂移
+    # (manual/configs/nano.yaml 历史坑①), 工业轨不得重演
+    parser.add_argument("--beta", type=float, default=0.3, help="DPO beta (KL penalty)")
+    parser.add_argument(
+        "--tokenizer_path", type=str, default=None, help="Directory with tokenizer.json (HF format)"
+    )
     return parser.parse_args()
 
 

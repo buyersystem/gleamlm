@@ -71,16 +71,27 @@ def main() -> None:
         "--lr_scheduler",
         type=str,
         choices=["cosine", "wsd"],
-        default="cosine",
-        help="学习率调度器类型",
+        default=None,
+        help="覆写学习率调度器 (默认取 manual/configs/{variant}.yaml dpo.lr_scheduler)",
     )
-    parser.add_argument("--stable_ratio", type=float, default=0.80, help="WSD stable 阶段占比")
+    parser.add_argument(
+        "--stable_ratio",
+        type=float,
+        default=None,
+        help="覆写 WSD stable 阶段占比 (默认取 YAML dpo.stable_ratio)",
+    )
+    parser.add_argument(
+        "--warmup_ratio",
+        type=float,
+        default=None,
+        help="覆写 warmup 比例 (默认取 YAML dpo.warmup_ratio)",
+    )
     parser.add_argument("--min_lr_ratio", type=float, default=None, help="覆写最小学习率比例")
     parser.add_argument(
         "--weight_decay",
         type=float,
         default=None,
-        help="覆写权重衰减 (默认取 manual/configs/{variant}.yaml training.weight_decay)",
+        help="覆写权重衰减 (默认随 SFT checkpoint _config, 缺键回落 YAML training.weight_decay)",
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="随机种子 (对齐 pretrain.py 的 --seed)"
@@ -106,16 +117,22 @@ def main() -> None:
         else cfg.dpo.accumulate_grad
     )
     max_seq_len = cli_args.max_seq_len if cli_args.max_seq_len is not None else cfg.dpo.max_seq_len
-    warmup_ratio = cfg.dpo.warmup_ratio
+    warmup_ratio = (
+        cli_args.warmup_ratio if cli_args.warmup_ratio is not None else cfg.dpo.warmup_ratio
+    )
     min_lr_ratio = (
         cli_args.min_lr_ratio if cli_args.min_lr_ratio is not None else cfg.dpo.min_lr_ratio
     )
-    weight_decay = (
-        cli_args.weight_decay if cli_args.weight_decay is not None else cfg.training.weight_decay
-    )
+    # CLI 覆写 > SFT checkpoint _config > 当前 variant YAML; weight_decay 随
+    # checkpoint 兑现提交承诺 (32601f1), 旧 checkpoint 缺键回落 YAML
+    weight_decay = cli_args.weight_decay
     clip_grad = cfg.training.clip_grad
-    lr_scheduler = cli_args.lr_scheduler
-    stable_ratio = cli_args.stable_ratio
+    lr_scheduler = (
+        cli_args.lr_scheduler if cli_args.lr_scheduler is not None else cfg.dpo.lr_scheduler
+    )
+    stable_ratio = (
+        cli_args.stable_ratio if cli_args.stable_ratio is not None else cfg.dpo.stable_ratio
+    )
 
     set_seed(cli_args.seed)
 
@@ -151,6 +168,8 @@ def main() -> None:
     # 结构字段一律以 SFT checkpoint _config 为准（与上方 model_kwargs 一致），
     # 缺键才回落到当前 variant YAML，避免 variant 与 checkpoint 不一致时静默用错开关。
     flash_attn = sft_cfg.get("use_flash_attn", cfg.model.use_flash_attn)
+    if weight_decay is None:
+        weight_decay = sft_cfg.get("weight_decay", cfg.training.weight_decay)
 
     policy_model = GleamLMModel(
         **model_kwargs,

@@ -85,7 +85,8 @@ def extract_checkpoint_config(checkpoint: dict[str, Any]) -> dict[str, Any]:
 #   - tokenizer : manual/train_tokenizer.py 只读 data_sources
 #   - sft       : manual/sft.py 读 model(架构子集)+sft+data.checkpoint_dir+training.clip_grad
 #   - dpo       : manual/dpo.py 读 dpo+model.{dropout,use_flash_attn}+data.checkpoint_dir
-#                 +training.{clip_grad,weight_decay}
+#                 +training.{clip_grad,weight_decay}; lr_scheduler/stable_ratio 亦入
+#                 必读 (曾为 dpo.py 硬编码 CLI default, 改 YAML 无效)
 #
 # data_sources 以顶层键单独记账 (允许空列表, 键存在即可, train_tokenizer 自带防空)。
 # model 段不含可选键 (use_gradient_checkpointing / attn_type / ffn_type /
@@ -112,9 +113,11 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "weight_decay",
             "clip_grad",
             "log_interval",
+            "eval_interval",
             "save_interval",
             "seed",
             "label_smoothing",
+            "max_train_chars",
         ),
         "lr": ("type", "lr", "warmup_ratio", "stable_ratio", "min_lr_ratio", "wsd_decay_style"),
         "advanced": ("z_loss_weight", "num_workers"),
@@ -139,6 +142,8 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "accumulate_grad",
             "lr",
             "beta",
+            "lr_scheduler",
+            "stable_ratio",
             "max_seq_len",
             "warmup_ratio",
             "min_lr_ratio",
@@ -181,9 +186,11 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "weight_decay",
             "clip_grad",
             "log_interval",
+            "eval_interval",
             "save_interval",
             "seed",
             "label_smoothing",
+            "max_train_chars",
         ),
         "lr": ("type", "lr", "warmup_ratio", "stable_ratio", "min_lr_ratio", "wsd_decay_style"),
         "advanced": ("z_loss_weight", "num_workers"),
@@ -228,6 +235,8 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "accumulate_grad",
             "lr",
             "beta",
+            "lr_scheduler",
+            "stable_ratio",
             "max_seq_len",
             "warmup_ratio",
             "min_lr_ratio",
@@ -379,10 +388,22 @@ class ModelConfig(BaseModel):
 
         - 纯 model 字段:  {d_model: 512, num_layers: 12, ...}
         - 完整 GleamLMConfig 结构: {training: ..., model: {...}, ...}（取 model 段）
+
+        架构键必读: 缺键直接报错, 不静默回退 Pydantic 默认 —— 此前纯架构
+        YAML 缺 d_model 等键会静默拿默认 (nano) 值训练, 违背 ADR-0011
+        "架构参数只能出现在 YAML 快照"。
         """
         data = load_yaml(path)
         if isinstance(data, dict) and isinstance(data.get("model"), dict):
             data = data["model"]
+        if not isinstance(data, dict):
+            raise ConfigValidationError(f"模型架构 YAML 为空或格式错误: {path}")
+        missing = [k for k in _SCOPE_REQUIRED["full"]["model"] if k not in data]
+        if missing:
+            raise ConfigValidationError(
+                f"模型架构 YAML 缺少必读字段: {', '.join(missing)} "
+                "(参考 manual/configs/base.yaml 补全)"
+            )
         return cls(**data)
 
 
@@ -443,6 +464,10 @@ class DPOConfig(BaseModel):
     # 历史坑②: lr 曾误配 1e-7 (比 base.yaml 实证低 10×)
     lr: float = 1e-6
     beta: float = 0.3
+    # DPO 基线余弦调度 (终点 = lr × min_lr_ratio); 曾为 dpo.py 硬编码 CLI
+    # default (cosine/0.80), 改 YAML 无效 —— 与 sft 同构沉淀 YAML
+    lr_scheduler: Literal["cosine", "wsd"] = "cosine"
+    stable_ratio: float = 0.8
     max_seq_len: int = 1024
     warmup_ratio: float = 0.02
     min_lr_ratio: float = 0.05

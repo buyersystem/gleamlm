@@ -105,6 +105,8 @@ dpo:
   accumulate_grad: 2
   lr: 1.0e-6
   beta: 0.3
+  lr_scheduler: cosine       # 基线余弦调度 (与 SFT 同构)
+  stable_ratio: 0.80          # WSD 专用 (cosine 时忽略)
   max_seq_len: 512
   warmup_ratio: 0.02
   min_lr_ratio: 0.05

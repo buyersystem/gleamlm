@@ -96,6 +96,8 @@ dpo:
   # DPO 默认超参（实测基线见各变体 yaml）
   lr: 1.0e-6
   beta: 0.3
+  lr_scheduler: cosine          # DPO 基线余弦调度 (终点 = lr × min_lr_ratio)
+  stable_ratio: 0.80           # WSD 专用 (cosine 时忽略)
   max_seq_len: 1024
   warmup_ratio: 0.02
   min_lr_ratio: 0.05

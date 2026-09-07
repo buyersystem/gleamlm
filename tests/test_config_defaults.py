@@ -54,9 +54,11 @@ _CONSUMED = {
         "weight_decay",
         "clip_grad",
         "log_interval",
+        "eval_interval",
         "save_interval",
         "seed",
         "label_smoothing",
+        "max_train_chars",
     ),
     "lr": ("type", "lr", "warmup_ratio", "stable_ratio", "min_lr_ratio", "wsd_decay_style"),
     "advanced": ("z_loss_weight", "num_workers"),
@@ -81,6 +83,8 @@ _CONSUMED = {
         "accumulate_grad",
         "lr",
         "beta",
+        "lr_scheduler",
+        "stable_ratio",
         "max_seq_len",
         "warmup_ratio",
         "min_lr_ratio",
@@ -246,9 +250,11 @@ training:
   weight_decay: 0.01
   clip_grad: 1.0
   log_interval: 50
+  eval_interval: 500
   save_interval: 2000
   seed: 42
   label_smoothing: 0.1
+  max_train_chars: 6130000000
 lr:
   type: wsd
   lr: 0.0004
