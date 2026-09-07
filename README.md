@@ -179,6 +179,39 @@ GleamLM/
 └── README.md
 ```
 
+---
+
+## 作为库使用（PyPI）
+
+核心组件（上图中 `gleamlm/` 目录）已发布到 **PyPI**，可按库安装用于自有项目或二次开发：
+
+```bash
+pip install gleamlm
+```
+
+安装后包内自带 BBPE 12K 成品词表，无需下载、开箱即用；模型推理需自备 checkpoint（按下文「快速开始」训练得到，或任一同构产物）：
+
+```python
+from gleamlm.api import GleamLM
+
+# 从训练 checkpoint 加载模型 + 词表（device="auto" 自动选 CUDA/CPU）
+llm = GleamLM.from_checkpoint("checkpoints/nano/final.pt")
+print(llm.generate("量子纠缠的本质是", max_new_tokens=128))
+```
+
+也可只消费组件（分词器 / 模型 / 数据 / 训练）：
+
+```python
+from gleamlm.tokenizer import BBPETokenizer
+from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
+
+tok = BBPETokenizer.load(DEFAULT_TOKENIZER_PATH)   # 包内自带词表
+print(tok.decode(tok.encode("你好, 世界", add_bos=True)))
+```
+
+> 完整接口参考（模块地图 / 签名 / 示例）见 [docs/api.md](docs/api.md)。
+> 仓库其余目录（`manual/` 训练脚本、`industrial/` 工业轨、`hf/` HF 生态桥）不在 PyPI 包内；
+> PyPI 包仅含核心库层，两者边界见 `adr/0011-library-vs-recipe-architecture.md`。
 
 ---
 
