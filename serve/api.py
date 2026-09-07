@@ -116,7 +116,11 @@ def _check_request(req, prompt_len: int) -> None:
 
 
 def _sample_token(logits: torch.Tensor, params, generated: list[int] | None = None) -> torch.Tensor:
-    """单步采样: repetition_penalty → top_k → (T>0: 缩放+multinomial | T≤0: argmax)。"""
+    """单步采样: repetition_penalty → top_k → (T>0: 缩放+top_p+multinomial | T≤0: argmax)。
+
+    top_p (nucleus) 语义与核心库 gleamlm.inference.generator.sample_token 一致:
+    对缩放后的概率从最高 token 起累积，只保留累积概率 ≤ top_p 的最小 token 集。
+    top_p ≤ 0 或 ≥ 1 时不过滤。"""
     # 与 gleamlm.inference.generator.sample_token 同款重复惩罚（HF 算法）
     penalty = getattr(params, "repetition_penalty", 1.0)
     if penalty != 1.0 and generated:
@@ -128,7 +132,17 @@ def _sample_token(logits: torch.Tensor, params, generated: list[int] | None = No
         logits = logits.masked_fill(logits < vals[:, -1:], float("-inf"))
     if params.temperature <= 0:
         return logits.argmax(dim=-1, keepdim=True)
-    probs = torch.softmax(logits / params.temperature, dim=-1)
+    logits = logits / params.temperature
+    top_p = getattr(params, "top_p", 1.0)
+    if 0.0 < top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True, dim=-1)
+        cumulative_probs = torch.cumsum(torch.softmax(sorted_logits, dim=-1), dim=-1)
+        remove = cumulative_probs > top_p
+        remove[..., 1:] = remove[..., :-1].clone()  # 至少保留累积区间的第一个 token
+        remove[..., 0] = False
+        to_remove = remove.scatter(-1, sorted_indices, remove)
+        logits = logits.masked_fill(to_remove, float("-inf"))
+    probs = torch.softmax(logits, dim=-1)
     return torch.multinomial(probs, 1)
 
 

@@ -268,7 +268,7 @@ class MLP(nn.Module):
 
 # MoE: router 按 top-k 激活部分 expert，FLOPs 不变但参数量增加。
 # aux_loss = E * Σ(f_i * P_i) 防止 router 把所有 token 路由到同一个 expert。
-# MLP/MoE 统一返回 (output, aux_loss) 元组，DecoderLayer 解包后经 model 汇总。
+# MLP/MoE 统一返回 (output, aux_loss) 元组，DecoderLayer 解包后显式向上传递。
 class MoE(nn.Module):
     """Mixture of Experts — sparse FFN with top-k routing and load-balance aux loss."""
 
@@ -365,7 +365,7 @@ class DecoderLayer(nn.Module):
         rope_sin: torch.Tensor,
         mask: torch.Tensor | None = None,
         past_kv: PastKeyValue | None = None,
-    ) -> tuple[torch.Tensor, PastKeyValue]:
+    ) -> tuple[torch.Tensor, PastKeyValue, torch.Tensor | None]:
         residual = x
         x = self.attn_norm(x)
         attn_out, _, current_kv = self.attn(x, rope_cos, rope_sin, mask, past_kv)
@@ -376,7 +376,12 @@ class DecoderLayer(nn.Module):
         ffn_out, self.aux_loss = self.ffn(x)
         x = residual + ffn_out
 
-        return x, current_kv
+        # aux_loss 必须经返回值显式传递：no-reentrant gradient checkpointing 的
+        # 梯度回传只覆盖 checkpoint fn 的返回值，经 self.aux_loss 属性逃逸的 aux
+        # 张量在反向触发重算后梯度路径断裂（MoE + checkpoint 时 aux→router 梯度
+        # 近乎全丢，实测末层 7.48 → 0.61）。属性仅保留供调试/测试兼容（值为每次
+        # forward 最新一次执行的结果），梯度传递一律走返回值。
+        return x, current_kv, self.aux_loss
 
 
 class GleamLMModel(nn.Module):
@@ -572,8 +577,24 @@ class GleamLMModel(nn.Module):
             past_kv = past_kv_list[i] if past_kv_list else None
             # 反向时重算激活值换显存，代价是额外一次前向 (~20% 训练时间)
             if self.training and self.use_gradient_checkpointing:
-                x, current_kv = torch.utils.checkpoint.checkpoint(
-                    layer,
+                # aux_loss 必须作为 checkpoint fn 的输出返回，而非前向后读模块属性：
+                # no-reentrant checkpoint 只对 fn 返回值回传梯度，属性逃逸的 aux 在
+                # 反向重算后梯度路径断裂（MoE 负载均衡梯度近乎全丢）。
+                def _run_layer(
+                    x: torch.Tensor,
+                    rope_cos: torch.Tensor,
+                    rope_sin: torch.Tensor,
+                    mask: torch.Tensor | None,
+                    past_kv: PastKeyValue | None,
+                    layer: DecoderLayer = layer,
+                ) -> tuple[torch.Tensor, PastKeyValue, torch.Tensor | None]:
+                    # 直接调 .forward 而非模块 __call__：torch 未标注 Module.__call__
+                    # 返回类型（mypy 视为 Any，会触发 no-any-return）；项目未注册
+                    # forward hooks，两者语义等价。
+                    return layer.forward(x, rope_cos, rope_sin, mask, past_kv)
+
+                x, current_kv, aux = torch.utils.checkpoint.checkpoint(
+                    _run_layer,
                     x,
                     self.rope_cos,
                     self.rope_sin,
@@ -582,9 +603,8 @@ class GleamLMModel(nn.Module):
                     use_reentrant=False,
                 )
             else:
-                x, current_kv = layer(x, self.rope_cos, self.rope_sin, attn_mask, past_kv)
+                x, current_kv, aux = layer(x, self.rope_cos, self.rope_sin, attn_mask, past_kv)
             new_kv_list.append(current_kv)
-            aux = layer.aux_loss
             if aux is not None:
                 aux_loss_total = aux_loss_total + aux
 

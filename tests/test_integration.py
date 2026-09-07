@@ -194,7 +194,7 @@ def test_decoder_layer_nope_training_step():
     x = torch.randn(2, 16, 128)
 
     for _ in range(3):
-        out, _ = layer(x, cos, sin)
+        out, _, _ = layer(x, cos, sin)
         loss = out.mean()
         loss.backward()
         optimizer.step()
@@ -212,10 +212,69 @@ def test_decoder_layer_sliding_window_training_step():
     x = torch.randn(2, 16, 128)
 
     for _ in range(3):
-        out, _ = layer(x, cos, sin)
+        out, _, _ = layer(x, cos, sin)
         loss = out.mean()
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
 
     assert not torch.isnan(out).any()
+
+
+# ── MoE + Gradient Checkpointing: aux_loss 梯度保留 (H2 回归) ──────────────
+
+
+def test_moe_aux_grad_survives_gradient_checkpointing():
+    """MoE + checkpoint 时 aux→router 梯度应与关闭 checkpoint 时一致。
+
+    H2 回归: aux_loss 曾经经 DecoderLayer.aux_loss 属性逃逸，而 no-reentrant
+    checkpoint 只对 checkpoint fn 的返回值回传梯度，导致开启 checkpoint 后
+    aux→router 梯度近乎全丢（实测末层 7.48 → 0.61）。修复后 aux 作为
+    checkpoint fn 输出显式返回，两种模式梯度应一致。
+    """
+    torch.manual_seed(5)
+    model = GleamLMModel(
+        vocab_size=VOCAB_SIZE,
+        d_model=128,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        d_ff=256,
+        max_seq_len=64,
+        dropout=0.0,
+        ffn_variant=MoE,
+        num_experts=4,
+        top_k=2,
+    )
+    model.train()
+    batch = torch.randint(0, VOCAB_SIZE, (4, 32))
+
+    def aux_to_router_grads() -> dict[str, torch.Tensor]:
+        logits, _, aux_loss, _ = model(batch)
+        ppl_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, VOCAB_SIZE),
+            batch[:, 1:].reshape(-1),
+            ignore_index=0,
+        )
+        (ppl_loss + 0.01 * aux_loss).backward()
+        grads = {
+            name: p.grad.detach().clone()
+            for name, p in model.named_parameters()
+            if "ffn.router.weight" in name and p.grad is not None
+        }
+        model.zero_grad()
+        return grads
+
+    model.use_gradient_checkpointing = False
+    ref_grads = aux_to_router_grads()
+    model.use_gradient_checkpointing = True
+    cp_grads = aux_to_router_grads()
+
+    assert ref_grads and cp_grads, "两种模式都应产生 router 梯度"
+    for name, ref_grad in ref_grads.items():
+        assert name in cp_grads, f"checkpoint 模式下缺少 {name} 的梯度"
+        # 两种模式前向数学一致，梯度只差浮点噪声；1e-2 相对误差裕量
+        denom = ref_grad.norm() + 1e-8
+        assert (ref_grad - cp_grads[name]).norm() / denom < 1e-2, (
+            f"{name}: checkpoint 模式梯度相对偏差过大，aux→router 梯度可能丢失"
+        )

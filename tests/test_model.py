@@ -159,7 +159,7 @@ def test_decoder_layer_shape():
     block = DecoderLayer(256, 8, 2, 682)
     cos, sin = precompute_freqs_cis(32, 128)
     x = torch.randn(4, 16, 256)
-    out, kv = block(x, cos, sin)
+    out, kv, _ = block(x, cos, sin)
     assert out.shape == (4, 16, 256)
     assert kv[0].shape == (4, 2, 16, 32)
 
@@ -168,7 +168,7 @@ def test_decoder_layer_residual():
     block = DecoderLayer(256, 8, 2, 682, dropout=0.0)
     cos, sin = precompute_freqs_cis(32, 128)
     x = torch.randn(2, 8, 256)
-    out, _ = block(x, cos, sin)
+    out, _, _ = block(x, cos, sin)
     assert not torch.isnan(out).any()
 
 
