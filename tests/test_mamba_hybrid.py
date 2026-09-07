@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from gleamlm.models.mamba_hybrid import MambaBlock, MambaHybridModel
 from gleamlm.models.model import DecoderLayer, GleamLMModel
@@ -183,3 +184,41 @@ def test_num_params_reported():
     total, with_buffers = model.get_num_params()
     assert total > 0
     assert with_buffers >= total
+
+
+# Mamba-1 教学块初始化 (对齐官方)
+
+
+def test_mamba_block_a_log_official_init():
+    """A_log 每通道共享 log(1..d_state), 状态初始不"瞬死"(官方初始化)。"""
+    block = MambaBlock(64, d_state=16)  # d_inner = 128
+    expected = torch.log(torch.arange(1, 17, dtype=torch.float)).repeat(128, 1)
+    assert block.A_log.shape == (128, 16)
+    assert torch.equal(block.A_log, expected)
+
+
+def test_mamba_block_dt_bias_init():
+    """Δ 段 bias 使 softplus(bias) ≈ dt_init (论文初始步长域)。"""
+    block = MambaBlock(64, d_state=16)
+    dt_section = block.x_proj.bias[2 * 16 :]  # split [B, C, Δ] 的 Δ 段
+    assert dt_section.shape == (128,)
+    assert torch.allclose(F.softplus(dt_section), torch.full((128,), 0.01), atol=1e-5)
+    # 混合模型透传同一 dt_init
+    model = make_hybrid(pattern="m")
+    block_in_model = model.layers[0]
+    assert torch.allclose(
+        F.softplus(block_in_model.x_proj.bias[32:]), torch.full((128,), 0.01), atol=1e-5
+    )
+
+
+def test_mamba_block_long_sequence_no_nan():
+    """长序列 (128) 前向+反向无 NaN/Inf (状态 fp32 累积数值稳定)。"""
+    model = make_hybrid(pattern="m", max_seq_len=128)
+    x = torch.randint(1, 1000, (2, 128))
+    model.train()
+    logits, _, _, _ = model(x)
+    logits.float().pow(2).mean().backward()
+    assert torch.isfinite(logits).all()
+    for p in model.parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all()

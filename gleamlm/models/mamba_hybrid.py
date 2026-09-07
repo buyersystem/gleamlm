@@ -41,6 +41,7 @@ kv (attention 层), 无需按块类型分叉。
 
 from __future__ import annotations
 
+import math
 from typing import Any, cast
 
 import torch
@@ -87,13 +88,15 @@ def selective_scan(
     B_bar = delta.unsqueeze(-1) * B.unsqueeze(-2)  # [B, S, d_inner, d_state]
     u = B_bar * x.unsqueeze(-1)  # [B, S, d_inner, d_state]
 
-    # 显式循环 scan (非并行版本)
-    h = torch.zeros(batch_size, d_inner, d_state, device=x.device, dtype=dtype)
+    # 显式循环 scan (非并行版本)。状态张量显式 fp32 累积: bf16 逐 token
+    # 舍入会在时间维沉积 (SSM 经典数值坑); A_bar 与 fp32 参数 A 运算后也
+    # 是 fp32, 后续乘加天然保持 fp32, 输出回 cast 到输入 dtype。
+    h = torch.zeros(batch_size, d_inner, d_state, device=x.device, dtype=torch.float32)
     ys = []
     for t in range(seq_len):
         h = A_bar[:, t] * h + u[:, t]  # [B, d_inner, d_state]
         y = (C[:, t].unsqueeze(-2) * h).sum(dim=-1)  # [B, d_inner]
-        ys.append(y)
+        ys.append(y.to(dtype))
 
     return torch.stack(ys, dim=1)  # [B, S, d_inner]
 
@@ -116,6 +119,8 @@ class MambaBlock(nn.Module):
         d_conv: int = 4,
         expand_factor: int = 2,
         use_gate: bool = True,
+        # Δ 初始步长 (softplus 后目标值, 论文推荐域 0.001~0.1)
+        dt_init: float = 0.01,
         **kwargs: Any,
     ) -> None:
         super().__init__()
@@ -140,13 +145,20 @@ class MambaBlock(nn.Module):
             bias=False,
         )
 
-        # B/C/Δ 由 x' 投影得到 (selective)；A 固定, log 参数化保证 exp 后为正
-        self.x_proj = nn.Linear(d_inner, d_state * 2 + d_inner, bias=False)
+        # B/C/Δ 由 x' 投影得到 (selective)；A 固定, log 参数化保证 exp 后为正。
+        # x_proj 带 bias: Δ 段 (末 d_inner 维) 兼作官方 dt_bias, 其余段 bias
+        # 保持 Linear 默认 (≈0) 即可。
+        self.x_proj = nn.Linear(d_inner, d_state * 2 + d_inner, bias=True)
+        # A_log 官方初始化: 每通道共享同一组 log(1..d_state) 转移速率, 全部
+        # 状态初始即在可用衰减范围; 早期简化版展平 1..d_inner*d_state, 超九成
+        # 状态衰减过强 (k>16 → e^{-0.69k}≈0) 近乎瞬死, 需训练良久才被拉回。
         self.A_log = nn.Parameter(
-            torch.log(torch.arange(1, d_inner * d_state + 1, dtype=torch.float)).view(
-                d_inner, d_state
-            )
+            torch.log(torch.arange(1, d_state + 1, dtype=torch.float)).repeat(d_inner, 1)
         )
+        # Δ 段 bias 初始化到 softplus(·)=dt_init, 即 bias = ln(e^{dt_init}-1);
+        # 论文把初始步长域定在 ~(0.001, 0.1), 无偏置时 softplus(0)≈0.69 过大,
+        # 状态刷新过快、长期记忆弱。
+        nn.init.constant_(self.x_proj.bias[d_state * 2 :], math.log(math.expm1(dt_init)))
         self.D = nn.Parameter(torch.ones(d_inner))
 
         self.out_proj = nn.Linear(d_inner, d_model, bias=False)
@@ -176,8 +188,8 @@ class MambaBlock(nn.Module):
         xz = self.in_proj(x)
         x_inner, z = xz.chunk(2, dim=-1)  # [B, S, d_inner] each
 
-        x_conv = x_inner.transpose(1, 2)  # [B, d_inner, S]
-        x_conv = self.conv1d(x_conv)[..., :seq_len]  # 因果裁切
+        # depthwise 因果卷积; 先激活再转置 (逐元素等价, 少一次 transpose)
+        x_conv = self.conv1d(x_inner.transpose(1, 2))[..., :seq_len]  # [B, d_inner, S]
         x_conv = F.silu(x_conv)  # [B, d_inner, S]
         x_conv = x_conv.transpose(1, 2)  # [B, S, d_inner]
 
@@ -240,6 +252,7 @@ class MambaHybridModel(nn.Module):
         mamba_d_conv: int = 4,
         mamba_expand_factor: int = 2,
         mamba_use_gate: bool = True,
+        mamba_dt_init: float = 0.01,  # Δ 初始步长 (softplus 后目标值)
         # YaRN 长度外推参数 (attention 层 RoPE 用)
         rope_scale: float = 1.0,
         rope_factor: float = 8.0,
@@ -301,6 +314,7 @@ class MambaHybridModel(nn.Module):
                         d_conv=mamba_d_conv,
                         expand_factor=mamba_expand_factor,
                         use_gate=mamba_use_gate,
+                        dt_init=mamba_dt_init,
                     )
                 )
 
@@ -343,7 +357,8 @@ class MambaHybridModel(nn.Module):
     # LM Head 用小标准差防止 softmax 饱和。注意: MambaBlock 的三个 Linear
     # (in_proj/x_proj/out_proj) 会被本循环重初始化为同尺度 — 与 MambaBlock
     # 单独使用时的默认 init 不同, 此处是有意对齐主模型的方差尺度;
-    # conv1d 与 A_log/D 不是 nn.Linear, 保持 MambaBlock 默认不受影响。
+    # conv1d / A_log / D 不是 nn.Linear, 且循环只重置 weight 不碰 bias
+    # (x_proj 的 Δ 段 dt_bias 保持构造时设定), 均不受影响。
     def _init_weights(self) -> None:
         nn.init.normal_(self.token_embed.weight, mean=0.0, std=self.d_model**-0.5)
         for module in self.modules():
