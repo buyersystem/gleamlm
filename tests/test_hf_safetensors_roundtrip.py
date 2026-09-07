@@ -7,7 +7,12 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
 import torch
+
+# HF 生态测试: 依赖 transformers (hf extra); 裸 dev 环境缺依赖时整体跳过,
+# 而不是收集阶段报错 (test.yml/publish.yml 已装 [dev,hf], 此处为本地兜底)
+pytest.importorskip("transformers")
 
 from hf.hf_config import GleamLMConfig
 from hf.hf_model import GleamLMForCausalLM
