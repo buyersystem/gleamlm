@@ -169,6 +169,7 @@ GleamLM/
 │   ├── export.py                  #   HF 格式导出（safetensors + vLLM 适配）
 │   └── export_onnx.py             #   ONNX 导出
 ├── serve/                         # FastAPI OpenAI 兼容服务（含网页聊天界面）
+├── webui/                         # 图形训练控制台（预训练/后训练/推理三 tab，启动见快速开始）
 ├── eval/                          # 评测入口（lm-evaluation-harness：CEVAL / CMMLU / MMLU）
 ├── tests/                         # 单元测试 + 集成测试
 ├── tools/                         # 辅助工具（checkpoint 检查/转换、快速运行、RAG demo）
@@ -227,6 +228,20 @@ print(tok.decode(tok.encode("你好, 世界", add_bos=True)))
 ```bash
 pip install -e ".[train,dev]"
 ```
+
+### 图形界面：WebUI（可选，最快上手）
+
+WebUI 是浏览器里的图形化训练控制台：预训练 / SFT / DPO / OPD / GRPO / PPO / LoRA 各阶段任务卡一键启动，实时 loss / lr 曲线与训练日志、实验历史管理；推理 tab 加载 checkpoint 即可对话。
+
+```bash
+# ① 安装依赖（FastAPI + uvicorn + transformers）
+pip install -e ".[serve]"
+
+# ② 启动（默认 http://127.0.0.1:8080）
+python webui/main.py
+```
+
+浏览器打开 <http://127.0.0.1:8080>。常用参数：`--port` 改端口、`--model <checkpoint>` 启动即加载推理模型、`--no-train` 仅保留推理（部署场景）。训练任务需按下方流程先备好数据与 checkpoint；已有后训练产物（如 `checkpoints/nano/sft/sft_best.pt`）可直接在推理 tab 加载对话。
 
 ### 0. 数据准备
 
