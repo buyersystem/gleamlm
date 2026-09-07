@@ -139,6 +139,7 @@ GleamLM/
 │   └── configs/                   #   手动轨专用 YAML（仅 manual 轨脚本消费）
 │       ├── base.yaml              #   公共默认 / 新配置模板（复制改名即可新建）
 │       ├── nano.yaml / lite.yaml / pro.yaml  #   各变体独立完整配置（不依赖继承）
+│       ├── user_model.yaml        #   用户自定义模型模板（直接改此文件，不动 base）
 │       └── deepspeed_config.json / deepspeed_zero2.json  #   DeepSpeed 引擎参数
 │
 ├── industrial/                    # 工业训练脚本（对接 Megatron / TRL / PEFT / DeepSpeed）
