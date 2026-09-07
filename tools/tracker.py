@@ -77,6 +77,13 @@ class ExperimentTracker:
         )
         self._conn.commit()
 
+    def delete_run(self, run_id: str) -> int:
+        """删除 run 及其全部指标（不可恢复）。返回删除的 run 行数（0=不存在）。"""
+        self._conn.execute("DELETE FROM metrics WHERE run_id=?", (run_id,))
+        cur = self._conn.execute("DELETE FROM runs WHERE id=?", (run_id,))
+        self._conn.commit()
+        return cur.rowcount
+
     def get_runs(self, project: str | None = None) -> list[dict]:
         project = project or self.project
         rows = self._conn.execute(

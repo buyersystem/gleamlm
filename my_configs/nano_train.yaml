@@ -63,8 +63,7 @@ model:
 
 # ★★★ 必改: 数据路径 (相对仓库根目录或绝对路径) ★★★
 data:
-  data_dir: data/user/pretrain/train   # ← 你的 .bin/.idx 分片前缀 (data_tools/pack 产出, 如 data/user/pretrain/train)
-                                        #   mmap 零内存加载; 若目录内只有 .txt (小数据) 才写目录本身
+  data_dir: data/user/pretrain   # ← 你的预训练 .bin/.idx 目录
   tokenizer_path: gleamlm/tokenizer/checkpoints/bbpe_12k
   checkpoint_dir: checkpoints/user   # ← 你的模型保存目录
   ids_prefix: ""
@@ -130,8 +129,6 @@ opd:
   save_interval: 10
   seed: 42
   data_path: data/user/opd_prompts.jsonl   # ← 你的 OPD prompt 数据
-  # 本地 HF 教师模型目录 (OPD 蒸馏评分器, 如 checkpoints/Qwen3-0.6B)
-  teacher_model_path: checkpoints/Qwen3-0.6B
 
 # ---- LoRA 微调 (可选路线, 公共默认) ----
 lora:

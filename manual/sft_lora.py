@@ -137,8 +137,13 @@ def train(args):
     )
     os.makedirs(args.output_dir, exist_ok=True)
 
-    for epoch in range(args.epochs):
-        for step, (input_ids, labels) in enumerate(loader):
+    # x 轴步数跨 epoch 单调递增 (面板按 step 去重, 归零会使后段点全部被丢);
+    # 进度行与 sft.py tqdm postfix 同构 (N/M [... loss=.., lr=..]), WebUI 解析器可识别;
+    # flush=True 保证管道/重定向下实时到达 (不 flush 会块缓冲延迟, 面板实时曲线缺失)。
+    total_steps = len(loader) * args.epochs
+    global_step = 0
+    for _ in range(args.epochs):
+        for _, (input_ids, labels) in enumerate(loader):
             input_ids, labels = input_ids.to(device), labels.to(device)
             logits, _, aux_loss, _ = model(input_ids)
 
@@ -153,9 +158,13 @@ def train(args):
             nn.utils.clip_grad_norm_(lora_params, args.clip)
             optimizer.step()
             optimizer.zero_grad()
+            global_step += 1
 
-            if step % args.log_interval == 0:
-                print(f"epoch {epoch} step {step} loss={loss.item():.4f}")
+            if global_step == 1 or global_step % args.log_interval == 0:
+                print(
+                    f"{global_step}/{total_steps} [loss={loss.item():.4f}, lr={args.lr:.2e}]",
+                    flush=True,
+                )
 
     save_path = os.path.join(args.output_dir, "lora.pt")
     lora_state = {k: v for k, v in model.state_dict().items() if "lora_" in k}

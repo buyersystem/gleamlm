@@ -54,7 +54,7 @@ model:
 
 # ---- 数据路径 ----
 data:
-  # .bin/.idx 分片前缀（mmap 零内存，勿写目录 — 目录会走 txt 急切加载分支）
+  # .bin/.idx 分片前缀（mmap 零内存）；勿写目录——目录会走 txt 急切分支把 12GB 文本读入内存
   data_dir: data/nano/pretrain/train
   tokenizer_path: gleamlm/tokenizer/checkpoints/bbpe_12k
   checkpoint_dir: checkpoints/nano
@@ -131,8 +131,6 @@ opd:
   save_interval: 10
   seed: 42
   data_path: data/nano/opd_prompts.jsonl
-  # 本地 HF 教师模型目录 (OPD 蒸馏评分器)
-  teacher_model_path: checkpoints/Qwen3-0.6B
 
 # ---- LoRA 微调 (可选路线) ----
 lora:

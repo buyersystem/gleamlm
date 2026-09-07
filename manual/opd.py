@@ -499,11 +499,15 @@ def train(args):
             optimizer.zero_grad()
 
             if global_step % args.log_interval == 0:
+                # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构): loss/lr 帧后跟
+                # 诊断字段, 面板解析器只吃 loss=.., lr=.. 帧; flush 保证管道下实时
                 print(
-                    f"step {global_step}  loss={loss.item():.4f}  "
+                    f"{global_step}/{len(loader) * args.epochs} "
+                    f"[loss={loss.item():.4f}, lr={args.lr:.2e}] "
                     f"mean_A={advantages.mean().item():+.3f}  "
                     f"log_pi_S={log_pi_S.mean().item():+.2f}  "
-                    f"log_pi_T={log_pi_T.mean().item():+.2f}"
+                    f"log_pi_T={log_pi_T.mean().item():+.2f}",
+                    flush=True,
                 )
             global_step += 1
 
@@ -629,6 +633,7 @@ def parse_args():
         "log_interval",
         "save_interval",
         "seed",
+        "teacher_model_path",
     ):
         if getattr(args, _key) is None:
             setattr(args, _key, getattr(cfg.opd, _key))

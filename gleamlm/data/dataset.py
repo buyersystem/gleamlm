@@ -146,6 +146,38 @@ def _resolve_data_files(data_path: str) -> list[str] | str:
     return data_path
 
 
+def _guard_text_eager(data_path: str | list[str]) -> None:
+    """txt 急切分支防呆 — 该分支把全部文本读入内存逐行 tokenize:
+
+    1) 目录同时含 .bin/.idx 工业分片与 .txt → 引导传分片前缀走 mmap（零内存），
+       杜绝 GB 级文本被误读入内存（曾有 12GB 文本卡死 6 分钟无输出的案例）；
+    2) 纯 .txt 总量 > 1GB → 急切加载会驻留数倍于文本体积的内存，同样报错引导。
+
+    纯 .txt 小数据目录（教学 demo）不受影响。
+    """
+    if not isinstance(data_path, str) or not os.path.isdir(data_path):
+        return
+    txts = sorted(glob(os.path.join(data_path, "**", "*.txt"), recursive=True))
+    if not txts:
+        return
+    has_bin = any(glob(os.path.join(data_path, "**", "*.bin"))) or any(
+        glob(os.path.join(data_path, "**", "*.idx"))
+    )
+    if has_bin:
+        raise ValueError(
+            f"数据目录 {data_path} 同时含 .bin/.idx 工业分片与 .txt —— 预训练请传"
+            f"分片前缀（--data {data_path}/<split> 或 YAML data_dir: {data_path}/<split>）"
+            "走 mmap 零内存；txt 急切分支会把全部文本读入内存。"
+            "仅含 .txt 的小数据目录不受此限制。"
+        )
+    total = sum(os.path.getsize(f) for f in txts)
+    if total > 1 << 30:
+        raise ValueError(
+            f"数据目录 {data_path} 的 .txt 共 {total / 1e9:.1f}GB —— txt 急切加载会把文本"
+            "与 block 全部驻留内存（数倍于文本体积），请先预处理成 .bin/.idx 再传分片前缀。"
+        )
+
+
 def _read_text_lines(data_path: str | list[str]) -> list[str]:
     """读取 txt（路径/目录/文件列表）的所有非空行 — 零 datasets 依赖。"""
     files = data_path if isinstance(data_path, list) else _resolve_data_files(data_path)
@@ -222,6 +254,7 @@ def tokenize_and_group(
     """
     if isinstance(data_path, str) and _is_indexed_prefix(data_path):
         return IndexedMMapDataset(data_path, seq_len)
+    _guard_text_eager(data_path)
     return _TextTokenizeDataset(data_path, tokenizer, seq_len, text_key=text_key, num_proc=num_proc)
 
 

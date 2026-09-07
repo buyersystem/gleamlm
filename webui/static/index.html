@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GleamLM 训练控制台</title>
+<link rel="stylesheet" href="/static/theme.css" />
+</head>
+<body>
+<header>
+  <div class="logo">
+    <h1>GleamLM 训练控制台</h1>
+  </div>
+  <span class="spacer"></span>
+  <span id="gpu-badge" class="meta-item" title="GPU 显存占用（面板侧探测）">
+    <span class="dot gpu"></span>GPU <b id="gpu-text">–</b>
+  </span>
+  <span id="inf-badge" class="meta-item" title="推理模型（加载时占显存，训练会 OOM 提示）">
+    <span class="dot idle" id="inf-dot"></span>推理模型 <b id="inf-text">未加载</b>
+  </span>
+  <span id="train-badge" class="meta-item" title="当前训练任务">
+    <span class="dot idle" id="train-dot"></span>训练 <b id="train-text">空闲</b>
+  </span>
+  <button id="look-btn" class="btn ghost" type="button">外观</button>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab active" type="button" data-tab="pretrain"><span class="idx">①</span>预训练</button>
+  <button class="tab" type="button" data-tab="posttrain"><span class="idx">②</span>后训练</button>
+  <button class="tab" type="button" data-tab="inference"><span class="idx">③</span>推理</button>
+</nav>
+
+<main>
+  <div id="warn-line"></div>
+
+  <!-- ── ① 预训练：左栏任务/配置 + 中央 loss/lr + 底部日志 ── -->
+  <section id="pane-pretrain" class="tabpane active">
+    <div class="pane-row" style="flex:3">
+      <div class="panel" style="width:270px;flex:none">
+        <div class="p-title">任务列表
+          <span class="spacer"></span>
+          <button id="pt-cfg-btn" class="btn ghost sm" type="button">YAML 配置</button>
+        </div>
+        <div id="pt-runs" class="p-body" style="flex:1"></div>
+      </div>
+      <div class="panel" style="flex:1;min-width:180px">
+        <div class="p-title">损失曲线 Loss
+          <span class="spacer"></span><span class="chip" id="pt-loss-live"></span>
+        </div>
+        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt-loss-chart"></canvas></div>
+      </div>
+      <div class="panel" style="flex:1;min-width:180px">
+        <div class="p-title">学习率 LR
+          <span class="spacer"></span><span class="chip" id="pt-lr-live"></span>
+        </div>
+        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt-lr-chart"></canvas></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1.8;min-height:120px">
+      <div class="p-title">训练日志
+        <span class="spacer"></span>
+        <span id="pt-run-info" class="run-info"></span>
+        <button id="pt-start-btn" class="btn sm" type="button" data-start-btn>＋ 启动预训练</button>
+        <button id="pt-stop" class="btn danger sm" type="button" disabled data-stop-btn>停止</button>
+      </div>
+      <pre id="pt-log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- ── ② 后训练：流水线阶段卡 + 当前阶段曲线 + 日志 ── -->
+  <section id="pane-posttrain" class="tabpane">
+    <div class="panel" style="flex:none">
+      <div class="p-title">阶段任务</div>
+      <div id="pt2-stages" class="pipeline"></div>
+    </div>
+    <div class="pane-row" style="flex:3">
+      <div class="panel" style="width:240px;flex:none">
+        <div class="p-title">实验记录</div>
+        <div id="pt2-runs" class="p-body" style="flex:1"></div>
+      </div>
+      <div class="panel" style="flex:1;min-height:140px">
+        <div class="p-title">损失曲线 Loss
+          <span class="spacer"></span>
+          <span id="pt2-loss-live" class="chip"></span>
+        </div>
+        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-loss-chart"></canvas></div>
+      </div>
+      <div class="panel" style="flex:1;min-height:140px">
+        <div class="p-title">学习率 LR
+          <span class="spacer"></span>
+          <span id="pt2-lr-live" class="chip"></span>
+        </div>
+        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-lr-chart"></canvas></div>
+      </div>
+    </div>
+    <div class="panel" style="flex:1.8;min-height:120px">
+      <div class="p-title">训练日志
+        <span class="spacer"></span>
+        <span id="pt2-status" class="run-info"></span>
+        <button id="pt2-start-btn" class="btn sm" type="button" data-start-btn>＋ 启动任务</button>
+        <button id="pt2-stop" class="btn danger sm" type="button" disabled data-stop-btn>停止</button>
+      </div>
+      <pre id="pt2-log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- ── ③ 推理：模型栏 + 对话台 ── -->
+  <section id="pane-inference" class="tabpane">
+    <div class="pane-row" style="flex:1">
+      <div class="panel" style="width:260px;flex:none">
+        <div class="p-title">加载语言模型
+          <span class="spacer"></span>
+          <button id="chat-refresh" class="btn ghost sm" type="button">刷新</button>
+        </div>
+        <div id="chat-models" class="p-body" style="flex:1"></div>
+        <div class="p-body" style="border-top:1px solid var(--border)">
+          <label>当前：<b id="chat-cur" style="color:var(--text);font-family:var(--mono);font-size:12px">未加载</b></label>
+        </div>
+      </div>
+      <div class="panel" style="flex:1">
+        <div class="p-title">对话（多轮自动带最近 6 轮，上下文 512 溢出会提示）
+          <span class="spacer"></span>
+          <label style="display:flex;align-items:center;gap:6px">温度
+            <input id="temp" type="range" min="0.1" max="1.5" step="0.05" value="0.8" style="width:100px" />
+            <span id="temp-val" style="color:var(--text);width:36px;text-align:right">0.8</span>
+          </label>
+          <button id="chat-clear" class="btn ghost sm" type="button">清空对话</button>
+        </div>
+        <div id="chat-scroll">
+          <div class="hint">
+            <b>GleamLM 已就绪</b><br />
+            左侧选择 checkpoint 并点「加载」；下方输入开始对话，Enter 发送，Shift+Enter 换行。
+          </div>
+        </div>
+        <div class="p-body" style="border-top:1px solid var(--border)">
+          <div class="pane-row" style="flex:none;gap:8px;align-items:center;flex-wrap:wrap">
+            <select id="chat-topk" style="width:92px" title="top_k"><option>50</option><option>40</option><option>30</option><option>20</option><option>10</option><option>0</option></select>
+            <label style="font-size:12px">top_p <input id="chat-topp" type="number" min="0" max="1" step="0.05" value="0.9" style="width:70px" /></label>
+            <label style="font-size:12px">rep_penalty <input id="chat-rep" type="number" min="1" max="2" step="0.05" value="1.15" style="width:76px" /></label>
+            <label style="font-size:12px">max_tokens <input id="chat-maxtok" type="number" min="16" max="512" step="16" value="256" style="width:84px" /></label>
+            <span class="spacer"></span>
+            <span id="chat-stream-lbl" class="chip" title="SSE 流式输出（fetch + ReadableStream）">流式 ✓</span>
+          </div>
+          <form id="chat-form" style="display:flex;gap:10px;margin-top:8px;align-items:flex-end">
+            <textarea id="chat-input" rows="1" placeholder="输入消息…" style="resize:none;max-height:160px"></textarea>
+            <button id="chat-send" class="btn" type="submit">发送</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>GleamLM WebUI · https://github.com/philexohf/gleamlm</footer>
+
+<!-- 外观设置 -->
+<div class="modal-mask" id="look-mask">
+  <div class="modal" style="width:min(420px,90vw)">
+    <div class="m-head"><b>外观</b><span class="spacer"></span>
+      <button class="btn ghost sm" type="button" data-close="look-mask">✕</button></div>
+    <div class="m-body">
+      <label>背景图
+        <select id="look-bg">
+          <option value="none">无</option>
+          <option value="night">luna_logo</option>
+          <option value="night2">luna_night</option>
+        </select>
+      </label>
+      <label style="display:flex;gap:10px;align-items:center">图案透明度
+        <input id="look-alpha" type="range" min="0" max="0.85" step="0.05" value="0" style="flex:1" />
+        <span id="look-alpha-val" style="width:32px;text-align:right;color:var(--text)">0</span>
+      </label>
+    </div>
+  </div>
+</div>
+
+<!-- 启动任务 / 配置编辑器 modal 容器（各 tab js 注入内容） -->
+<div class="modal-mask" id="modal-mask">
+  <div class="modal" id="modal-box"></div>
+</div>
+
+<script src="/static/util.js" defer></script>
+<script src="/static/sse.js" defer></script>
+<script src="/static/chart.js" defer></script>
+<script src="/static/trainer.js" defer></script>
+<script src="/static/chat.js" defer></script>
+<script src="/static/pretrain.js" defer></script>
+<script src="/static/posttrain.js" defer></script>
+</body>
+</html>

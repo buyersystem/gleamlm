@@ -41,6 +41,9 @@ adr/
 
 # Images (training curves)
 images/
+# WebUI 背景图需入库（webui/logs/ 已被 logs/、*.log 覆盖忽略）
+!webui/images/
+!webui/images/*
 
 # IDE
 .vscode/

@@ -180,7 +180,11 @@ def train(args):
             optimizer.zero_grad()
 
             if rank == 0 and global_step % args.log_interval == 0:
-                print(f"step {global_step}  loss={total_loss.item():.4f}")
+                # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构); flush 保证实时
+                print(
+                    f"{global_step}/{len(loader) * args.epochs} [loss={total_loss.item():.4f}, lr={args.lr:.2e}]",
+                    flush=True,
+                )
             global_step += 1
 
     if rank == 0:

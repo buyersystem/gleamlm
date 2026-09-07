@@ -2,7 +2,7 @@
 
 用法:
     python manual/sft.py --variant nano
-    python manual/sft.py --variant lite --model_path checkpoints/lite/best_model.pt
+    python manual/sft.py --variant lite --model_path checkpoints/lite/final.pt
 """
 
 import argparse
@@ -52,7 +52,7 @@ def main():
         "--model_path",
         type=str,
         default=None,
-        help="预训练模型路径 (默认: checkpoints/{variant}/best_model.pt)",
+        help="预训练模型路径 (默认: checkpoints/{variant}/final.pt)",
     )
     parser.add_argument(
         "--tokenizer_path", type=str, default=DEFAULT_TOKENIZER_PATH, help="BBPE 分词器目录"
@@ -100,7 +100,19 @@ def main():
     # 单轨 Pydantic 配置: 字段校验/默认值唯一来源 (gleamlm/utils/config.py)
     cfg = load_config(config_path, _ROOT_DIR, scope="sft")
 
-    model_path = cli_args.model_path or os.path.join(cfg.data.checkpoint_dir, "best_model.pt")
+    # 默认加载预训练最终产物 final.pt；老 checkpoint 树仅有 best_model.pt（验证期最优）时回退
+    if cli_args.model_path:
+        model_path = cli_args.model_path
+    else:
+        model_path = None
+        for _name in ("final.pt", "best_model.pt"):
+            _cand = os.path.join(cfg.data.checkpoint_dir, _name)
+            if os.path.exists(_cand):
+                model_path = _cand
+                break
+        if model_path is None:
+            # 两个候选都不存在: 仍指向 final.pt, 让加载处报出明确 FileNotFoundError
+            model_path = os.path.join(cfg.data.checkpoint_dir, "final.pt")
     data_path = cli_args.data_path or cfg.sft.data_path
     save_dir = cli_args.save_dir or os.path.join(cfg.data.checkpoint_dir, "sft")
 

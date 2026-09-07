@@ -180,20 +180,17 @@ def main():
         sys.exit(1)
 
     if args.model is None:
-        suffix = "sft/sft_best.pt" if args.sft else "best_model.pt"
-        args.model = os.path.join(
+        base = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "checkpoints",
             args.variant,
-            suffix,
+        )
+        # 默认: SFT 产物 sft_best.pt / 预训练最终产物 final.pt
+        args.model = (
+            os.path.join(base, "sft", "sft_best.pt") if args.sft else os.path.join(base, "final.pt")
         )
         if not os.path.exists(args.model) and args.sft:
-            args.model = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "checkpoints",
-                args.variant,
-                "best_model.pt",
-            )
+            args.model = os.path.join(base, "final.pt")
             print(f"Info: SFT 模型未找到，回退到预训练模型: {args.model}")
 
     if not os.path.exists(args.model):

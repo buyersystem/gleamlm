@@ -123,6 +123,8 @@ opd:
   save_interval: 10
   seed: 42
   data_path: ""
+  # 本地 HF 教师模型目录 (OPD 蒸馏评分器, 如 checkpoints/Qwen3-0.6B)
+  teacher_model_path: checkpoints/Qwen3-0.6B
 
 # ---- LoRA 微调 (可选路线, 基座用预训练模型) ----
 lora:

@@ -165,6 +165,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "save_interval",
             "seed",
             "data_path",
+            "teacher_model_path",
         ),
         "lora": (
             "epochs",
@@ -260,6 +261,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "save_interval",
             "seed",
             "data_path",
+            "teacher_model_path",
         ),
     },
     "lora": {
@@ -494,6 +496,8 @@ class OpdConfig(BaseModel):
     save_interval: int = 10
     seed: int = 42
     data_path: str = ""
+    # 本地 HF 教师模型目录 (OPD 蒸馏评分器, 公共默认 = base.yaml; 如 Qwen3-0.6B)
+    teacher_model_path: str = "checkpoints/Qwen3-0.6B"
 
 
 class LoraConfig(BaseModel):
@@ -558,6 +562,10 @@ class GleamLMConfig(BaseModel):
             self.dpo.data_path = os.path.normpath(os.path.join(root_dir, self.dpo.data_path))
         if self.opd.data_path and not os.path.isabs(self.opd.data_path):
             self.opd.data_path = os.path.normpath(os.path.join(root_dir, self.opd.data_path))
+        if self.opd.teacher_model_path and not os.path.isabs(self.opd.teacher_model_path):
+            self.opd.teacher_model_path = os.path.normpath(
+                os.path.join(root_dir, self.opd.teacher_model_path)
+            )
         if self.lora.data_path and not os.path.isabs(self.lora.data_path):
             self.lora.data_path = os.path.normpath(os.path.join(root_dir, self.lora.data_path))
         return self

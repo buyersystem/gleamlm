@@ -106,6 +106,7 @@ _CONSUMED = {
         "save_interval",
         "seed",
         "data_path",
+        "teacher_model_path",
     ),
     "lora": (
         "epochs",
