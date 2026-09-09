@@ -24,6 +24,8 @@ class LineChart {
       this.mouse = null;
       this._schedule();
     });
+    // 窗口缩放后位图按新布局尺寸重绘（rAF 合帧）
+    window.addEventListener("resize", () => this._schedule());
   }
 
   /* rAF 合帧：同一帧内只重绘一次 */
@@ -36,6 +38,7 @@ class LineChart {
   }
 
   render(data) {
+    this._retry = 0; // 新数据重给 rAF 补绘机会（见 draw 的 0 尺寸分支）
     this.data = data;
     // 每系列抽稀至 maxPoints（默认 2000），桶内 min/max 保峰谷（见文件尾 decimate）
     this.data = {
@@ -60,6 +63,13 @@ class LineChart {
 
   draw() {
     const { w, h, dpr } = this._size();
+    // 隐藏容器（tab 未激活）中首渲时布局尺寸为 0，直接画会固化成 0×0 空白位图；
+    // 已可见但仍为 0（布局未定）时 rAF 补绘几次，待布局完成重画
+    if ((!w || !h) && this.cv.offsetParent !== null && (this._retry || 0) < 5) {
+      this._retry = (this._retry || 0) + 1;
+      requestAnimationFrame(() => this.draw());
+      return;
+    }
     const ctx = this.ctx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);

@@ -569,7 +569,12 @@ def parse_args():
     p.add_argument(
         "--data", type=str, default=None, help="JSONL prompts (未传回落 YAML opd.data_path)"
     )
-    p.add_argument("--output_dir", type=str, default="./checkpoints/opd")
+    p.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="OPD 模型保存目录 (未传取 data.checkpoint_dir/opd, 落变体目录内)",
+    )
     # ── 实验/方案级超参: 默认权威在 YAML opd 段 (default=None + 裁决, 无第二权威) ──
     p.add_argument("--epochs", type=int, default=None, help="覆写训练轮数 (默认取 YAML opd.epochs)")
     p.add_argument("--batch_size", type=int, default=None, help="覆写每 step 的 prompt 数")
@@ -617,6 +622,8 @@ def parse_args():
 
     # ── 单轨裁决: YAML opd 段为默认权威; CLI 显式传才覆写 ──
     cfg = load_config(os.path.join(args.config_dir, f"{args.variant}.yaml"), _ROOT_DIR, scope="opd")
+    # 保存目录对齐 sft/dpo: 默认落变体根目录内 (checkpoints/<variant>/opd)
+    args.output_dir = args.output_dir or os.path.join(cfg.data.checkpoint_dir, "opd")
     for _cli, _key in (("data", "data_path"), ("seq_len", "max_seq_len"), ("clip", "clip_grad")):
         if getattr(args, _cli) is None:
             setattr(args, _cli, getattr(cfg.opd, _key))

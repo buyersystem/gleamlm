@@ -419,6 +419,11 @@ function initPretrain() {
   trainer.on("metric", onMetric);
   trainer.on("exit", onExit);
   loadRuns(true);
+  // 切回本页时重绘曲线：tab 隐藏期间首渲的 canvas 位图为 0×0（无布局尺寸），
+  // 切回后必须补一次 draw 才会按真实尺寸重建位图
+  window.addEventListener("tabchange", (e) => {
+    if (e.detail === "pretrain") drawCharts();
+  });
 }
 
 document.addEventListener("DOMContentLoaded", initPretrain);

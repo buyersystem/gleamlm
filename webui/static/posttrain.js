@@ -166,7 +166,7 @@ function renderRuns() {
   const mine = pt2RunList();
   if (!box) return;
   if (!mine.length) {
-    box.innerHTML = '<div class="hint" style="padding:8px 4px"> 点击上方任务卡启动训练 </div>';
+    box.innerHTML = '<div class="hint" style="padding:8px 4px"> 点击任务按钮启动训练 </div>';
     return;
   }
   box.innerHTML = mine
@@ -331,6 +331,11 @@ function initPosttrain() {
   // meta 就绪补渲染（初次 loadRuns 时 /api/train/tasks 可能未返回, 卡为空）
   trainer.on("ready", () => renderStages());
   loadRuns(true);
+  // 切回本页时重绘曲线：tab 隐藏期间首渲的 canvas 位图为 0×0（无布局尺寸），
+  // 切回后必须补一次 draw 才会按真实尺寸重建位图
+  window.addEventListener("tabchange", (e) => {
+    if (e.detail === "posttrain") drawPt2();
+  });
 }
 
 document.addEventListener("DOMContentLoaded", initPosttrain);

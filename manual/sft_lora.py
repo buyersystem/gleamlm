@@ -201,7 +201,12 @@ def parse_args():
         help="YAML 配置目录 (manual 轨专用)",
     )
     p.add_argument("--model", type=str, required=True, help="预训练基座 checkpoint")
-    p.add_argument("--output_dir", type=str, default="./checkpoints/lora")
+    p.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="LoRA adapter 保存目录 (未传取 data.checkpoint_dir/lora, 落变体目录内)",
+    )
     # ── 实验/方案级超参: 默认权威在 YAML lora 段 (default=None + 裁决, 无第二权威) ──
     p.add_argument(
         "--epochs", type=int, default=None, help="覆写训练轮数 (默认取 YAML lora.epochs)"
@@ -228,6 +233,8 @@ def parse_args():
     cfg = load_config(
         os.path.join(args.config_dir, f"{args.variant}.yaml"), _ROOT_DIR, scope="lora"
     )
+    # 保存目录对齐 sft/dpo: 默认落变体根目录内 (checkpoints/<variant>/lora)
+    args.output_dir = args.output_dir or os.path.join(cfg.data.checkpoint_dir, "lora")
     for _cli, _key in (("data", "data_path"), ("seq_len", "max_seq_len"), ("clip", "clip_grad")):
         if getattr(args, _cli) is None:
             setattr(args, _cli, getattr(cfg.lora, _key))

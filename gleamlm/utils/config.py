@@ -245,6 +245,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "opd": {
+        "data": ("checkpoint_dir",),
         "opd": (
             "epochs",
             "batch_size",
@@ -265,6 +266,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
         ),
     },
     "lora": {
+        "data": ("checkpoint_dir",),
         "lora": (
             "epochs",
             "batch_size",
