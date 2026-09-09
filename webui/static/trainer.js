@@ -92,7 +92,9 @@ const trainer = {
     const task = box.querySelector("#start-task").value;
     const launcher = box.querySelector("#start-launcher").value;
     const nproc = parseInt(box.querySelector("#start-nproc").value, 10) || 1;
-    const variant = box.querySelector("#start-variant").value;
+    // variant_flag 关闭的任务（pretrain 等）无变体下拉：隐藏的 select 仍返回首项，
+    // 必须置空，否则 run 命名 / DB tag 误带第一个变体名（如 pretrain_nano_*）
+    const variant = ts[task].variant_flag ? box.querySelector("#start-variant").value : "";
     const fields = {};
     box.querySelectorAll("[data-fname]").forEach((el) => {
       if (el.type === "checkbox") {

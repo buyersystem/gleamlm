@@ -881,9 +881,14 @@ class TrainManager:
                 )
             cmd, _meta = _build_command(req)
             os.makedirs(LOGS_DIR, exist_ok=True)
-            variant = req.variant or "x"
+            variant = req.variant or ""
+            if variant and not _TASKS[req.task]["variant_flag"]:
+                # 非 variant 任务 (pretrain): 忽略误传变体, run 名不带变体段
+                variant = ""
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_id = req.run_name or f"{req.task}_{variant}_{ts}"
+            run_id = req.run_name or (
+                f"{req.task}_{variant}_{ts}" if variant else f"{req.task}_{ts}"
+            )
             run = TrainRun(req, cmd, run_id)
             # 孤儿清扫: 新 run 开跑前, 把 DB 里仍标记 running 的旧条目归档为
             # interrupted（内存态随服务重启丢失, 服务重启后旧 run 不可能再被
