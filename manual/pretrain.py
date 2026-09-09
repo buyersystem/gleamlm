@@ -245,7 +245,7 @@ def train(args, model_cfg: ModelConfig):
 
     # 验证集（可选）
     val_loader = None
-    val_interval = args.save_interval  # 验证间隔 = 保存间隔 (原 --val_interval 语义)
+    val_interval = args.eval_interval  # 验证间隔 = YAML eval_interval (默认 500)
     if args.val_data:
         val_dataset = tokenize_and_group(args.val_data, tokenizer, model_cfg.max_seq_len)
         val_sampler = (
@@ -520,7 +520,13 @@ def train(args, model_cfg: ModelConfig):
                 # 仅 rank 0 跑完整 val 集 (val_loader 只在 rank 0 构建)；
                 # world_size=1 跳过 all_reduce，避免其他 rank 不参与验证导致的死锁。
                 val_loss, val_ppl = evaluate(
-                    raw_model, val_loader, device, pad_token_id=tokenizer.pad_id, world_size=1
+                    raw_model,
+                    val_loader,
+                    device,
+                    pad_token_id=tokenizer.pad_id,
+                    world_size=1,
+                    # YAML max_val_batches 采样上限 (null=全量); nano 200 = 快测一小段
+                    max_batches=args.max_val_batches,
                 )
                 raw_model.train()
                 print(f"  Val step {step}: loss={val_loss:.4f}  ppl={val_ppl:.2f}")
@@ -594,6 +600,8 @@ def _load_training_defaults(training_path: str | None) -> dict[str, Any]:
         "clip": t.clip_grad,
         "log_interval": t.log_interval,
         "save_interval": t.save_interval,
+        "eval_interval": t.eval_interval,
+        "max_val_batches": t.max_val_batches,
         "seed": t.seed,
         "lr_scheduler": lr.type,
         "wsd_decay_style": lr.wsd_decay_style,
@@ -607,6 +615,7 @@ def _load_training_defaults(training_path: str | None) -> dict[str, Any]:
         "tokenizer_path": cfg.data.tokenizer_path or "",
         "data_dir": cfg.data.data_dir or "",
         "checkpoint_dir": cfg.data.checkpoint_dir or "",
+        "val_data": cfg.data.val_data or "",
     }
 
 
@@ -720,7 +729,10 @@ def main():
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb_run_name", type=str, default=None)
     parser.add_argument(
-        "--val_data", type=str, default=None, help="验证数据路径（可选，用于周期性验证）"
+        "--val_data",
+        type=str,
+        default=None,
+        help="验证数据 .bin/.idx 前缀（未传回落 YAML data.val_data; 空则不验证）",
     )
     parser.add_argument("--tensorboard", action="store_true", help="启用 TensorBoard 日志")
     parser.add_argument(
@@ -749,6 +761,8 @@ def main():
         "label_smoothing": training_defaults.get("label_smoothing", 0.1),
         "log_interval": training_defaults.get("log_interval", 50),
         "save_interval": training_defaults.get("save_interval", 2000),
+        "eval_interval": training_defaults.get("eval_interval", 500),
+        "max_val_batches": training_defaults.get("max_val_batches"),
         "num_workers": training_defaults.get("num_workers", 0),
         "prefetch_factor": 2,
         "ddp_bucket_mb": 25,
@@ -765,6 +779,9 @@ def main():
         parser.error("缺少预训练数据: 传 --data 或在 YAML 配置 data.data_dir")
     if args.output_dir is None:
         args.output_dir = training_defaults.get("checkpoint_dir") or "./checkpoints"
+    if args.val_data is None:
+        # 与 --data 同模式: CLI 未传时回落 YAML data.val_data（空 = 不启用验证）
+        args.val_data = training_defaults.get("val_data") or None
 
     # 4. 启动训练
     # 固定 seed（含模型初始化 + 确定性数据采样），保证实验可复现；

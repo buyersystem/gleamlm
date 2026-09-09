@@ -1,5 +1,7 @@
-/* ① 预训练 tab：loss/lr 曲线（当前 run 主色实时 + 历史勾选灰色叠加）、
-   run 列表（点击主展示 / 无任务时可重放日志）、YAML 配置编辑器。
+/* ① 预训练 tab：loss/lr 曲线（当前 run 主色实时 + 历史勾选灰色叠加；
+   loss 图叠加训练内嵌周期验证的 val_loss 稀疏折线，裸 CE 口径，详见 README
+   「训练与验证口径」）、run 列表（点击主展示 / 无任务时可重放日志）、
+   YAML 配置编辑器。
    指标数据源 = trainer 的 metric 事件（后端 tracker SQLite，panel 唯一写入方）。 */
 "use strict";
 
@@ -7,7 +9,7 @@
    loadRuns/renderRuns/renderStatusLine/ensureHist), 后加载者会覆盖全局名, 导致
    本 tab 注册的回调与内部调用全指向对方实现。包 IIFE 使闭包内自解析, 互不干扰。 */
 (function () {
-const PT_C = { loss: "#5dd0c9", lr: "#f5a97f" };
+const PT_C = { loss: "#5dd0c9", lr: "#f5a97f", val: "#b48ce0" };
 const pt = {
   runs: [],       // /api/train/runs 条目（仅 pretrain）
   hist: new Map(),// run_id → series {loss:[[s,v]], lr:[...]}
@@ -225,12 +227,20 @@ function drawCharts() {
     const loss = [], lr = [];
     if (main) {
       loss.push({ name: shortId(pt.mainId), color: PT_C.loss, points: main.loss || [] });
+      // 周期验证序列（稀疏: 每 eval_interval 步一点）叠在主 loss 图上;
+      // 无验证的 run 没有该键, 不 push 空序列
+      if ((main.val_loss || []).length) {
+        loss.push({ name: shortId(pt.mainId) + " · val", color: PT_C.val, points: main.val_loss || [] });
+      }
       lr.push({ name: shortId(pt.mainId), color: PT_C.lr, points: main.lr || [] });
     }
     for (const id of pt.checked) {
       const s = pt.hist.get(id);
       if (!s) continue;
       loss.push({ name: shortId(id), color: PT_C.loss, points: s.loss || [], dim: true });
+      if ((s.val_loss || []).length) {
+        loss.push({ name: shortId(id) + " · val", color: PT_C.val, points: s.val_loss || [], dim: true });
+      }
       lr.push({ name: shortId(id), color: PT_C.lr, points: s.lr || [], dim: true });
     }
     if (!pt.lossChart) {
@@ -238,7 +248,7 @@ function drawCharts() {
       pt.lrChart = new LineChart($("#pt-lr-chart"));
     }
     pt.lossChart.render({ series: loss, yLabel: "loss", xLabel: "step" });
-    pt.lrChart.render({ series: lr, phases: lrPhases(), yLabel: "lr", xLabel: "step" });
+    pt.lrChart.render({ series: lr, phases: lrPhases(), yLabel: "lr", xLabel: "step", zeroY: true });
     const lm = (trainer.run || {}).last_metric || {};
     $("#pt-loss-live").textContent = main && lm.step != null
       ? `step ${lm.step} · loss ${fmtNum(lm.loss)}` : "";
@@ -253,7 +263,9 @@ function shortId(id) {
 }
 
 /* ── 日志标题行的 run 摘要（位于「训练日志」与「＋ 启动预训练」之间；
-   单行精简：状态 + 短 run id + step/loss/lr/GPU，详情以 title 悬停展示）── */
+   预训练: 单行只保留验证温度计信息 —— step/loss/lr/GPU 与曲线、chip 重复,
+   唯一别处没有的是 val ppl, 标注它对应的训练步 (val_step) 防与最新 step 混淆;
+   非预训练任务: 维持原 step/loss/lr/GPU 摘要。详情以 title 悬停展示）── */
 function renderStatusLine() {
   const el = $("#pt-run-info");
   if (!el) return;
@@ -264,24 +276,42 @@ function renderStatusLine() {
   }
   const lm = st.last_metric || {};
   const sid = shortId(st.run_id);
-  const step = lm.step != null ? ` · ${lm.step} step` : "";
-  const loss = lm.loss != null ? ` · loss ${fmtNum(lm.loss)}` : "";
-  const lr = lm.lr != null ? ` · lr ${fmtNum(lm.lr, 6)}` : "";
-  const gpu = lm.gpu_mem != null ? ` · GPU ${lm.gpu_mem}G` : "";
   let head;
   if (st.task === "pretrain") {
     head = st.status === "stopping" ? "停止中" : st.running ? "运行中" : "已结束";
   } else if (st.task) {
     head = `后训练 ${st.task}`;
   } else {
-    head = "";
-  }
-  if (!head) {
     el.textContent = "";
     return;
   }
   el.title = st.run_id;
-  el.innerHTML = `<b>${esc(head)} ${esc(sid)}</b>${step}${loss}${lr}${gpu}`;
+  let detail = "";
+  if (st.task === "pretrain") {
+    const hasValData = !!(st.fields || {}).val_data;
+    if (lm.val_ppl != null) {
+      // 已有验证结果: 显示 ppl 及其对应训练步（不能直接用 lm.step —— 它已被
+      // 后续训练行覆盖成最新步, val 是 eval_interval 前测的）
+      const vstep = lm.val_step != null ? lm.val_step : lm.step != null ? lm.step : 0;
+      // ppl 与训练日志同精度 (.2f); loss 保持 4 位
+      detail = ` · step ${vstep} · val ppl ${fmtNum(lm.val_ppl, 2)}`;
+      el.title = st.run_id + ` — step ${vstep} 验证 · val loss ${fmtNum(lm.val_loss)}`;
+    } else if (hasValData) {
+      // 已启用验证但还没到首个 eval_interval: 过渡态, 别让行空白
+      detail = lm.step != null ? ` · step ${lm.step} · 首验前` : "";
+      el.title = st.run_id + " — 已启用验证，未到首个验证步";
+    } else {
+      // 没填验证数据: 干净显示 head + id, 悬停说明如何启用
+      el.title = st.run_id + " — 未启用验证（启动时填写「验证数据」）";
+    }
+  } else {
+    const step = lm.step != null ? ` · ${lm.step} step` : "";
+    const loss = lm.loss != null ? ` · loss ${fmtNum(lm.loss)}` : "";
+    const lr = lm.lr != null ? ` · lr ${fmtNum(lm.lr, 6)}` : "";
+    const gpu = lm.gpu_mem != null ? ` · GPU ${lm.gpu_mem}G` : "";
+    detail = `${step}${loss}${lr}${gpu}`;
+  }
+  el.innerHTML = `<b>${esc(head)} ${esc(sid)}</b>${detail}`;
 }
 
 /* ── YAML 配置编辑器（内置只读 / my_configs 可写；保存前复用后端 Pydantic 校验）── */

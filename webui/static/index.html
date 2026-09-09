@@ -25,9 +25,9 @@
 </header>
 
 <nav class="tabs" id="tabs">
-  <button class="tab active" type="button" data-tab="pretrain"><span class="idx">①</span>预训练</button>
-  <button class="tab" type="button" data-tab="posttrain"><span class="idx">②</span>后训练</button>
-  <button class="tab" type="button" data-tab="inference"><span class="idx">③</span>推理</button>
+  <button class="tab active" type="button" data-tab="pretrain">预训练</button>
+  <button class="tab" type="button" data-tab="posttrain">后训练</button>
+  <button class="tab" type="button" data-tab="inference">推理</button>
 </nav>
 
 <main>
@@ -67,30 +67,37 @@
     </div>
   </section>
 
-  <!-- ── ② 后训练：流水线阶段卡 + 当前阶段曲线 + 日志 ── -->
+  <!-- ── ② 后训练：左栏实验记录 + 右侧（流水线卡在上、曲线在下），下方通栏日志 ── -->
   <section id="pane-posttrain" class="tabpane">
-    <div class="panel" style="flex:none">
-      <div class="p-title">阶段任务</div>
-      <div id="pt2-stages" class="pipeline"></div>
-    </div>
     <div class="pane-row" style="flex:3">
-      <div class="panel" style="width:240px;flex:none">
-        <div class="p-title">实验记录</div>
+      <div class="panel" style="width:270px;flex:none">
+        <div class="p-title">任务列表</div>
         <div id="pt2-runs" class="p-body" style="flex:1"></div>
       </div>
-      <div class="panel" style="flex:1;min-height:140px">
-        <div class="p-title">损失曲线 Loss
-          <span class="spacer"></span>
-          <span id="pt2-loss-live" class="chip"></span>
+      <div class="pane-col" style="flex:1">
+        <!-- 上行与下行同构：左=主链流水线（右缘=Loss 右缘），右=可选路线面板（LoRA/PPO/GRPO） -->
+        <div class="pane-row" style="flex:none">
+          <div class="panel" style="flex:1">
+            <div id="pt2-stages" class="pipeline"></div>
+          </div>
+          <div id="pt2-alts" class="panel" style="flex:1"></div>
         </div>
-        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-loss-chart"></canvas></div>
-      </div>
-      <div class="panel" style="flex:1;min-height:140px">
-        <div class="p-title">学习率 LR
-          <span class="spacer"></span>
-          <span id="pt2-lr-live" class="chip"></span>
+        <div class="pane-row" style="flex:1">
+          <div class="panel" style="flex:1;min-height:140px">
+            <div class="p-title">损失曲线 Loss
+              <span class="spacer"></span>
+              <span id="pt2-loss-live" class="chip"></span>
+            </div>
+            <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-loss-chart"></canvas></div>
+          </div>
+          <div class="panel" style="flex:1;min-height:140px">
+            <div class="p-title">学习率 LR
+              <span class="spacer"></span>
+              <span id="pt2-lr-live" class="chip"></span>
+            </div>
+            <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-lr-chart"></canvas></div>
+          </div>
         </div>
-        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-lr-chart"></canvas></div>
       </div>
     </div>
     <div class="panel" style="flex:1.8;min-height:120px">

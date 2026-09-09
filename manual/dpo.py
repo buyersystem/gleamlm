@@ -91,7 +91,7 @@ def main() -> None:
         "--weight_decay",
         type=float,
         default=None,
-        help="覆写权重衰减 (默认随 SFT checkpoint _config, 缺键回落 YAML training.weight_decay)",
+        help="覆写权重衰减 (默认随 SFT checkpoint 顶层, 旧产物回落 _config/YAML)",
     )
     parser.add_argument(
         "--seed", type=int, default=42, help="随机种子 (对齐 pretrain.py 的 --seed)"
@@ -123,8 +123,9 @@ def main() -> None:
     min_lr_ratio = (
         cli_args.min_lr_ratio if cli_args.min_lr_ratio is not None else cfg.dpo.min_lr_ratio
     )
-    # CLI 覆写 > SFT checkpoint _config > 当前 variant YAML; weight_decay 随
-    # checkpoint 兑现提交承诺 (32601f1), 旧 checkpoint 缺键回落 YAML
+    # CLI 覆写 > checkpoint 顶层 > _config > 当前 variant YAML; weight_decay 是
+    # 训练超参, 自 SFT 保存起放 checkpoint 顶层 (commit 32601f1 曾误入 _config,
+    # 旧产物仍可能带, 故保 _config 一级回落); 老 checkpoint 缺键则回落 YAML
     weight_decay = cli_args.weight_decay
     clip_grad = cfg.training.clip_grad
     lr_scheduler = (
@@ -169,7 +170,9 @@ def main() -> None:
     # 缺键才回落到当前 variant YAML，避免 variant 与 checkpoint 不一致时静默用错开关。
     flash_attn = sft_cfg.get("use_flash_attn", cfg.model.use_flash_attn)
     if weight_decay is None:
-        weight_decay = sft_cfg.get("weight_decay", cfg.training.weight_decay)
+        weight_decay = sft_ckpt.get(
+            "weight_decay", sft_cfg.get("weight_decay", cfg.training.weight_decay)
+        )
 
     policy_model = GleamLMModel(
         **model_kwargs,

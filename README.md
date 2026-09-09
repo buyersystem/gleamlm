@@ -139,7 +139,6 @@ GleamLM/
 │   └── configs/                   #   手动轨专用 YAML（仅 manual 轨脚本消费）
 │       ├── base.yaml              #   公共默认 / 新配置模板（复制改名即可新建）
 │       ├── nano.yaml / lite.yaml / pro.yaml  #   各变体独立完整配置（不依赖继承）
-│       ├── user_model.yaml        #   用户自定义模型模板（直接改此文件，不动 base）
 │       └── deepspeed_config.json / deepspeed_zero2.json  #   DeepSpeed 引擎参数
 │
 ├── industrial/                    # 工业训练脚本（对接 Megatron / TRL / PEFT / DeepSpeed）
@@ -347,7 +346,7 @@ python manual/sft.py --variant nano --model_path checkpoints/nano/final.pt
 python manual/sft_lora.py --variant nano \
     --model checkpoints/nano/final.pt \
     --output_dir checkpoints/nano/lora
-# 数据与超参默认取 nano.yaml 的 lora 段（data/nano/sft/sft_data.jsonl，lr 2e-4，r 8 / alpha 16），CLI 同名参数可覆写
+# 数据与超参默认取 nano.yaml 的 lora 段（data/nano/sft/sft_mix.jsonl，lr 2e-4，r 8 / alpha 16），CLI 同名参数可覆写
 ```
 
 > LoRA 微调（`sft_lora.py`）为**可选**实验路线（低成本尝鲜 / 理解低秩适应原理），不构成后训练主链步骤；
@@ -462,6 +461,12 @@ Nano 与 Lite 同为四源（含 [Chinese FineWeb Edu](https://huggingface.co/da
 | 平均吞吐 | ~760k tok/s（torch.compile）|
 | **train final loss** | **2.4850**（PPL ≈ 12.0）|
 | 学习率调度 | WSD linear：warmup 2% → stable 80% → linear decay 18%，4e-4 → 4e-5 |
+
+> **训练与验证口径说明**（train/val 不可同框直接取 exp）：
+> - **train loss 报告值含 label_smoothing 项**：平滑 CE = (1−ε)·CE + ε·AU，其中 AU 是对全词表均匀分布的平均损失，≥ ln(12002) ≈ 9.4；ε=0.1 时报告值被抬高约 1.0 —— 不要对 train loss 直接取 exp 当 PPL。
+> - **验证（周期验证与上表全量验证）走裸 CrossEntropyLoss**（无 LS、无 z-loss），val loss/ppl 是纯净 CE 口径，可直接取 exp。
+> - 因此 loss 图上 train（~3.5，含 LS）与 val（~2.5，裸 CE）约 1.0 的固定落差是口径差，不是过拟合；上表 train final 2.4850 与 val 2.5044 同口径（该基线 run 未启用 LS），差 0.019 才是真实泛化 gap。
+> - 训练内嵌周期验证（webui 启动时填「验证数据」，每 `eval_interval` 步自动快测，`max_val_batches: 200` 采样上限 ≈1.6M token；null = 全量）与训练后独立全量验证（本表 30,310 batches）共用同一裸 CE 计算。
 
 **训练曲线**（WSD 三段式：warmup 2% 升温 → stable 80% 恒定 → linear decay 18% 收尾）：
 

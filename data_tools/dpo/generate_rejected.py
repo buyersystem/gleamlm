@@ -1,21 +1,39 @@
 """生成 DPO rejected 数据。
 
-用预训练基座模型或 SFT 模型对 SFT 数据生成"差的"回答，作为 DPO rejected。
+用变体自己的 SFT 模型对 chosen 池生成"差的"回答，作为 DPO rejected。
+
+数据流（与 build_dpo_chosen / merge_dpo_data 同 variant 口径）：
+  build_dpo_chosen.py → dpo_chosen_{single,multi}.jsonl → 本脚本 →
+  dpo_rejected_{single,multi}[.N].jsonl（分片）→ merge_dpo_data.py → dpo_data.jsonl
 
 用法:
-  # 单轮：用基座模型生成 rejected
+  # single/multi rejected 统一用各变体自己的 SFT 模型（sft_best.pt）——
+  # 决策：rejected 须与当前 policy 同分布（模型自己会犯的错），DPO 信号精细；
+  # 曾建议单轮用基座 final.pt（未对齐行为天然"差"但分布外），已弃
   python data_tools/dpo/generate_rejected.py --format single \
-      --sft_data data/sft_data.jsonl --model_path checkpoints/best_model.pt --output data/dpo_data.jsonl
+      --sft_data data/nano/dpo/dpo_chosen_single.jsonl \
+      --model_path checkpoints/nano/sft/sft_best.pt \
+      --output data/nano/dpo/dpo_rejected_single.jsonl
 
-  # 多轮：用 SFT 模型生成 rejected
+  # 多轮同理，上下文只喂对话历史（脚本内剥离尾轮答案）
   python data_tools/dpo/generate_rejected.py --format multi \
-      --input data/multiturn_sft.jsonl --model checkpoints/sft/sft_best.pt --output data/dpo_multiturn.jsonl
+      --input data/nano/dpo/dpo_chosen_multi.jsonl \
+      --model_path checkpoints/nano/sft/sft_best.pt \
+      --output data/nano/dpo/dpo_rejected_multi.jsonl
+
+  # 并行加速: 追加 --shard-total N 并以 --shard-id 0..N-1 分进程跑，分片自动 .N.jsonl
+  # 中断续跑: 同 shard 重跑覆盖；.partial 每 50 条落盘，最多丢 49 条
 """
 
 import argparse
 import json
 import os
 import sys
+
+_sys_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _sys_root not in sys.path:
+    # 项目根前置：保证 import 本地源码 gleamlm（否则落到 site-packages 旧发行版）
+    sys.path.insert(0, _sys_root)
 
 import torch
 
@@ -111,13 +129,17 @@ def generate_rejected_multi(
 
 
 def main():
+    # 多进程分片时每进程限 1 个 CPU 线程：torch 默认 intra-op 线程数 = 物理核数，
+    # N 进程 x 全核线程超订 CPU（实测 4 进程时每片慢 6 倍、总吞吐反低于单进程），
+    # 推理小模型是 python/kernel launch 瓶颈，多 CPU 线程无益反而互拖。
+    torch.set_num_threads(1)
     parser = argparse.ArgumentParser(description="Generate DPO rejected data")
     parser.add_argument(
         "--format", type=str, choices=["single", "multi"], default="single", help="数据格式"
     )
     # 路径
     parser.add_argument(
-        "--sft_data", type=str, default=None, help="单轮 SFT JSONL (instruction/output)"
+        "--sft_data", type=str, default=None, help="单轮 chosen 文件 (build_dpo_chosen 产物)"
     )
     parser.add_argument("--input", type=str, default=None, help="多轮 SFT JSONL (messages 格式)")
     parser.add_argument(
@@ -131,7 +153,9 @@ def main():
     parser.add_argument("--tokenizer_path", type=str, default=DEFAULT_TOKENIZER_PATH)
     parser.add_argument("--output", type=str, default="data/dpo_data.jsonl", help="输出文件")
     parser.add_argument("--limit", type=int, default=0, help="最大样本数 (0=all)")
-    parser.add_argument("--shard-id", type=int, default=0, help="分片序号 (0-based, 配合 --shard-total 多进程并行)")
+    parser.add_argument(
+        "--shard-id", type=int, default=0, help="分片序号 (0-based, 配合 --shard-total 多进程并行)"
+    )
     parser.add_argument("--shard-total", type=int, default=1, help="分片总数")
     # 生成参数
     parser.add_argument(
@@ -236,8 +260,11 @@ def main():
                 }
             )
 
+        if (i + 1) % 20 == 0:
+            # 每 20 条打一行（多进程共享日志，太稀疏像“没动静”）；flush 防管道块缓冲
+            print(f"  [{i + 1}/{len(samples)}]", flush=True)
         if (i + 1) % 50 == 0:
-            print(f"  [{i + 1}/{len(samples)}]")
+            # 断点续跑文件：50 条一落盘，最多丢 49 条
             with open(args.output + ".partial", "w", encoding="utf-8") as pf:
                 for item in dpo_data:
                     pf.write(json.dumps(item, ensure_ascii=False) + "\n")

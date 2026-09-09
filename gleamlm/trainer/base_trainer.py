@@ -157,13 +157,21 @@ def evaluate(
     device: torch.device,
     pad_token_id: int = 0,
     world_size: int = 1,
+    max_batches: int | None = None,
 ) -> tuple[float, float]:
-    """Validate and return (avg_loss, ppl). Aggregates across DDP ranks."""
+    """Validate and return (avg_loss, ppl). Aggregates across DDP ranks.
+
+    max_batches: 采样上限（batch 数）。None = 跑完整 valid 集；
+    训练内嵌的周期验证通常给一个小上限做快速快照（"温度计"），
+    全量验证留给训练结束后独立评估。
+    """
     torch.cuda.empty_cache()
 
     from gleamlm.evaluation.ppl import _compute_raw_loss
 
-    total_loss, total_tokens, _ = _compute_raw_loss(model, val_loader, device, pad_token_id)
+    total_loss, total_tokens, _ = _compute_raw_loss(
+        model, val_loader, device, pad_token_id, max_batches
+    )
 
     if world_size > 1 and dist.is_initialized():
         t_loss = torch.tensor(total_loss, device=device)

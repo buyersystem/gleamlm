@@ -23,6 +23,9 @@ training:
   save_interval: 2000
   # 数据预算 6.13B chars（README 预训练配置）
   max_train_chars: 6130000000
+  # 周期验证采样上限 (batch 数): nano 演示 200，每次快测 ~1.6M token 当温度计
+  # (工业惯例: 小型 held-out 快速验证不跑全量; val 走裸 CE, 与 train 口径差见 README)
+  max_val_batches: 200
 
 # ---- 学习率（WSD）----
 lr:
@@ -60,6 +63,8 @@ data:
   checkpoint_dir: checkpoints/nano
   ids_prefix: ""
   load_checkpoint: null          # 续训起点模型权重（可选）
+  # 周期验证数据（.bin/.idx 前缀, stream_split 切出的 5% valid 分片; 空 = 不验证）
+  val_data: data/nano/pretrain/valid
 
 # ---- 预训练数据源 ----
 data_sources:
@@ -145,7 +150,7 @@ lora:
   lora_r: 8
   lora_alpha: 16
   log_interval: 10
-  data_path: data/nano/sft/sft_data.jsonl
+  data_path: data/nano/sft/sft_mix.jsonl   # 与 sft.data_path 同源（sft_mix 为唯一有效 SFT 集）
 
 # ---- 分布式 ----
 distributed:

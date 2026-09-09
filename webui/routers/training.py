@@ -50,7 +50,7 @@ os.makedirs(LOGS_DIR, exist_ok=True)  # 训练日志 + tracker SQLite 落盘目�
 CONFIG_DIR = os.path.join(ROOT_DIR, "manual", "configs")
 MY_CFG_DIR = os.path.join(ROOT_DIR, "my_configs")
 
-_BUILTIN_CONFIGS = ("base", "nano", "lite", "pro", "user_model")
+_BUILTIN_CONFIGS = ("base", "nano", "lite", "pro")
 _VARIANTS = ("nano", "lite", "pro")
 _LAUNCHERS = ("python", "torchrun", "deepspeed")
 
@@ -315,6 +315,31 @@ _TASKS: dict[str, dict[str, Any]] = {
             {"name": "log_interval", "type": "int", "label": "log_interval"},
         ],
     },
+    # DPO 数据生成: 一键编排 data_tools/dpo/run_generate.py（chosen→rejected→merge）。
+    # 非训练任务 —— 无 loss 指标曲线, launcher 限 python（内部自行分片并行）;
+    # model_path 留空自动探测 checkpoints/<variant>/sft/sft_best.pt（GUI 零门槛）。
+    "dpo_data": {
+        "script": "data_tools/dpo/run_generate.py",
+        "label": "DPO 数据生成",
+        "short": "DPO数据",
+        "variant_flag": True,
+        "launchers": ["python"],
+        "auto": [],
+        "fields": [
+            {
+                "name": "model_path",
+                "type": "path",
+                "label": "SFT 模型",
+                "help": "留空自动探测 checkpoints/<variant>/sft/sft_best.pt（需先完成 SFT）",
+            },
+            {
+                "name": "shards",
+                "type": "int",
+                "label": "并行分片",
+                "help": "rejected 生成并行进程数（默认 4；小模型单进程 GPU 用不满，12GB+ 显存可开 8）",
+            },
+        ],
+    },
 }
 
 
@@ -350,7 +375,8 @@ def _abs(rel: str) -> str:
     return p
 
 
-# ── 配置文件权限分级（§4.1: 内置只读 / user_model + my_configs 可写）──────
+# ── 配置文件权限分级（§4.1: 内置只读 / my_configs 可写）──────
+# user_model 模板已移除 (2026-09): base 即模板, 新建配置 = 复制内置另存为 my_configs/
 def _in_builtin_configs(rel: str) -> bool:
     return rel in {f"manual/configs/{n}.yaml" for n in _BUILTIN_CONFIGS}
 
@@ -366,7 +392,7 @@ def _config_entries() -> list[dict]:
                     "path": rel,
                     "name": f"{name}.yaml",
                     "builtin": True,
-                    "writable": name == "user_model",
+                    "writable": False,
                 }
             )
     my_dir = MY_CFG_DIR
@@ -386,7 +412,7 @@ def _resolve_config_path(rel: str) -> tuple[str, bool]:
     if not os.path.isfile(p):
         raise HTTPException(status_code=404, detail=f"配置文件不存在: {rel}")
     if _in_builtin_configs(rel):
-        return p, rel.endswith("user_model.yaml")
+        return p, False
     if rel.startswith("my_configs/") and rel.endswith(".yaml"):
         return p, True
     raise HTTPException(status_code=403, detail=f"路径不在配置白名单: {rel}")
@@ -398,8 +424,8 @@ _config_lock = threading.Lock()
 def _validate_config_text(content: str) -> list[dict]:
     """复用 gleamlm load_config（extends + scope 必读 + Pydantic）校验 YAML 文本。
 
-    返回错误列表 [{loc, msg}]；空列表 = 通过。0 占位（d_model=0 等）在此报出
-    （user_model 模板"忘改必报错"机制原样生效）。
+    返回错误列表 [{loc, msg}]；空列表 = 通过。0 占位（d_model=0 等）由 Pydantic
+    在此报出 —— 模板未填真实架构就保存/启动必失败（“忘改必报错”护栏）。
     """
     import tempfile
 
@@ -637,8 +663,12 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
         raise HTTPException(
             status_code=400, detail=f"未知任务类型: {req.task} (可选: {sorted(_TASKS)})"
         )
-    if req.launcher not in _LAUNCHERS:
-        raise HTTPException(status_code=400, detail=f"非法 launcher: {req.launcher}")
+    allowed = spec.get("launchers") or _LAUNCHERS
+    if req.launcher not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"任务 {req.task} 不支持 launcher: {req.launcher} (可选: {allowed})",
+        )
     if spec["variant_flag"] and req.variant not in _VARIANTS:
         raise HTTPException(status_code=400, detail=f"--variant 需为 {_VARIANTS} 之一")
 
@@ -697,7 +727,14 @@ _PT_RE = re.compile(
     r"step (\d+)/(\d+) \([\d.]+%\)  loss=([\d.eE+-]+)  lr=([\d.eE+-]+)  "
     r"([\d.]+)k tok/s(?:  GPU:([\d.]+)/[\d.]+G)?"
 )
-_TQDM_RE = re.compile(r"loss=([\d.eE+-]+)[,)]\s*(?:lr=)?([\d.eE+-]+)")
+# 训练内嵌周期验证行（manual/pretrain.py evaluate 打印，裸 CE 口径）:
+#   Val step 64000: loss=3.20  ppl=24.56
+_VAL_RE = re.compile(r"Val step (\d+): loss=([\d.eE+-]+)  ppl=([\d.eE+-]+)")
+# 后训练 tqdm/手工帧: loss 后必跟逗号 + lr（sft/dpo 的 set_postfix 与
+# opd/grpo/ppo/sft_lora 手工帧均为 [loss=.., lr=..] 同构）。loss 后要求逗号
+# 是硬约束: pretrain 的 “Best model saved (val_loss=..) -> path” 行含 loss=..)
+# 且后跟 ->, 宽松正则会把 lr 捕获成 '-' 导致 float 崩溃杀死解析线程。
+_TQDM_RE = re.compile(r"loss=([\d.eE+-]+),\s*lr=([\d.eE+-]+)")
 _STEP_RE = re.compile(r"(\d+)/(\d+) \[")
 
 
@@ -706,27 +743,41 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
     out: list[tuple[str, int, float]] = []
     fallback_step = run._last_step
     for line in lines:
-        m = _PT_RE.search(line)
-        if m:
-            step, total, loss, lr, tok, gpu = m.groups()
-            if int(total) > 0:
-                run.total_steps = int(total)
-            out += [
-                ("loss", int(step), float(loss)),
-                ("lr", int(step), float(lr)),
-                ("tok_per_sec", int(step), float(tok) * 1e3),
-            ]
-            if gpu:
-                out.append(("gpu_mem", int(step), float(gpu)))
-            fallback_step = int(step)
+        try:
+            m = _PT_RE.search(line)
+            if m:
+                step, total, loss, lr, tok, gpu = m.groups()
+                if int(total) > 0:
+                    run.total_steps = int(total)
+                out += [
+                    ("loss", int(step), float(loss)),
+                    ("lr", int(step), float(lr)),
+                    ("tok_per_sec", int(step), float(tok) * 1e3),
+                ]
+                if gpu:
+                    out.append(("gpu_mem", int(step), float(gpu)))
+                fallback_step = int(step)
+                continue
+            m = _VAL_RE.search(line)
+            if m:
+                step, vloss, vppl = m.groups()
+                out += [
+                    ("val_loss", int(step), float(vloss)),
+                    ("val_ppl", int(step), float(vppl)),
+                ]
+                fallback_step = int(step)
+                continue
+            m = _TQDM_RE.search(line)
+            if m:
+                loss, lr = m.groups()
+                s = _STEP_RE.search(line)
+                step = int(s.group(1)) if s else fallback_step + 1
+                fallback_step = step
+                out += [("loss", step, float(loss)), ("lr", step, float(lr))]
+        except (ValueError, TypeError):
+            # 单行解析失败（脏行/畸形帧）只丢弃该行, 不杀解析线程 ——
+            # 否则面板指标管线会在长跑中途整体死掉。
             continue
-        m = _TQDM_RE.search(line)
-        if m:
-            loss, lr = m.groups()
-            s = _STEP_RE.search(line)
-            step = int(s.group(1)) if s else fallback_step + 1
-            fallback_step = step
-            out += [("loss", step, float(loss)), ("lr", step, float(lr))]
     run._last_step = fallback_step
     return out
 
@@ -778,6 +829,11 @@ def _parse_loop(run: TrainRun) -> None:
         for k, s, v in fresh:
             tracker.log_metric(run.run_id, k, v, s)
             flushed[k] = s
+            # val 指标要记住它对应的训练步: last_metric["step"] 会被后续训练行
+            # 不断覆盖成最新训练步, 而 val ppl 是 eval_interval 前测的 —— 状态行
+            # 显示 ppl 时必须用 val_step 对齐, 否则"多少步的 ppl"会错位。
+            if k in ("val_loss", "val_ppl"):
+                run.last_metric["val_step"] = s
         run.last_metric.update({"step": fresh[-1][1]})
         run.last_metric.update({k: v for k, s, v in fresh})
 
@@ -848,14 +904,24 @@ class TrainManager:
                     creationflags=creationflags,
                 )
             self._run = run
+            model_rel = req.fields.get("model", "") or req.fields.get("model_path", "")
+            # val_data 表单留空时回落 model YAML data.val_data（与 manual/pretrain.py
+            # 裁决一致: --val_data None → YAML 值）。注入 run.fields 使 summary/状态行/
+            # DB 快照三处同源 —— 都与真实进程参数一致（状态行 hasValData 判断依赖它）
+            if req.task == "pretrain" and not run.fields.get("val_data") and model_rel:
+                try:
+                    yaml_cfg = load_config(_abs(model_rel), scope="training")
+                except Exception:
+                    yaml_cfg = None  # YAML 不可读: 静默（进程侧会暴露真实错误）
+                if yaml_cfg is not None and yaml_cfg.data.val_data:
+                    run.fields["val_data"] = yaml_cfg.data.val_data
             cfg: dict[str, Any] = {
                 "task": req.task,
                 "variant": req.variant,
                 "launcher": req.launcher,
-                "fields": {k: v for k, v in req.fields.items() if v},
+                "fields": dict(run.fields),
                 "cmd": list(cmd),
             }
-            model_rel = req.fields.get("model", "") or req.fields.get("model_path", "")
             if model_rel:
                 cfg["yaml_summary"] = _read_yaml_summary(model_rel)
             tracker = ExperimentTracker("webui", DB_PATH)
@@ -922,6 +988,7 @@ def train_tasks() -> dict:
                 "short": v.get("short", v["label"]),
                 "variant_flag": v["variant_flag"],
                 "fields": v["fields"],
+                "launchers": v.get("launchers"),
             }
             for k, v in _TASKS.items()
         },

@@ -1,26 +1,27 @@
-"""构建 DPO v2 chosen 池（与当前 SFT 数据 v2 / 新 policy 对齐）。
+"""构建 DPO chosen 池（sft_mix 单源版）。
 
-数据源（均为当前基础集，chosen = SFT 高质答案）：
-  - chat_extra.jsonl         169 条闲聊（v2 实测弱点场景，全量）
-  - sft_data.jsonl 单轮      2,654 条中确定性抽 1,000（知识/模板，output≤600 字防超长截断）
-  - sft_data.jsonl 多轮        761 条全量（6 轮对话结构）
+数据源（唯一权威 = SFT 混合集 data/<variant>/sft/sft_mix.jsonl，模型无关文本；
+训练轨 sft.data_path 同源，chosen = SFT 高质答案）：
+  - 单轮 {instruction, output}    确定性抽 --single-n 条（默认 1000，output≤600 字防超长截断）
+  - 多轮 {messages}               全量（须 6 轮结构且尾轮为 assistant 答案）
 
-产出两个中间文件（喂给 generate_rejected.py 生成 rejected，跑完即可删）：
-  - dpo_chosen_single.jsonl  {instruction, output}
-  - dpo_chosen_multi.jsonl   {messages}（尾轮为 assistant 答案，脚本内部剥离）
+历史：v2 chosen 池曾混入 chat_extra 闲聊与 sft_data 基础池——chat_extra/sft_data/qa_sft
+均为中间废料（已从数据目录删除），sft_mix 是唯一有效 SFT 数据，chosen 池一律从其抽取。
+
+产出两个中间文件（喂 generate_rejected.py 生成 rejected，merge 后即可删）：
+  - data/<variant>/dpo/dpo_chosen_single.jsonl  {instruction, output}
+  - data/<variant>/dpo/dpo_chosen_multi.jsonl   {messages}（尾轮为 assistant 答案，脚本内部剥离）
 
 用法:
-  python data_tools/dpo/build_dpo_chosen.py
+  python data_tools/dpo/build_dpo_chosen.py --variant nano
+  python data_tools/dpo/build_dpo_chosen.py --variant lite --single-n 1000 --seed 42
 """
 
 import argparse
 import json
+import os
 import random
-
-SFT_DATA = "data/nano/sft/sft_data.jsonl"
-CHAT_EXTRA = "data/nano/sft/chat_extra.jsonl"
-SINGLE_OUT = "data/nano/dpo/dpo_chosen_single.jsonl"
-MULTI_OUT = "data/nano/dpo/dpo_chosen_multi.jsonl"
+import sys
 
 # 单轮 output 字符上限：防 encode 后超过 DPO max_seq_len（1024 token）导致训练截断损坏
 MAX_OUT_CHARS = 600
@@ -39,35 +40,36 @@ def load_jsonl(path: str) -> list[dict]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build DPO v2 chosen pool")
+    parser = argparse.ArgumentParser(description="Build DPO chosen pool from sft_mix")
+    parser.add_argument(
+        "--variant",
+        type=str,
+        default="nano",
+        help="数据变体: data/<variant>/sft/sft_mix.jsonl 为唯一源, 产物落 data/<variant>/dpo/",
+    )
     parser.add_argument("--single-n", type=int, default=1000, help="单轮抽取数")
     parser.add_argument("--seed", type=int, default=42, help="确定性抽样 seed")
     args = parser.parse_args()
 
-    # ---- 单轮源：chat_extra 闲聊全量 + sft_data 单轮抽 n ----
-    chat_extra = load_jsonl(CHAT_EXTRA)
-    sft_data = load_jsonl(SFT_DATA)
-    singles = [r for r in sft_data if "instruction" in r and "output" in r]
+    # ---- 单源加载（sft_mix: 单轮 + 多轮混合，按键分流）----
+    mix_path = os.path.join("data", args.variant, "sft", "sft_mix.jsonl")
+    if not os.path.isfile(mix_path):
+        sys.exit(f"Error: 源数据不存在: {mix_path} (sft_mix 是唯一有效 SFT 集)")
+    rows = load_jsonl(mix_path)
+    singles = [r for r in rows if "instruction" in r and "output" in r]
     # instruction 去重（保第一条）
-    seen_ins: set[str] = set()
-    seen_extra: set[str] = set()
-    chat_rows, single_rows = [], []
-    for r in chat_extra:
-        ins = r["instruction"]
-        if ins not in seen_extra:
-            seen_extra.add(ins)
-            chat_rows.append(r)
+    seen: set[str] = set()
+    unique = []
     for r in singles:
         ins = r["instruction"]
-        if ins not in seen_ins and ins not in seen_extra:
-            seen_ins.add(ins)
-            single_rows.append(r)
-    print(f"chat_extra: {len(chat_rows)} 条（全量）")
-    print(f"sft_data 单轮去重后: {len(single_rows)} 条")
+        if ins not in seen:
+            seen.add(ins)
+            unique.append(r)
+    print(f"sft_mix 单轮: {len(unique)}/{len(singles)} 条（去重后）")
 
     # 优先 output <= MAX_OUT_CHARS（防训练截断），不足时放宽
-    short = [r for r in single_rows if len(r["output"]) <= MAX_OUT_CHARS]
-    long = [r for r in single_rows if len(r["output"]) > MAX_OUT_CHARS]
+    short = [r for r in unique if len(r["output"]) <= MAX_OUT_CHARS]
+    long = [r for r in unique if len(r["output"]) > MAX_OUT_CHARS]
     print(f"  其中 output<=600 字: {len(short)} 条, >600 字: {len(long)} 条")
     rng = random.Random(args.seed)
     if len(short) >= args.single_n:
@@ -78,7 +80,7 @@ def main():
     print(f"单轮抽取: {len(picked)} 条")
 
     # ---- 多轮源：messages 全量（尾轮须为 assistant 答案）----
-    multis = [r for r in sft_data if "messages" in r]
+    multis = [r for r in rows if "messages" in r]
     valid_multi = []
     for r in multis:
         msgs = r["messages"]
@@ -87,19 +89,27 @@ def main():
         valid_multi.append(r)
     print(f"多轮: {len(valid_multi)}/{len(multis)} 条（6 轮结构）")
 
-    # ---- 写中间文件 ----
-    with open(SINGLE_OUT, "w", encoding="utf-8") as f:
-        for r in chat_rows + picked:
+    # ---- 写中间文件（产物目录按 variant 推导）----
+    out_dir = os.path.join("data", args.variant, "dpo")
+    os.makedirs(out_dir, exist_ok=True)
+    single_out = os.path.join(out_dir, "dpo_chosen_single.jsonl")
+    multi_out = os.path.join(out_dir, "dpo_chosen_multi.jsonl")
+    with open(single_out, "w", encoding="utf-8") as f:
+        for r in picked:
             f.write(
-                json.dumps({"instruction": r["instruction"], "output": r["output"]}, ensure_ascii=False)
+                json.dumps(
+                    {"instruction": r["instruction"], "output": r["output"]}, ensure_ascii=False
+                )
                 + "\n"
             )
-    with open(MULTI_OUT, "w", encoding="utf-8") as f:
+    with open(multi_out, "w", encoding="utf-8") as f:
         for r in valid_multi:
             f.write(json.dumps({"messages": r["messages"]}, ensure_ascii=False) + "\n")
-    total = len(chat_rows) + len(picked) + len(valid_multi)
-    print(f"Done: single={len(chat_rows) + len(picked)} (闲聊 {len(chat_rows)} + 单轮 {len(picked)}), "
-          f"multi={len(valid_multi)}, 合计 {total} 对")
+    total = len(picked) + len(valid_multi)
+    print(
+        f"Done: single={len(picked)}, multi={len(valid_multi)}, 合计 {total} 对 "
+        f"-> {single_out} / {multi_out}"
+    )
 
 
 if __name__ == "__main__":

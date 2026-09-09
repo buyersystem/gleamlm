@@ -23,6 +23,8 @@ training:
   save_interval: 2000
   # 单遍数据预算 6.13B chars
   max_train_chars: 6130000000
+  # 周期验证采样上限 (batch 数); null = 全量 valid（训练内嵌验证只快测一段）
+  max_val_batches: null
 
 # ---- 学习率（默认 WSD）----
 lr:
@@ -40,7 +42,7 @@ optimizer:
   betas: [0.9, 0.95]
   eps: 1.0e-8
 
-# ---- 模型架构占位 (各模型覆盖) ----
+# ---- 模型架构（模板默认档; 复制后按需改, 各档位示例见 nano/lite/pro.yaml）----
 model:
   vocab_size: 12002
   d_model: 512
@@ -55,14 +57,15 @@ model:
 
 # ---- 数据路径 ----
 data:
-  data_dir: ""
-  tokenizer_path: ""
-  checkpoint_dir: ""
-  ids_prefix: ""
-  load_checkpoint: null
+  data_dir: <填写你的数据目录>          # 示例: data/nano/pretrain/train
+  tokenizer_path: <填写你的分词器目录>    # 示例: gleamlm/tokenizer/checkpoints/bbpe_12k
+  checkpoint_dir: <填写你的输出目录>      # 示例: checkpoints/nano
+  ids_prefix: ""                       # 文件名前缀（预留; 当前流程留空即可）
+  load_checkpoint: null                # 续训起点权重路径（可选; null = 全新开始）
+  val_data: <填写你的验证数据前缀>       # 周期验证 held-out 集; 示例: data/nano/pretrain/valid
 
 # ---- 预训练数据源 ----
-data_sources: []                # 各变体覆盖：{name, type, ratio, file}
+data_sources: []                # 模板留空; 填法示例（四源 ratio）见 nano.yaml data_sources
 
 # ---- 高级 ----
 advanced:
@@ -86,7 +89,7 @@ sft:
   weight_decay: 0.01
   max_seq_len: 1024
   inject_system_ratio: 0.2
-  data_path: ""
+  data_path: <填写你的 SFT 数据路径>      # 示例: data/nano/sft/sft_mix.jsonl
 
 # ---- DPO 偏好对齐 ----
 dpo:
@@ -101,7 +104,7 @@ dpo:
   max_seq_len: 1024
   warmup_ratio: 0.02
   min_lr_ratio: 0.05
-  data_path: ""
+  data_path: <填写你的 DPO 数据路径>      # 示例: data/nano/dpo/dpo_data.jsonl
 
 # ---- OPD 在线策略蒸馏 ----
 opd:
@@ -122,7 +125,7 @@ opd:
   log_interval: 5
   save_interval: 10
   seed: 42
-  data_path: ""
+  data_path: <填写你的 OPD prompt 路径>  # 示例: data/nano/opd_prompts.jsonl
   # 本地 HF 教师模型目录 (OPD 蒸馏评分器, 如 checkpoints/Qwen3-0.6B)
   teacher_model_path: checkpoints/Qwen3-0.6B
 
@@ -137,7 +140,7 @@ lora:
   lora_r: 8
   lora_alpha: 16
   log_interval: 10
-  data_path: ""
+  data_path: <填写你的 LoRA 数据路径>     # 示例: data/nano/sft/sft_mix.jsonl
 
 # ---- 分布式 ----
 distributed:

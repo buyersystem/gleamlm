@@ -8,32 +8,19 @@
 (function () {
 const PT2_C = { loss: "#5dd0c9", lr: "#f5a97f" };
 
-/* 流水线拓扑（每个任务独立一组，组头 = 任务中文名；任务存在性由后端 meta 裁决） */
-const STAGE_GROUPS = [
-  {
-    label: "指令微调",
-    items: [{ task: "sft", t: "SFT", desc: "Pretrain → SFT" }],
-  },
-  {
-    label: "直接偏好优化",
-    items: [{ task: "dpo", t: "DPO", desc: "SFT → DPO" }],
-  },
-  {
-    label: "在线策略蒸馏",
-    items: [{ task: "opd", t: "OPD", desc: "DPO → OPD", opt: true }],
-  },
-  {
-    label: "分组相对策略优化",
-    items: [{ task: "grpo", t: "GRPO", desc: "SFT → GRPO" }],
-  },
-  {
-    label: "近端策略优化",
-    items: [{ task: "ppo", t: "PPO", desc: "SFT → PPO" }],
-  },
-  {
-    label: "低秩适配",
-    items: [{ task: "sft_lora", t: "LoRA", desc: "Pretrain → LoRA", opt: true }],
-  },
+/* 后训练路线图：左面板 = FLOW 主链（数组顺序即数据流，卡间箭头连接）；
+   右面板 = SUB 可选路线（与主链同尺寸平级展示，归属关系写在悬停提示里）。
+   按钮只留短名，细节悬停。 */
+const SUB = [
+  { task: "sft_lora", t: "LoRA", tip: "基于预训练基座的低秩微调，与 SFT 并列" },
+  { task: "ppo", t: "PPO", tip: "与 DPO 并列的偏好优化路线" },
+  { task: "grpo", t: "GRPO", tip: "与 DPO 并列的偏好优化路线" },
+];
+const FLOW = [
+  { task: "sft", t: "SFT", tip: "基于预训练基座" },
+  { task: "dpo_data", t: "DPO数据", tip: "由 SFT 模型生成偏好数据", gen: true },
+  { task: "dpo", t: "DPO", tip: "基于生成的偏好数据" },
+  { task: "opd", t: "OPD", tip: "DPO 之后可选继续", opt: true },
 ];
 
 const pt2 = {
@@ -62,44 +49,51 @@ function taskDesc(task) {
 function renderStages() {
   const st = trainer.run || {};
   const box = $("#pt2-stages");
-  if (!box) return;
+  const altBox = $("#pt2-alts");
+  if (!box || !altBox) return;
   // 各任务最近一次 run（完成态着色用）
   const latest = new Map();
   for (const r of pt2RunList()) {
     const t = (r.config || {}).task;
     if (t && !latest.has(t)) latest.set(t, r);
   }
-  box.innerHTML = STAGE_GROUPS.map((g) => {
-    const cards = g.items
-      .map((it) => {
-        const meta = taskDesc(it.task);
-        if (!meta) return "";
-        const isLive = st.task === it.task && st.running;
-        const last = latest.get(it.task);
-        let cls = "";
-        if (isLive) cls = " run";
-        else if (last && last.status !== "running") {
-          const m = /exit=(-?\d+)/.exec(last.note || "");
-          if (m && m[1] !== "0") cls = " fail";
-          else if (last.status === "finished") cls = " done";
-        }
-        const liveTxt = isLive && st.run_id
-          ? `<span class="chip running" style="margin-left:4px">step ${(st.last_metric || {}).step ?? "…"}</span>` : "";
-        return `<div class="stage-card${it.opt ? " opt" : ""}${cls}" data-task="${it.task}" title="启动 ${it.t} — ${esc(meta.label)}">
-      <div class="t">${esc(it.t)}${liveTxt}</div>
-      ${it.desc ? `<div class="s">${esc(it.desc)}</div>` : ""}
+  const stageHtml = (task, name, tip, extra) => {
+    const meta = taskDesc(task);
+    if (!meta) return "";
+    const isLive = st.task === task && st.running;
+    const last = latest.get(task);
+    let cls = "";
+    if (isLive) cls = " run";
+    else if (last && last.status !== "running") {
+      const m = /exit=(-?\d+)/.exec(last.note || "");
+      if (m && m[1] !== "0") cls = " fail";
+      else if (last.status === "finished") cls = " done";
+    }
+    const liveTxt = isLive && st.run_id
+      ? `<span class="chip running" style="margin-left:4px">step ${(st.last_metric || {}).step ?? "…"}</span>` : "";
+    return `<div class="stage-card${extra}${cls}" data-task="${task}" title="启动 ${esc(name)} — ${esc(tip)}">
+      <div class="t">${esc(name)}${liveTxt}</div>
     </div>`;
-      })
-      .join("");
-    if (!cards) return "";
-    return `<div style="display:flex;flex-direction:column;gap:5px">
-      <div style="font-size:11px;color:var(--dim)">${esc(g.label)}</div>
-      <div style="display:flex;gap:8px">${cards}</div>
-    </div>`;
-  }).join("");
-  box.querySelectorAll(".stage-card").forEach((c) => {
-    c.addEventListener("click", () => trainer.openStartModal([c.dataset.task]));
+  };
+  // 主链箭头：SVG 细线圆角箭头；hover 相邻前卡时整支点亮
+  const ARROW = () => `<svg class="flow-arrow" width="24" height="10" viewBox="0 0 24 10" aria-hidden="true">
+  <line x1="1.5" y1="5" x2="13.5" y2="5"/>
+  <path class="head" d="M12.2 1.6 L19.6 5 L12.2 8.4"/>
+</svg>`;
+  // 主链单行（左面板，与 Loss 窗口同轴居中）
+  const parts = [];
+  FLOW.forEach((it, i) => {
+    parts.push(stageHtml(it.task, it.t, it.tip, (it.opt ? " opt" : "") + (it.gen ? " gen" : "")));
+    if (i < FLOW.length - 1) parts.push(`<div class="flow-arrow">${ARROW()}</div>`);
   });
+  box.innerHTML = `<div class="flow-grid">${parts.join("")}</div>`;
+  // 可选路线卡（右面板，同款同尺寸）
+  altBox.innerHTML = SUB.map((s) => stageHtml(s.task, s.t, s.tip, "")).join("");
+  for (const b of [box, altBox]) {
+    b.querySelectorAll(".stage-card").forEach((c) => {
+      c.addEventListener("click", () => trainer.openStartModal([c.dataset.task]));
+    });
+  }
 }
 
 /* ── 事件 ── */
@@ -172,7 +166,7 @@ function renderRuns() {
   const mine = pt2RunList();
   if (!box) return;
   if (!mine.length) {
-    box.innerHTML = '<div class="hint" style="padding:8px 4px">暂无实验 — 点击上方任务卡启动</div>';
+    box.innerHTML = '<div class="hint" style="padding:8px 4px"> 点击上方任务卡启动训练 </div>';
     return;
   }
   box.innerHTML = mine
@@ -184,7 +178,7 @@ function renderRuns() {
     <input type="checkbox" class="check" data-run="${esc(r.id)}" ${pt2.checked.includes(r.id) ? "checked" : ""} title="勾选与主曲线 A/B 对比（最多 2 条）" />
     <div style="flex:1;min-width:0">
       <div class="name" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.id)}${live ? ' <span class="chip running" style="padding:0 6px">LIVE</span>' : ""}</div>
-      <div class="sub">${chipFor(r)}${cfg.variant ? ` · <b>${esc(cfg.variant)}</b>` : ""} · ${fmtTime(r.created_at)}</div>
+      <div class="sub">${fmtTime(r.created_at)} · ${chipFor(r)}${cfg.variant ? ` · <b>${esc(cfg.variant)}</b>` : ""}${isMain ? " · <b>主曲线</b>" : ""}</div>
     </div>
     ${live ? "" : `<button class="del-run" type="button" data-run="${esc(r.id)}" title="删除该 run 及其指标、日志文件（不可恢复）">✕</button>`}
   </div>`;

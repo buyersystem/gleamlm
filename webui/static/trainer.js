@@ -353,24 +353,64 @@ function refreshTaskUi(box, taskKey, task) {
     : '<div class="hint" style="font-size:12px">无必填参数，可直接启动</div>';
   box.querySelector("#opt-area").innerHTML = `<div class="form-grid">${fieldRowsHtml(task, false)}</div>`;
   box.querySelector("#variant-field").style.display = task.variant_flag ? "contents" : "none";
+  // 启动方式按任务白名单过滤（如 dpo_data 只支持 python，内部自行分片）；
+  // 无条件重建选项：从受限任务切回普通任务时恢复全量下拉
+  const ls = box.querySelector("#start-launcher");
+  const allL = (trainer.meta || {}).launchers || ["python", "torchrun", "deepspeed"];
+  const allowL = task.launchers && task.launchers.length ? task.launchers : allL;
+  const curL = ls.value;
+  ls.innerHTML = allowL.map((l) => `<option value="${l}">${l}</option>`).join("");
+  ls.value = allowL.includes(curL) ? curL : allowL[0];
+  ls.disabled = allowL.length === 1;
   box.querySelector("#nproc-row").style.display = "none";
   applyPrefill(box, taskKey);
 }
 
 /* ── 日志面板：全局行同步到所有 .log 容器 ── */
+/* 批量冲刷而非逐行 append：SSE 回放/长跑时一次涌入上千行，逐行 DOM 追加 +
+   scrollTop 赋值（强制同步 reflow）会堵主线程（点击历史 run 重放日志即卡）。
+   批满 200 行立即冲刷一次；慢速流由 rAF 合帧（每帧至多一次）。 */
 function initLogSync() {
+  let buf = [];
+  let raf = 0;
+  const flush = () => {
+    raf = 0;
+    if (!buf.length) return;
+    const lines = buf;
+    buf = [];
+    const frag = document.createDocumentFragment();
+    for (const t of lines) {
+      const d = document.createElement("div");
+      d.textContent = t;
+      frag.appendChild(d);
+    }
+    $$(".log").forEach((el) => {
+      el.appendChild(frag.cloneNode(true));
+      while (el.children.length > 2000) el.removeChild(el.firstChild);
+      el.scrollTop = el.scrollHeight; // 每批只强制一次滚动定位
+    });
+  };
   trainer.on("log", (text) => {
     if (text === "__clear__") {
+      buf = [];
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
       $$(".log").forEach((el) => (el.textContent = ""));
       return;
     }
-    const div = document.createElement("div");
-    div.textContent = text;
-    $$(".log").forEach((el) => {
-      el.appendChild(div.cloneNode(true));
-      while (el.children.length > 2000) el.removeChild(el.firstChild);
-      el.scrollTop = el.scrollHeight;
-    });
+    buf.push(text);
+    if (buf.length >= 200) {
+      // 大批量（回放/瞬间涌入）不等帧，立即按批冲刷
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+      flush();
+      return;
+    }
+    if (!raf) raf = requestAnimationFrame(flush);
   });
   // 历史 run 重放点击 → 直接在此显示？由各 tab 的 run 列表绑定。
 }

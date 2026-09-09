@@ -6,7 +6,7 @@ LoRA SFT 微调 — 冻结预训练权重，只更新低秩 adapter。
     --model checkpoints/nano/final.pt \\
     --output_dir checkpoints/nano/lora
   (超参默认取 manual/configs/nano.yaml 的 lora 段, CLI 同名参数可覆写;
-   --model 为预训练基座, 数据默认 data/nano/sft/sft_data.jsonl)
+   --model 为预训练基座, 数据默认 data/nano/sft/sft_mix.jsonl)
 """
 
 import argparse

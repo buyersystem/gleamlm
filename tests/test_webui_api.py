@@ -170,8 +170,9 @@ def test_config_listing_and_permissions(api):
     by_path = {e["path"]: e for e in entries}
     nano = by_path["manual/configs/nano.yaml"]
     assert nano["builtin"] is True and nano["writable"] is False
-    um = by_path["manual/configs/user_model.yaml"]
-    assert um["builtin"] is True and um["writable"] is True  # 内置唯一可写
+    # user_model 模板已移除: base 即模板, 用户经「另存为」在 my_configs/ 建配置
+    assert "manual/configs/user_model.yaml" not in by_path
+    assert all(e["builtin"] is False or e["writable"] is False for e in entries)
 
 
 def test_config_read_guards(api):
@@ -250,6 +251,11 @@ def test_task_registry(api):
     assert body["variants"] == ["nano", "lite", "pro"]
     assert body["launchers"] == ["python", "torchrun", "deepspeed"]
     assert any(e["path"] == "manual/configs/nano.yaml" for e in body["configs"])
+    # dpo_data 生成任务：仅 python launcher，字段可全空一键启动（模型自动探测）
+    dd = body["tasks"]["dpo_data"]
+    assert dd["script"] == "data_tools/dpo/run_generate.py"
+    assert dd["launchers"] == ["python"] and dd["variant_flag"] is True
+    assert all(not f.get("required") for f in dd["fields"])
 
 
 # ── 训练生命周期 ─────────────────────────────────────────────────────

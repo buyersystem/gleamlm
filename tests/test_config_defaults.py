@@ -32,6 +32,20 @@ from gleamlm.utils.config import (
 
 _CONFIGS = Path(__file__).resolve().parents[1] / "manual" / "configs"
 
+# base.yaml 模板语义豁免: 路径类键在 base 中是“待填占位”(<填写你的…>),
+# 值刻意写占位而非 Pydantic 默认 ""(空串与占位等价于未填, 且路径无实证
+# 数值可言——一致性锁针对的是 sft.lr/dpo.lr 这类会静默回退旧值的超参)。
+_TEMPLATE_PATH_KEYS = {
+    ("data", "data_dir"),
+    ("data", "tokenizer_path"),
+    ("data", "checkpoint_dir"),
+    ("data", "val_data"),
+    ("sft", "data_path"),
+    ("dpo", "data_path"),
+    ("opd", "data_path"),
+    ("lora", "data_path"),
+}
+
 # 测试侧维护的 full 必读清单，故意与 config.py _SCOPE_REQUIRED["full"] 重复:
 # 任一侧清单被误删, 测试都会先暴露。
 _CONSUMED = {
@@ -138,6 +152,8 @@ def test_pydantic_defaults_match_base_yaml() -> None:
         for key, default in fields.items():
             if key not in yaml_sec or default is None:
                 continue
+            if (section, key) in _TEMPLATE_PATH_KEYS:
+                continue  # 模板占位键（见 _TEMPLATE_PATH_KEYS 说明）
             if isinstance(default, dict | list):
                 continue  # 嵌套结构 (layer_configs 等) 不在本测试范围
             if isinstance(default, tuple):

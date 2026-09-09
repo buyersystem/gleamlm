@@ -27,6 +27,10 @@ def _model_from_config(config: dict) -> GleamLMModel:
     ffn_registry = {"mlp": MLP, "moe": MoE}
 
     config = dict(config)
+    # weight_decay 曾作为训练超参误入 SFT checkpoint 的 _config（旧产物，
+    # commit 32601f1 格式）；GleamLMModel 构造不认，一律剔除（新产物该键
+    # 已移至 checkpoint 顶层，dpo 训练从顶层读，不影响传递语义）
+    config.pop("weight_decay", None)
     attn_type = config.pop("attn_type", "gqa")
     ffn_type = config.pop("ffn_type", "mlp")
     return GleamLMModel(

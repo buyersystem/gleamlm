@@ -422,6 +422,9 @@ class TrainingConfig(BaseModel):
     eval_interval: int = 500
     save_interval: int = 2000
     max_train_chars: int = 6130000000
+    # 周期验证的采样上限（batch 数）: 快测一小段 valid 当"温度计"
+    # （工业惯例: 小型 held-out 快速验证，不跑全量）；null = 全量 valid
+    max_val_batches: int | None = None
 
 
 class DataConfig(BaseModel):
@@ -430,6 +433,8 @@ class DataConfig(BaseModel):
     checkpoint_dir: str = ""
     ids_prefix: str = ""
     load_checkpoint: str | None = None
+    # 周期验证数据（.bin/.idx 前缀, 与 data_dir 同级的 valid 分片; 空 = 不验证）
+    val_data: str = ""
 
 
 class AdvancedConfig(BaseModel):
@@ -548,7 +553,7 @@ class GleamLMConfig(BaseModel):
         return cls(**data)
 
     def resolve_paths(self, root_dir: str) -> GleamLMConfig:
-        for field_name in ("data_dir", "tokenizer_path", "checkpoint_dir"):
+        for field_name in ("data_dir", "tokenizer_path", "checkpoint_dir", "val_data"):
             raw = getattr(self.data, field_name)
             if raw and not os.path.isabs(raw):
                 setattr(self.data, field_name, os.path.normpath(os.path.join(root_dir, raw)))

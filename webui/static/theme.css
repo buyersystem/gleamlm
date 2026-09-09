@@ -133,7 +133,6 @@ nav.tabs {
   border-color: var(--border);
   font-weight: 600;
 }
-.tab .idx { font-size: 11px; color: var(--dim); margin-right: 4px; }
 
 /* ── main 三段布局 ── */
 main {
@@ -348,24 +347,44 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 #cfg-editor { font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
   min-height: 380px; resize: vertical; }
 
-/* ── 后训练阶段卡 ── */
+/* ── 后训练阶段卡（无标题行：面板顶部直接是流水线） ── */
 .pipeline {
-  display: flex; gap: 8px; align-items: stretch; flex-wrap: wrap;
-  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px;
 }
+.flow-grid {
+  display: flex; align-items: center; gap: 2px;
+  width: max-content; margin: 0 auto;   /* 主链单行居中：与下方 Loss 窗口同轴 */
+}
+/* 右面板：可选路线（LoRA/PPO/GRPO）与主链卡同款同尺寸，水平居中 */
+#pt2-alts {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+}
+.flow-arrow { display: flex; align-items: center; justify-content: center; align-self: center; padding: 0 1px; }
+.flow-arrow svg { display: block; }
+.flow-arrow line, .flow-arrow path { fill: none; stroke: var(--dim); stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; transition: stroke 0.15s; }
+/* 横线/尖头同色（默认灰）；悬停前卡时整支箭头同步点亮为蓝 */
+.stage-card:hover + .flow-arrow line,
+.stage-card:hover + .flow-arrow path { stroke: var(--accent); }
 .stage-card {
   border: 1px solid var(--border);
-  border-radius: 9px; padding: 6px 12px;
+  border-radius: 8px; padding: 5px 10px;
   background: #1b1f2a;
-  font-size: 12px; min-width: 108px;
+  font-size: 12px; min-width: 78px; text-align: center;
 }
-.stage-card .t { font-weight: 700; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.stage-card .t { font-weight: 700; font-size: 12px; display: flex; gap: 6px; align-items: center; justify-content: center; }
 .stage-card .s { color: var(--dim); font-size: 11px; margin-top: 3px; }
 .stage-card.done { border-color: rgba(46, 204, 113, 0.55); }
 .stage-card.done .s { color: var(--ok); }
 .stage-card.run { border-color: var(--accent); box-shadow: 0 0 10px rgba(91, 140, 255, 0.25); }
 .stage-card.fail { border-color: var(--err); }
 .stage-card.opt { opacity: 0.72; border-style: dashed; }
+.stage-card.gen { border-color: rgba(240, 178, 100, 0.55); }
 
 /* ── 列表（runs / 模型）── */
 .list-item {

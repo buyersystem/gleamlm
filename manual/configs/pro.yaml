@@ -21,6 +21,8 @@ training:
   eval_interval: 500
   save_interval: 2000
   max_train_chars: 8000000000
+  # 周期验证采样上限 (batch 数); null = 全量 valid
+  max_val_batches: null
 
 # ---- 学习率（WSD）----
 lr:
@@ -58,6 +60,8 @@ data:
   checkpoint_dir: checkpoints/pro
   ids_prefix: ""
   load_checkpoint: null          # 续训起点模型权重（可选）
+  # 周期验证数据（.bin/.idx 前缀; 数据管线产出 train/valid 分片后生效）
+  val_data: data/pro/pretrain/valid
 
 # ---- 预训练数据源 ----
 data_sources:
@@ -89,7 +93,7 @@ sft:
   weight_decay: 0.01
   max_seq_len: 4096
   inject_system_ratio: 0.2
-  data_path: data/pro/sft_data.jsonl
+  data_path: data/pro/sft/sft_mix.jsonl
 
 # ---- DPO 偏好对齐 ----
 dpo:
@@ -123,7 +127,7 @@ opd:
   log_interval: 5
   save_interval: 10
   seed: 42
-  data_path: ""
+  data_path: <填写你的 OPD prompt 路径>
   # 本地 HF 教师模型目录 (OPD 蒸馏评分器)
   teacher_model_path: checkpoints/Qwen3-0.6B
 
@@ -138,7 +142,7 @@ lora:
   lora_r: 8
   lora_alpha: 16
   log_interval: 10
-  data_path: data/pro/sft_data.jsonl
+  data_path: data/pro/sft/sft_mix.jsonl
 
 # ---- 分布式 ----
 distributed:

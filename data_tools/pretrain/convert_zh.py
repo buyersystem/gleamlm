@@ -13,14 +13,17 @@
 import argparse
 import os
 import shutil
+import sys
+
+_sys_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _sys_root not in sys.path:
+    sys.path.insert(0, _sys_root)
 
 from gleamlm.data.preprocess import convert_zh_file, detect_traditional
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="繁简转换预处理 — 检测繁体 → 按需转换"
-    )
+    parser = argparse.ArgumentParser(description="繁简转换预处理 — 检测繁体 → 按需转换")
     parser.add_argument("--input", required=True, help="输入文本文件路径")
     parser.add_argument("--output", default=None, help="输出文件（默认覆盖输入）")
     parser.add_argument(
@@ -50,9 +53,7 @@ def main():
 
     if not args.force:
         ratio = detect_traditional(args.input, args.sample_lines)
-        print(
-            f"繁体检测: {ratio * 100:.2f}% 命中率 (前 {args.sample_lines} 行)"
-        )
+        print(f"繁体检测: {ratio * 100:.2f}% 命中率 (前 {args.sample_lines} 行)")
         if ratio < args.threshold:
             print(f"低于阈值 {args.threshold}，跳过转换")
             return

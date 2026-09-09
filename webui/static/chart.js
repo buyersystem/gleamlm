@@ -13,19 +13,40 @@ class LineChart {
     this.ctx = canvas.getContext("2d");
     this.data = { series: [], phases: [], yLabel: "", xLabel: "step" };
     this.mouse = null;
+    this._raf = 0;
+    // 悬停重绘经 rAF 合帧：长跑 run 全量重绘 ~毫秒级，逐像素 mousemove
+    // 同步 draw 会堵主线程（“曲线大图一碰鼠标就卡”的根因）
     canvas.addEventListener("mousemove", (e) => {
       const r = canvas.getBoundingClientRect();
       this.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
-      this.draw();
+      this._schedule();
     });
     canvas.addEventListener("mouseleave", () => {
       this.mouse = null;
+      this._schedule();
+    });
+  }
+
+  /* 合帧：同一帧内多次触发只重绘一次（读 mouse 最新值即可） */
+  _schedule() {
+    if (this._raf) return;
+    this._raf = requestAnimationFrame(() => {
+      this._raf = 0;
       this.draw();
     });
   }
 
   render(data) {
     this.data = data;
+    // 每系列抽稀至 maxPoints（默认 2000）：5448+ 点的长跑 run 直接全绘会卡；
+    // 桶 min/max 包络保峰谷，曲线形状与全绘几乎一致（见文件尾 decimate）
+    this.data = {
+      ...data,
+      series: (data.series || []).map((s) => ({
+        ...s,
+        points: decimate((s.points || []).filter((p) => p[1] != null && isFinite(p[1])), data.maxPoints || 2000),
+      })),
+    };
     this.draw();
   }
 
@@ -54,15 +75,23 @@ class LineChart {
       return;
     }
     const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
-    let xMin = Math.min(...xs), xMax = Math.max(...xs);
+    // x 轴固定从 0 起: step 是训练进度计数, 0 起点才能看全程进展（首点一般已在
+    // step 50+, 数据驱动的起点会让刚启动的曲线刻度全挤在右端）; y 轴默认自适应,
+    // render({zeroY:true}) 时也从 0 起（lr 图: 才能看出 WSD 衰减的相对幅度）
+    let xMin = Math.min(0, ...xs), xMax = Math.max(...xs);
     let yMin = Math.min(...ys), yMax = Math.max(...ys);
-    // x 轴带一档余量；y 轴 pad 5%
+    // x 右端带一档余量; 0 是硬起点, 左端不再 pad（仅理论负值数据保留左 pad）
     const pad = Math.max(1, (xMax - xMin) * 0.04);
-    xMin -= pad; xMax += pad;
+    if (xMin < 0) xMin -= pad;
+    xMax += pad;
+    if (this.data.zeroY && yMin > 0) yMin = 0;
+    // y 轴 pad 5%
     const ySpan = yMax - yMin || Math.abs(yMax) || 1;
     yMin -= ySpan * 0.06; yMax += ySpan * 0.06;
 
-    const m = { l: 56, r: 14, t: 14, b: 26 };
+    // 底边距 34: 刻度数字 (top 基线) 与 xLabel (bottom 基线) 需要各占一行,
+    // 26 时两者在 h-20~h-9 与 h-13~h-2 重叠约 4px — 刻度贴 plot 底、标签另起行
+    const m = { l: 56, r: 14, t: 14, b: 34 };
     const pw = w - m.l - m.r, ph = h - m.t - m.b;
     const X = (x) => m.l + ((x - xMin) / (xMax - xMin)) * pw;
     const Y = (y) => m.t + (1 - (y - yMin) / (yMax - yMin)) * ph;
@@ -92,6 +121,7 @@ class LineChart {
       ctx.textBaseline = "top";
       ctx.fillText(fmtStepTick(x), X(x), h - m.b + 6);
     }
+    // xLabel 单独一行（m.b=34 后与刻度数字不再重叠）
     ctx.fillStyle = "#5c6474";
     ctx.textAlign = "right";
     ctx.textBaseline = "bottom";
@@ -194,4 +224,38 @@ function fmtStepTick(v) {
   if (Math.abs(r) >= 1e6) return Math.round(r / 1e6) + "M";
   if (Math.abs(r) >= 1e4) return Math.round(r / 1e3) + "k";
   return String(r);
+}
+
+/* 抽稀：点数 > max 时按桶 min/max 包络保留峰谷。
+   等距抽样会削掉 loss 尖峰/lr 衰减拐点；每桶输出段内极值点则形状保真。
+   桶数 = max/4，每桶至多输出首/极值/尾 4 点（含去重）→ 输出 ≤ max 有界。
+   入参须已滤非有限值（桶内比较依赖 y 可排序）。 */
+function decimate(pts, max) {
+  const n = pts.length;
+  if (n <= max) return pts;
+  const buckets = Math.max(8, max >> 2);
+  const out = [];
+  const step = n / buckets;
+  const push = (i) => {
+    const last = out[out.length - 1];
+    // 相邻重复点（同 x）跳过：折线无贡献，且会干扰悬停最近点计数
+    if (last && last[0] === pts[i][0]) return;
+    out.push(pts[i]);
+  };
+  for (let b = 0; b < buckets; b++) {
+    const i0 = Math.floor(b * step);
+    const i1 = b === buckets - 1 ? n - 1 : Math.max(i0 + 1, Math.floor((b + 1) * step) - 1);
+    push(i0);
+    if (i1 - i0 > 1) {
+      let mn = i0, mx = i0;
+      for (let i = i0 + 1; i <= i1; i++) {
+        if (pts[i][1] < pts[mn][1]) mn = i;
+        if (pts[i][1] > pts[mx][1]) mx = i;
+      }
+      if (mn !== i0 && mn !== i1) push(mn);
+      if (mx !== mn && mx !== i0 && mx !== i1) push(mx);
+    }
+    push(i1);
+  }
+  return out;
 }
