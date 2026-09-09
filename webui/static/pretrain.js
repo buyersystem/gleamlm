@@ -262,10 +262,8 @@ function shortId(id) {
   return s.length >= 3 ? `${s[0]}_${s[s.length - 1]}` : id;
 }
 
-/* ── 日志标题行的 run 摘要（位于「训练日志」与「＋ 启动预训练」之间；
-   预训练: 单行只保留验证温度计信息 —— step/loss/lr/GPU 与曲线、chip 重复,
-   唯一别处没有的是 val ppl, 标注它对应的训练步 (val_step) 防与最新 step 混淆;
-   非预训练任务: 维持原 step/loss/lr/GPU 摘要。详情以 title 悬停展示）── */
+/* ── 日志标题行的 run 摘要：预训练只补 val ppl（step/loss/lr 与曲线、chip
+   重复），并标注它对应的训练步，避免与最新 step 混淆；其他任务维持原摘要 ── */
 function renderStatusLine() {
   const el = $("#pt-run-info");
   if (!el) return;

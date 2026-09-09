@@ -1,12 +1,12 @@
 """构建 DPO chosen 池（sft_mix 单源版）。
 
-数据源（唯一权威 = SFT 混合集 data/<variant>/sft/sft_mix.jsonl，模型无关文本；
-训练轨 sft.data_path 同源，chosen = SFT 高质答案）：
+数据源：data/<variant>/sft/sft_mix.jsonl（与训练轨 sft.data_path 同源），
+chosen 取其中的 SFT 高质答案：
   - 单轮 {instruction, output}    确定性抽 --single-n 条（默认 1000，output≤600 字防超长截断）
   - 多轮 {messages}               全量（须 6 轮结构且尾轮为 assistant 答案）
 
-历史：v2 chosen 池曾混入 chat_extra 闲聊与 sft_data 基础池——chat_extra/sft_data/qa_sft
-均为中间废料（已从数据目录删除），sft_mix 是唯一有效 SFT 数据，chosen 池一律从其抽取。
+历史：v2 的 chosen 池曾混入 chat_extra 闲聊与 sft_data 基础池——这两类中间
+产物已从数据目录删除，chosen 池现只从 sft_mix 抽取。
 
 产出两个中间文件（喂 generate_rejected.py 生成 rejected，merge 后即可删）：
   - data/<variant>/dpo/dpo_chosen_single.jsonl  {instruction, output}
@@ -45,7 +45,7 @@ def main():
         "--variant",
         type=str,
         default="nano",
-        help="数据变体: data/<variant>/sft/sft_mix.jsonl 为唯一源, 产物落 data/<variant>/dpo/",
+        help="数据变体: 从 data/<variant>/sft/sft_mix.jsonl 抽取, 产物落 data/<variant>/dpo/",
     )
     parser.add_argument("--single-n", type=int, default=1000, help="单轮抽取数")
     parser.add_argument("--seed", type=int, default=42, help="确定性抽样 seed")
@@ -54,7 +54,7 @@ def main():
     # ---- 单源加载（sft_mix: 单轮 + 多轮混合，按键分流）----
     mix_path = os.path.join("data", args.variant, "sft", "sft_mix.jsonl")
     if not os.path.isfile(mix_path):
-        sys.exit(f"Error: 源数据不存在: {mix_path} (sft_mix 是唯一有效 SFT 集)")
+        sys.exit(f"Error: 源数据不存在: {mix_path}（chosen 池数据源）")
     rows = load_jsonl(mix_path)
     singles = [r for r in rows if "instruction" in r and "output" in r]
     # instruction 去重（保第一条）

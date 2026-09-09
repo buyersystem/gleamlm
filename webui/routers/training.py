@@ -315,9 +315,9 @@ _TASKS: dict[str, dict[str, Any]] = {
             {"name": "log_interval", "type": "int", "label": "log_interval"},
         ],
     },
-    # DPO 数据生成: 一键编排 data_tools/dpo/run_generate.py（chosen→rejected→merge）。
-    # 非训练任务 —— 无 loss 指标曲线, launcher 限 python（内部自行分片并行）;
-    # model_path 留空自动探测 checkpoints/<variant>/sft/sft_best.pt（GUI 零门槛）。
+    # DPO 数据生成：data_tools/dpo/run_generate.py 编排 chosen→rejected→merge。
+    # 非训练任务，无 loss 曲线；launcher 仅 python（脚本内部自行分片并行）。
+    # model_path 留空自动探测 checkpoints/<variant>/sft/sft_best.pt。
     "dpo_data": {
         "script": "data_tools/dpo/run_generate.py",
         "label": "DPO 数据生成",
@@ -979,7 +979,7 @@ def _mark_orphan_runs_interrupted() -> None:
 
 @router.get("/train/tasks")
 def train_tasks() -> dict:
-    """任务注册表元数据（前端动态渲染启动表单，字段/选项以后端为权威）。"""
+    """任务注册表元数据（前端动态渲染启动表单，字段/选项以本文件注册表为准）。"""
     return {
         "tasks": {
             k: {

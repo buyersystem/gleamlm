@@ -8,9 +8,8 @@
 (function () {
 const PT2_C = { loss: "#5dd0c9", lr: "#f5a97f" };
 
-/* 后训练路线图：左面板 = FLOW 主链（数组顺序即数据流，卡间箭头连接）；
-   右面板 = SUB 可选路线（与主链同尺寸平级展示，归属关系写在悬停提示里）。
-   按钮只留短名，细节悬停。 */
+/* 任务卡分两块：FLOW 主链按顺序排在左面板（卡间箭头连接），
+   SUB 可选路线在右面板。卡片上只写方法名，说明放悬停提示。 */
 const SUB = [
   { task: "sft_lora", t: "LoRA", tip: "基于预训练基座的低秩微调，与 SFT 并列" },
   { task: "ppo", t: "PPO", tip: "与 DPO 并列的偏好优化路线" },
@@ -75,19 +74,18 @@ function renderStages() {
       <div class="t">${esc(name)}${liveTxt}</div>
     </div>`;
   };
-  // 主链箭头：SVG 细线圆角箭头；hover 相邻前卡时整支点亮
+  // 箭头：SVG 细线，悬停前一张卡时整支变蓝
   const ARROW = () => `<svg class="flow-arrow" width="24" height="10" viewBox="0 0 24 10" aria-hidden="true">
   <line x1="1.5" y1="5" x2="13.5" y2="5"/>
   <path class="head" d="M12.2 1.6 L19.6 5 L12.2 8.4"/>
 </svg>`;
-  // 主链单行（左面板，与 Loss 窗口同轴居中）
   const parts = [];
   FLOW.forEach((it, i) => {
     parts.push(stageHtml(it.task, it.t, it.tip, (it.opt ? " opt" : "") + (it.gen ? " gen" : "")));
     if (i < FLOW.length - 1) parts.push(`<div class="flow-arrow">${ARROW()}</div>`);
   });
   box.innerHTML = `<div class="flow-grid">${parts.join("")}</div>`;
-  // 可选路线卡（右面板，同款同尺寸）
+  // 可选路线卡（右面板）
   altBox.innerHTML = SUB.map((s) => stageHtml(s.task, s.t, s.tip, "")).join("");
   for (const b of [box, altBox]) {
     b.querySelectorAll(".stage-card").forEach((c) => {

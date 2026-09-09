@@ -4,7 +4,7 @@
   1. tokenize_and_group: 文本 → 内存 Dataset（一次性加载进 RAM）
   2. 本模块:         文本 → .bin (token ids 连续写入) + .idx (索引)，
                      训练时用 np.memmap 随机访问任意文档，内存占用 ≈ 0。
-                     这是 TB 级预训练语料的唯一可行方式。
+                     TB 级语料没法整进内存，mmap 落盘是现实方案。
 
 .bin 文件格式:
   所有文档的 token id 按 np.uint16 连续写入（无分隔符，靠 .idx 定位）。

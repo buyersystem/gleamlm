@@ -7,9 +7,8 @@
   dpo_rejected_{single,multi}[.N].jsonl（分片）→ merge_dpo_data.py → dpo_data.jsonl
 
 用法:
-  # single/multi rejected 统一用各变体自己的 SFT 模型（sft_best.pt）——
-  # 决策：rejected 须与当前 policy 同分布（模型自己会犯的错），DPO 信号精细；
-  # 曾建议单轮用基座 final.pt（未对齐行为天然"差"但分布外），已弃
+  # rejected 统一用变体自己的 SFT 模型（sft_best.pt）——rejected 与当前
+  # policy 同分布才有区分度；用基座模型生成单轮 rejected（分布外）已弃
   python data_tools/dpo/generate_rejected.py --format single \
       --sft_data data/nano/dpo/dpo_chosen_single.jsonl \
       --model_path checkpoints/nano/sft/sft_best.pt \
@@ -129,9 +128,8 @@ def generate_rejected_multi(
 
 
 def main():
-    # 多进程分片时每进程限 1 个 CPU 线程：torch 默认 intra-op 线程数 = 物理核数，
-    # N 进程 x 全核线程超订 CPU（实测 4 进程时每片慢 6 倍、总吞吐反低于单进程），
-    # 推理小模型是 python/kernel launch 瓶颈，多 CPU 线程无益反而互拖。
+    # 分片并行时每进程只留 1 个 CPU 线程。torch 默认按物理核数开线程，
+    # 多进程叠满反而互相抢占，实测 4 进程总吞吐低于单进程。
     torch.set_num_threads(1)
     parser = argparse.ArgumentParser(description="Generate DPO rejected data")
     parser.add_argument(
@@ -261,7 +259,7 @@ def main():
             )
 
         if (i + 1) % 20 == 0:
-            # 每 20 条打一行（多进程共享日志，太稀疏像“没动静”）；flush 防管道块缓冲
+            # 每 20 条一行进度；flush 即时写出（stdout 有块缓冲）
             print(f"  [{i + 1}/{len(samples)}]", flush=True)
         if (i + 1) % 50 == 0:
             # 断点续跑文件：50 条一落盘，最多丢 49 条

@@ -161,9 +161,8 @@ def evaluate(
 ) -> tuple[float, float]:
     """Validate and return (avg_loss, ppl). Aggregates across DDP ranks.
 
-    max_batches: 采样上限（batch 数）。None = 跑完整 valid 集；
-    训练内嵌的周期验证通常给一个小上限做快速快照（"温度计"），
-    全量验证留给训练结束后独立评估。
+    max_batches: 最多抽查多少个 batch；None = 完整 valid 集。
+    全量验证在训练结束后单独做。
     """
     torch.cuda.empty_cache()
 

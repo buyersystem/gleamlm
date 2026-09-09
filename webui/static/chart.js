@@ -14,8 +14,7 @@ class LineChart {
     this.data = { series: [], phases: [], yLabel: "", xLabel: "step" };
     this.mouse = null;
     this._raf = 0;
-    // 悬停重绘经 rAF 合帧：长跑 run 全量重绘 ~毫秒级，逐像素 mousemove
-    // 同步 draw 会堵主线程（“曲线大图一碰鼠标就卡”的根因）
+    // 悬停重绘经 rAF 合帧（全量重绘毫秒级，逐像素同步 draw 会卡）
     canvas.addEventListener("mousemove", (e) => {
       const r = canvas.getBoundingClientRect();
       this.mouse = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -27,7 +26,7 @@ class LineChart {
     });
   }
 
-  /* 合帧：同一帧内多次触发只重绘一次（读 mouse 最新值即可） */
+  /* rAF 合帧：同一帧内只重绘一次 */
   _schedule() {
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => {
@@ -38,8 +37,7 @@ class LineChart {
 
   render(data) {
     this.data = data;
-    // 每系列抽稀至 maxPoints（默认 2000）：5448+ 点的长跑 run 直接全绘会卡；
-    // 桶 min/max 包络保峰谷，曲线形状与全绘几乎一致（见文件尾 decimate）
+    // 每系列抽稀至 maxPoints（默认 2000），桶内 min/max 保峰谷（见文件尾 decimate）
     this.data = {
       ...data,
       series: (data.series || []).map((s) => ({
@@ -75,9 +73,8 @@ class LineChart {
       return;
     }
     const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
-    // x 轴固定从 0 起: step 是训练进度计数, 0 起点才能看全程进展（首点一般已在
-    // step 50+, 数据驱动的起点会让刚启动的曲线刻度全挤在右端）; y 轴默认自适应,
-    // render({zeroY:true}) 时也从 0 起（lr 图: 才能看出 WSD 衰减的相对幅度）
+    // x 轴从 0 起（step 是进度计数，随首点起步会把刚启动的曲线挤到右端）
+    // y 轴默认自适应；zeroY 时也从 0 起（lr 图看 WSD 相对衰减幅度）
     let xMin = Math.min(0, ...xs), xMax = Math.max(...xs);
     let yMin = Math.min(...ys), yMax = Math.max(...ys);
     // x 右端带一档余量; 0 是硬起点, 左端不再 pad（仅理论负值数据保留左 pad）

@@ -67,7 +67,7 @@
     </div>
   </section>
 
-  <!-- ── ② 后训练：左栏实验记录 + 右侧（流水线卡在上、曲线在下），下方通栏日志 ── -->
+  <!-- ── ② 后训练：左栏任务列表 + 右侧（任务卡在上、曲线在下），底部通栏日志 ── -->
   <section id="pane-posttrain" class="tabpane">
     <div class="pane-row" style="flex:3">
       <div class="panel" style="width:270px;flex:none">
@@ -75,7 +75,7 @@
         <div id="pt2-runs" class="p-body" style="flex:1"></div>
       </div>
       <div class="pane-col" style="flex:1">
-        <!-- 上行与下行同构：左=主链流水线（右缘=Loss 右缘），右=可选路线面板（LoRA/PPO/GRPO） -->
+        <!-- 上排与曲线行同宽：左=主链卡，右=可选路线卡（LoRA/PPO/GRPO） -->
         <div class="pane-row" style="flex:none">
           <div class="panel" style="flex:1">
             <div id="pt2-stages" class="pipeline"></div>

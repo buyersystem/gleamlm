@@ -307,7 +307,7 @@ def train(args, model_cfg: ModelConfig):
         # 断点续训必须恢复累积边界: checkpoint 若保存于 accumulate 组中间，
         # acc 归零会让恢复后的组边界与原始轨迹错位
         start_acc = ckpt.get("acc", 0)
-        # 全局样本计数（权威位置）: 恢复时用它精确定位数据；
+        # 全局样本计数: 恢复时用它精确定位数据；
         # 旧 checkpoint 无此字段时回退到 batch 序号
         start_consumed = ckpt.get("consumed_train_samples", 0)
         if is_main_process():
@@ -318,7 +318,7 @@ def train(args, model_cfg: ModelConfig):
     step = start_step
     acc_steps = start_acc
     # 全局已消费样本数: 每处理一个 micro-batch += batch_size；
-    # 是断点续训的权威数据位置（与 DP 规模解耦，对齐 nanotron consumed_train_samples）
+    # 断点续训按它定位（与 DP 规模解耦，对齐 nanotron consumed_train_samples）
     consumed_train_samples = start_consumed
     best_val_loss = float("inf")
     raw_model.train()
@@ -349,7 +349,7 @@ def train(args, model_cfg: ModelConfig):
         # 被重复训练、混合比例偏移）。
         batch_iter = enumerate(loader)
         if epoch == start_epoch:
-            # 权威位置 = consumed_train_samples（全局样本数，与 DP 解耦）；
+            # 定位基准 = consumed_train_samples（全局样本数，与 DP 解耦）；
             # 换算成该 rank 应跳过的 batch 序号 = 全局样本 / (batch_size × dp)
             dp_size = dist.get_world_size() if dist.is_initialized() else 1
             skip_batches = (consumed_train_samples // args.batch_size) // dp_size

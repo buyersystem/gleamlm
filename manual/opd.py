@@ -7,7 +7,7 @@ OPD (On-Policy Distillation) — 教师打分 + 序列级 Reverse KL。
   相比 off-policy 蒸馏 (manual/distill.py)，学生自采样消除了 exposure bias。
 
 教师模式:
-  - local (唯一): 本地 HF 因果模型目录 (transformers 直接加载)，如
+  - local: 本地 HF 因果模型目录 (transformers 直接加载)，如
     checkpoints/Qwen3-0.6B。对 prompt+completion 前向求 log π_T(completion|prompt)
     (两次前向相减，跨 tokenizer 精确)。
   历史: ollama/DeepSeek API 教师已移除——DeepSeek 不返回完整预填 logprob (打分链
@@ -207,7 +207,7 @@ def group_loo_baseline(advantages: torch.Tensor, group_size: int) -> torch.Tenso
 class LocalTeacher:
     """本地教师 — 用 HF 因果模型对任意文本求 log π_T(completion | prompt)。
 
-    Qwen3-0.6B 等本地 HF 模型作为教师（OPD 唯一教师方式）。核心:
+    Qwen3-0.6B 等本地 HF 模型作为教师。核心:
       对 prompt + completion 拼接文本用教师 tokenizer 编码、前向拿 logits，
       两次前向相减: log p(prompt+completion) − log p(prompt) = log p(completion|prompt)，
       数学精确、无 BPE 边界对齐问题。
@@ -284,7 +284,7 @@ def train(args):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # 教师初始化: 本地 HF 模型 (OPD 唯一教师方式)
+    # 教师初始化: 本地 HF 模型
     if not args.teacher_model_path:
         raise ValueError("--teacher_model_path 必填 (如 checkpoints/Qwen3-0.6B)")
     local_teacher = LocalTeacher(args.teacher_model_path, device=str(device))
@@ -588,7 +588,7 @@ def parse_args():
     p.add_argument("--log_interval", type=int, default=None, help="覆写日志间隔")
     p.add_argument("--seed", type=int, default=None, help="覆写随机种子 (默认取 YAML opd.seed)")
     p.add_argument("--tokenizer_path", type=str, default="")
-    # ── 教师 (本地 HF 模型，OPD 唯一方式) ──
+    # ── 教师 (本地 HF 模型目录) ──
     p.add_argument(
         "--teacher_model_path",
         type=str,

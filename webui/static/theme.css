@@ -347,16 +347,16 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 #cfg-editor { font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
   min-height: 380px; resize: vertical; }
 
-/* ── 后训练阶段卡（无标题行：面板顶部直接是流水线） ── */
+/* ── 后训练任务卡 ── */
 .pipeline {
   display: flex; flex-direction: column; gap: 8px;
   padding: 10px 12px;
 }
 .flow-grid {
   display: flex; align-items: center; gap: 2px;
-  width: max-content; margin: 0 auto;   /* 主链单行居中：与下方 Loss 窗口同轴 */
+  width: max-content; margin: 0 auto;   /* 居中：与下方 Loss 面板同轴 */
 }
-/* 右面板：可选路线（LoRA/PPO/GRPO）与主链卡同款同尺寸，水平居中 */
+/* 右面板：可选路线卡水平居中 */
 #pt2-alts {
   flex-direction: row;
   align-items: center;
@@ -368,7 +368,7 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 .flow-arrow svg { display: block; }
 .flow-arrow line, .flow-arrow path { fill: none; stroke: var(--dim); stroke-width: 1.6;
   stroke-linecap: round; stroke-linejoin: round; transition: stroke 0.15s; }
-/* 横线/尖头同色（默认灰）；悬停前卡时整支箭头同步点亮为蓝 */
+/* 默认灰；悬停前一张卡时整支变蓝 */
 .stage-card:hover + .flow-arrow line,
 .stage-card:hover + .flow-arrow path { stroke: var(--accent); }
 .stage-card {

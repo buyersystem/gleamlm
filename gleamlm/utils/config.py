@@ -90,8 +90,8 @@ def extract_checkpoint_config(checkpoint: dict[str, Any]) -> dict[str, Any]:
 #
 # data_sources 以顶层键单独记账 (允许空列表, 键存在即可, train_tokenizer 自带防空)。
 # model 段不含可选键 (use_gradient_checkpointing / attn_type / ffn_type /
-# rope_* / layer_configs 等), 缺失时走 Pydantic 默认。vocab_size 的运行时
-# 权威是分词器 (sft.py 用 tokenizer 值覆盖) → 不进 sft 的必读清单。
+# rope_* / layer_configs 等), 缺失时走 Pydantic 默认。vocab_size 运行时
+# 用分词器覆盖 (sft.py 用 tokenizer 值覆盖) → 不进 sft 的必读清单。
 _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
     "full": {
         "model": (
@@ -422,8 +422,7 @@ class TrainingConfig(BaseModel):
     eval_interval: int = 500
     save_interval: int = 2000
     max_train_chars: int = 6130000000
-    # 周期验证的采样上限（batch 数）: 快测一小段 valid 当"温度计"
-    # （工业惯例: 小型 held-out 快速验证，不跑全量）；null = 全量 valid
+    # 周期验证最多抽查多少个 batch；None = 跑完整 valid
     max_val_batches: int | None = None
 
 
@@ -433,7 +432,7 @@ class DataConfig(BaseModel):
     checkpoint_dir: str = ""
     ids_prefix: str = ""
     load_checkpoint: str | None = None
-    # 周期验证数据（.bin/.idx 前缀, 与 data_dir 同级的 valid 分片; 空 = 不验证）
+    # 周期验证数据的 .bin/.idx 前缀（data_dir 下的 valid 分片）；空 = 不验证
     val_data: str = ""
 
 

@@ -3,7 +3,7 @@
 - single 分片: dpo_rejected_single[.N].jsonl → {instruction, chosen, rejected}
 - multi 分片:  dpo_rejected_multi[.N].jsonl  → {messages(不含尾轮答案), chosen, rejected}
 
-清洗规则（剔除训练毒样本）：
+清洗规则（剔除坏样本）：
   1. rejected 为空 / < 8 字 / 与 chosen 完全相同 / chosen 长度<4
   2. 输出文件按 chosen 顺序保持与 chosen 池一致（供人工复核）
 

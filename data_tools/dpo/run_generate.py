@@ -1,32 +1,30 @@
-"""DPO 数据生成一键编排（WebUI「DPO 数据生成」任务的入口脚本）。
+"""DPO 数据生成编排（WebUI「DPO 数据生成」任务的入口脚本）。
 
-把 data_tools/dpo 三脚本串成一条幂等流水线，供 GUI（教学用户不碰 CLI）与
-手动用户共用。全程打印步骤分段行（===== [n/5] … =====），任一步失败立即
-退出非 0 并跳过后续步骤；已产生的分片可重跑覆盖（幂等）。
+把 data_tools/dpo 的三个脚本串成一条流水线，WebUI 与命令行走同一入口。
+每步打印分段行（===== [n/5] … =====），任一步失败即退出非 0；分片结果
+重跑可覆盖。
 
 步骤：
-  1. build_dpo_chosen      chosen 池（sft_mix 单源确定性重放 = 复用旧池）
+  1. build_dpo_chosen      chosen 池（sft_mix 抽样，结果确定可复用）
   2. generate_rejected     single 路 rejected（--shard-total N 并行分片）
   3. generate_rejected     multi 路 rejected（同上）
-  4. merge_dpo_data        先写临时文件，成功后才原子替换正式产物
-                          （旧 dpo_data.jsonl 自动改名 dpo_data_bak_v{N} 保留）
-  5. 清理                  chosen/rejected 中间产物（用完即删，不入库）
+  4. merge_dpo_data        先写临时文件，成功后再替换正式产物
+                          （旧文件自动改名 dpo_data_bak_v{N} 保留）
+  5. 清理                  chosen/rejected 中间产物，不入库
 
-rejected 模型：各变体自己的 SFT 模型（sft_best.pt，自动探测 checkpoints/
-<variant>/sft/sft_best.pt；--model-path 可覆写）——rejected 与当前 policy
-同分布（模型自己会犯的错），DPO 信号精细（2026-09-09 拍板；曾建议单轮用
-基座 final.pt，分布外已弃）。
+rejected 模型：默认用变体自己的 SFT 模型（自动探测 checkpoints/<variant>/
+sft/sft_best.pt，--model-path 可覆写）。rejected 须与当前 policy 同分布
+才有区分度；曾用基座模型生成单轮 rejected，分布外，已弃。
 
 用法:
   python data_tools/dpo/run_generate.py --variant lite
-  python data_tools/dpo/run_generate.py --variant nano --shards 8  # 显存富余拉满
+  python data_tools/dpo/run_generate.py --variant nano --shards 8
   python data_tools/dpo/run_generate.py --variant nano --limit 1 \
-      --output data/nano/dpo/_tmp_gen.jsonl    # 冒烟（不落正式位）
+      --output data/nano/dpo/_tmp_gen.jsonl    # 冒烟，不落正式位
 
-生成慢的说明：generate_rejected 是逐条自回归（无 batch 接口），小模型
-(40M) 在 4070Ti/A10 上算力过剩（GPU 利用率 ~30%），纯单进程慢。默认
---shards 4 多进程并行把 GPU 跑满：每个进程独立加载模型，显存占用
-~0.7GB/进程（40M 模型），12GB 以上显卡可开到 8。
+性能备注：generate_rejected 逐条自回归、无 batch 接口，单进程时 GPU
+利用率只有 ~30%。默认 4 进程并行；每进程独立加载模型，约 0.7GB 显存
+（40M 模型），12GB 以上显存可开 8 进程。
 """
 
 import argparse
@@ -72,7 +70,7 @@ def _run_shards(cmd_head: list[str], shard_total: int, name: str) -> int:
 def _cleanup(dpo_dir: str) -> None:
     """删除 chosen/rejected 中间产物（可再生，不入库）。"""
     removed = 0
-    # .partial 断点文件同属中间产物（merge 已完成，保留只会脏目录）
+    # .partial 断点文件也是中间产物，一并清理
     for pat in (
         "dpo_chosen_*.jsonl",
         "dpo_rejected_*.jsonl",
@@ -114,10 +112,10 @@ def main() -> None:
     out = args.output or os.path.join(dpo_dir, "dpo_data.jsonl")
     out_abs = os.path.abspath(out)
 
-    # 前置校验：sft_mix 源 + SFT 模型必须就绪（GUI 用户先跑 SFT 再点本卡）
+    # 前置检查：sft_mix 与 SFT 模型须已就绪
     mix = os.path.join(HERE, "data", args.variant, "sft", "sft_mix.jsonl")
     if not os.path.isfile(mix):
-        sys.exit(f"Error: 源数据不存在: {mix} (sft_mix 是唯一有效 SFT 集)")
+        sys.exit(f"Error: 源数据不存在: {mix}（chosen 池数据源）")
     model_path = args.model_path or os.path.join(
         HERE, "checkpoints", args.variant, "sft", "sft_best.pt"
     )
@@ -133,7 +131,7 @@ def main() -> None:
     rej_single = os.path.join(dpo_dir, "dpo_rejected_single.jsonl")
     rej_multi = os.path.join(dpo_dir, "dpo_rejected_multi.jsonl")
 
-    # 1. chosen 池（确定性，等价复用）
+    # 1. chosen 池
     if _run([py, _script("build_dpo_chosen.py"), "--variant", args.variant], "1/5 chosen 池") != 0:
         sys.exit(1)
 
@@ -184,7 +182,7 @@ def main() -> None:
     ):
         sys.exit(1)
 
-    # 4. merge 到临时文件，成功后才原子替换（失败不碰正式产物）
+    # 4. merge 先写临时文件，成功后再替换正式产物
     tmp = out_abs + ".new"
     if (
         _run(
@@ -208,7 +206,7 @@ def main() -> None:
 
 
 def _next_bak(out_abs: str) -> str:
-    """自动找下一个备份名 dpo_data_bak_v{N}.jsonl（沿用 bak_v1 先例）。"""
+    """取下一个可用的备份名 dpo_data_bak_v{N}.jsonl。"""
     base, ext = os.path.splitext(out_abs)
     n = 1
     while os.path.isfile(f"{base}_bak_v{n}{ext}"):

@@ -251,7 +251,7 @@ def test_task_registry(api):
     assert body["variants"] == ["nano", "lite", "pro"]
     assert body["launchers"] == ["python", "torchrun", "deepspeed"]
     assert any(e["path"] == "manual/configs/nano.yaml" for e in body["configs"])
-    # dpo_data 生成任务：仅 python launcher，字段可全空一键启动（模型自动探测）
+    # dpo_data 生成任务：仅 python launcher，字段全空即可启动（模型自动探测）
     dd = body["tasks"]["dpo_data"]
     assert dd["script"] == "data_tools/dpo/run_generate.py"
     assert dd["launchers"] == ["python"] and dd["variant_flag"] is True

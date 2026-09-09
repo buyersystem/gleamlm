@@ -367,9 +367,8 @@ function refreshTaskUi(box, taskKey, task) {
 }
 
 /* ── 日志面板：全局行同步到所有 .log 容器 ── */
-/* 批量冲刷而非逐行 append：SSE 回放/长跑时一次涌入上千行，逐行 DOM 追加 +
-   scrollTop 赋值（强制同步 reflow）会堵主线程（点击历史 run 重放日志即卡）。
-   批满 200 行立即冲刷一次；慢速流由 rAF 合帧（每帧至多一次）。 */
+/* 日志行批量写：逐行 append + scrollTop 会强制 reflow，回放上千行时卡
+   主线程。攒 200 行冲刷一次；慢速流用 rAF 合帧（每帧至多一次）。 */
 function initLogSync() {
   let buf = [];
   let raf = 0;

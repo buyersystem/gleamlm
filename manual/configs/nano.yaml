@@ -150,7 +150,7 @@ lora:
   lora_r: 8
   lora_alpha: 16
   log_interval: 10
-  data_path: data/nano/sft/sft_mix.jsonl   # 与 sft.data_path 同源（sft_mix 为唯一有效 SFT 集）
+  data_path: data/nano/sft/sft_mix.jsonl   # 与 sft.data_path 同源
 
 # ---- 分布式 ----
 distributed:
