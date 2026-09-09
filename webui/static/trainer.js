@@ -24,16 +24,14 @@ const trainer = {
     this.subs[evt].forEach((fn) => fn(payload));
   },
 
-  /* ── 初始化：元数据 + 文件候选 + 当前 run 探测 ── */
+  /* ── 初始化：元数据 + 当前 run 探测（候选清单由 refreshCandidates 拉取）── */
   async init() {
-    const [meta, models, configs, st] = await Promise.all([
+    const [meta, st] = await Promise.all([
       api("/api/train/tasks"),
-      api("/api/models").catch(() => ({ files: [] })),
-      api("/api/configs").catch(() => []),
       api("/api/train/status").catch(() => ({ running: false })),
     ]);
     this.meta = meta;
-    this.files = [...(models.files || []).map((f) => f.path), ...configs.map((c) => c.path)];
+    await this.refreshCandidates();
     if (st && st.run_id) {
       this.run = st;
       this.bindRun(st.run_id, st.running === true, false);
@@ -41,6 +39,18 @@ const trainer = {
     // 日志面板重绑（后端重启后 run 丢了但日志文件在: status 返回 running=false
     // 且无 run_id 时，runs 里最后一条 unfinished 的可手动点开重放 — 见各 tab）
     this.emit("ready", this.meta);
+  },
+
+  /* ── 候选清单（配置 yaml 一个池 / 模型 ckpt 一个池，按语义拆分，
+       避免“配置 YAML”输入框建议里混进 checkpoints 下的模型文件）──
+       每次打开启动弹窗前实时重拉：新建/删除的文件立即可见，无需刷新页面 */
+  async refreshCandidates() {
+    const [models, configs] = await Promise.all([
+      api("/api/models").catch(() => ({ files: [] })),
+      api("/api/configs").catch(() => []),
+    ]);
+    this.files = (models.files || []).map((f) => f.path);
+    this.cfgFiles = configs.map((c) => c.path);
   },
 
   tasks(filter) {
@@ -58,6 +68,9 @@ const trainer = {
   /* ── 启动流程：表单 modal（taskFilter 由发起 tab 决定）── */
   async openStartModal(taskFilter) {
     if (!this.meta) await this.init();
+    // 版本标记：改前端后 Ctrl+F5，console 出现此行 = 已加载新版（排查旧缓存用）
+    console.info("[trainer] fe v6: configs exempt + candidates refresh");
+    await this.refreshCandidates(); // 候选实时刷新（见 refreshCandidates）
     const ts = this.tasks(taskFilter);
     const keys = Object.keys(ts);
     const defaultTask = keys.includes("pretrain") ? "pretrain" : keys[0];
@@ -280,6 +293,9 @@ function startFormHtml(tasks, meta, defaultTask) {
   </form>
   <datalist id="dl-files">
     ${trainer.fileCandidates().map((p) => `<option value="${p}"></option>`).join("")}
+  </datalist>
+  <datalist id="dl-configs">
+    ${(trainer.cfgFiles || []).map((p) => `<option value="${p}"></option>`).join("")}
   </datalist>`;
 }
 
@@ -305,11 +321,21 @@ function fieldRowsHtml(task, requiredOnly) {
       continue;
     }
     const isNum = f.type === "int" || f.type === "float";
+    // path 候选按 suggest 归类: configs→配置清单 / ckpt→checkpoint 文件；
+    // 未标注的 path 字段（目录、数据文件等）不挂候选，不检测任何文件池
+    const listId = isNum
+      ? ""
+      : f.suggest === "configs"
+        ? "dl-configs"
+        : f.suggest === "ckpt"
+          ? "dl-files"
+          : "";
+    const listAttr = listId ? ` list="${listId}"` : "";
     const attr = isNum
       ? `type="number" step="${f.type === "float" ? "any" : "1"}"`
-      : `type="text" list="dl-files"`;
+      : `type="text"${listAttr}`;
     rows.push(`<label for="${id}" style="font-size:12px">${esc(f.label)}${req}</label>
-      <span><input id="${id}" data-fname="${f.name}" ${attr} style="font-family:var(--mono);font-size:12px" />${help}</span>`);
+      <span><input id="${id}" data-fname="${f.name}" ${attr} autocomplete="off" style="font-family:var(--mono);font-size:12px" />${help}</span>`);
   }
   return rows.join("");
 }
@@ -328,7 +354,8 @@ function readPrefill() {
 function savePrefill(taskKey, fields, task) {
   const vals = {};
   for (const f of task.fields) {
-    if (f.type === "path" && fields[f.name]) vals[f.name] = fields[f.name];
+    // 配置类字段不参与记忆：每次启动前人工选当前配置，旧值只会误导
+    if (f.type === "path" && f.suggest !== "configs" && fields[f.name]) vals[f.name] = fields[f.name];
   }
   try {
     const saved = readPrefill();
@@ -339,10 +366,41 @@ function savePrefill(taskKey, fields, task) {
   }
 }
 
-function applyPrefill(box, taskKey) {
-  const saved = readPrefill()[taskKey] || {};
+function applyPrefill(box, taskKey, task) {
+  const saved = readPrefill();
+  const entry = saved[taskKey] || {};
+  // 配置类字段永不记忆（见 savePrefill）。此处按字段元数据判定而非 DOM 的
+  // el.list 关联（动态注入的 input 若 datalist 关联失败会漏网回填），并顺带
+  // 自愈：剥离历史版本遗留的 config 记忆，让 localStorage 不再躺陈旧配置路径
+  const cfgNames = new Set(
+    (task.fields || [])
+      .filter((f) => f.type === "path" && f.suggest === "configs")
+      .map((f) => f.name),
+  );
+  let dirty = false;
+  for (const n of cfgNames) {
+    if (entry[n]) {
+      delete entry[n];
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    if (Object.keys(entry).length) saved[taskKey] = entry;
+    else delete saved[taskKey];
+    try {
+      localStorage.setItem(PREFILL_KEY, JSON.stringify(saved));
+    } catch (_) {
+      /* 存储不可用时静默 */
+    }
+  }
+  // path 记忆只在文件仍存在时预填：模型/ckpt 被删或改名后，旧值会误导启动
+  const liveFiles = new Set(trainer.fileCandidates());
   box.querySelectorAll("[data-fname]").forEach((el) => {
-    if (saved[el.dataset.fname]) el.value = saved[el.dataset.fname];
+    if (cfgNames.has(el.dataset.fname)) return;
+    const v = entry[el.dataset.fname];
+    if (!v) return;
+    if (el.list && !liveFiles.has(v)) return; // 记忆值已不在候选池 → 跳过预填
+    el.value = v;
   });
 }
 
@@ -363,7 +421,7 @@ function refreshTaskUi(box, taskKey, task) {
   ls.value = allowL.includes(curL) ? curL : allowL[0];
   ls.disabled = allowL.length === 1;
   box.querySelector("#nproc-row").style.display = "none";
-  applyPrefill(box, taskKey);
+  applyPrefill(box, taskKey, task);
 }
 
 /* ── 日志面板：全局行同步到所有 .log 容器 ── */

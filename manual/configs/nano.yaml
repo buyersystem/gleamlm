@@ -23,7 +23,7 @@ training:
   save_interval: 2000
   # 数据预算 6.13B chars（README 预训练配置）
   max_train_chars: 6130000000
-  # 周期验证采样上限 (batch 数): nano 演示 200，每次快测 ~1.6M token 当温度计
+  # 周期验证采样上限 (batch 数): nano 演示 200，每次快测 ~1.6M token
   # (工业惯例: 小型 held-out 快速验证不跑全量; val 走裸 CE, 与 train 口径差见 README)
   max_val_batches: 200
 

@@ -50,7 +50,8 @@ os.makedirs(LOGS_DIR, exist_ok=True)  # 训练日志 + tracker SQLite 落盘目�
 CONFIG_DIR = os.path.join(ROOT_DIR, "manual", "configs")
 MY_CFG_DIR = os.path.join(ROOT_DIR, "my_configs")
 
-_BUILTIN_CONFIGS = ("base", "nano", "lite", "pro")
+# 内置配置 = manual/configs/ 下全部 yaml（目录即白名单：IDE 直接新建的实验
+# 配置也能被面板读到/启动；写权限仍只开放 my_configs/，见 _resolve_config_path）
 _VARIANTS = ("nano", "lite", "pro")
 _LAUNCHERS = ("python", "torchrun", "deepspeed")
 
@@ -74,6 +75,7 @@ _TASKS: dict[str, dict[str, Any]] = {
                 "name": "model",
                 "type": "path",
                 "label": "配置 YAML",
+                "suggest": "configs",  # 候选只取配置清单（manual/configs + my_configs）
                 "required": True,
             },
             {
@@ -342,6 +344,15 @@ _TASKS: dict[str, dict[str, Any]] = {
     },
 }
 
+# path 字段候选池: 显式 suggest 优先；缺省按字段名归类——模型/续训类只建议
+# checkpoint 文件，其余 path 字段（目录/数据文件/教师目录等）不挂候选，
+# 避免数据/目录框误列 checkpoints 下的模型文件
+_CKPT_FIELD_NAMES = {"model", "model_path", "resume"}
+for _t in _TASKS.values():
+    for _f in _t["fields"]:
+        if _f.get("suggest") is None and _f["type"] == "path" and _f["name"] in _CKPT_FIELD_NAMES:
+            _f["suggest"] = "ckpt"
+
 
 def _read_yaml_summary(rel: str) -> dict:
     """读模型 YAML 浅层摘要（供 lr 图 WSD 阶段线等展示）。
@@ -378,23 +389,18 @@ def _abs(rel: str) -> str:
 # ── 配置文件权限分级（§4.1: 内置只读 / my_configs 可写）──────
 # user_model 模板已移除 (2026-09): base 即模板, 新建配置 = 复制内置另存为 my_configs/
 def _in_builtin_configs(rel: str) -> bool:
-    return rel in {f"manual/configs/{n}.yaml" for n in _BUILTIN_CONFIGS}
+    # manual/configs/ 下所有 yaml 均为内置只读配置（读取/启动可见，写回 403）
+    return rel.startswith("manual/configs/") and rel.endswith(".yaml")
 
 
 def _config_entries() -> list[dict]:
-    """内置配置 + my_configs/ 用户副本清单（读全部、写仅用户侧）。"""
+    """manual/configs/ 全部 yaml + my_configs/ 用户副本清单（读全部、写仅用户侧）。"""
     entries = []
-    for name in _BUILTIN_CONFIGS:
-        rel = f"manual/configs/{name}.yaml"
-        if os.path.isfile(_abs(rel)):
-            entries.append(
-                {
-                    "path": rel,
-                    "name": f"{name}.yaml",
-                    "builtin": True,
-                    "writable": False,
-                }
-            )
+    if os.path.isdir(CONFIG_DIR):
+        for fn in sorted(os.listdir(CONFIG_DIR)):
+            if fn.endswith(".yaml"):
+                rel = f"manual/configs/{fn}"
+                entries.append({"path": rel, "name": fn, "builtin": True, "writable": False})
     my_dir = MY_CFG_DIR
     if os.path.isdir(my_dir):
         for fn in sorted(os.listdir(my_dir)):

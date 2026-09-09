@@ -19,15 +19,16 @@ training:
   eval_interval: 500
   save_interval: 2000
   max_train_chars: 6130000000   # 6.13B chars (与 nano 统一)
-  max_val_batches: null         # 周期验证采样上限 (batch 数); null = 全量 valid
+  # 周期验证采样上限 (batch 数); 200 ≈ 1.6M token/次快测（valid 473MB，全量开销 ~3x 训练）
+  max_val_batches: 200
 
-# ---- 学习率（Cosine Annealing + Warmup）----
+# ---- 学习率（预训练 WSD，与 nano 同构：stable 4e-4，decay 终点 4e-5）----
 lr:
-  type: cosine
-  wsd_decay_style: linear       # 仅 WSD 生效（键位保留）
-  lr: 0.0004
+  type: wsd                     # WSD: warmup → stable → 线性 decay
+  wsd_decay_style: linear       # decay 段线性
+  lr: 0.0004                    # stable 期峰值；decay 终点 = lr × min_lr_ratio
   warmup_ratio: 0.02
-  stable_ratio: 0.80            # 仅 WSD 生效（键位保留）
+  stable_ratio: 0.80            # stable 80%，后 20% 线性 decay 至 4e-5
   min_lr_ratio: 0.1
 
 # ---- 优化器 ----
@@ -108,7 +109,7 @@ dpo:
 
 # ---- OPD 在线策略蒸馏 ----
 opd:
-  # Lite 尚未建 OPD prompt 数据: 传 --data 或配置 data_path (参考 nano 的 40 条模板)
+  # Lite OPD 演示: data/lite/opd_prompts.jsonl（41 条 prompt，同 nano 模板）
   epochs: 4
   batch_size: 2
   n_samples: 2
@@ -123,7 +124,7 @@ opd:
   log_interval: 5
   save_interval: 10
   seed: 42
-  data_path: <填写你的 OPD prompt 路径>
+  data_path: data/lite/opd_prompts.jsonl
   # 本地 HF 教师模型目录 (OPD 蒸馏评分器)
   teacher_model_path: checkpoints/Qwen3-0.6B
 

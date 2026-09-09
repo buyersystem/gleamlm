@@ -372,19 +372,24 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 .stage-card:hover + .flow-arrow line,
 .stage-card:hover + .flow-arrow path { stroke: var(--accent); }
 .stage-card {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(91, 140, 255, 0.5);
   border-radius: 8px; padding: 5px 10px;
   background: #1b1f2a;
   font-size: 12px; min-width: 78px; text-align: center;
 }
 .stage-card .t { font-weight: 700; font-size: 12px; display: flex; gap: 6px; align-items: center; justify-content: center; }
 .stage-card .s { color: var(--dim); font-size: 11px; margin-top: 3px; }
+/* 任务类型装饰在状态规则之前：状态类与其同特异性、定义在后，才能压过 */
+/* 数据生成卡（DPO数据）：产物已生成则可跳过，虚线提示非每次必跑 */
+.stage-card.gen { border-color: var(--accent); border-style: dashed; }
+.stage-card.opt { opacity: 0.72; }
+.stage-card.opt.run, .stage-card.opt.done, .stage-card.opt.fail { opacity: 1; }
+/* 运行/完成/失败时恢复实线，避免虚线残留（正在跑或已跑完就是实打实的状态） */
+.stage-card.run, .stage-card.done, .stage-card.fail { border-style: solid; }
 .stage-card.done { border-color: rgba(46, 204, 113, 0.55); }
 .stage-card.done .s { color: var(--ok); }
 .stage-card.run { border-color: var(--accent); box-shadow: 0 0 10px rgba(91, 140, 255, 0.25); }
 .stage-card.fail { border-color: var(--err); }
-.stage-card.opt { opacity: 0.72; border-style: dashed; }
-.stage-card.gen { border-color: rgba(240, 178, 100, 0.55); }
 
 /* ── 列表（runs / 模型）── */
 .list-item {

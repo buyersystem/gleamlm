@@ -9,17 +9,17 @@
 const PT2_C = { loss: "#5dd0c9", lr: "#f5a97f" };
 
 /* 任务卡分两块：FLOW 主链按顺序排在左面板（卡间箭头连接），
-   SUB 可选路线在右面板。卡片上只写方法名，说明放悬停提示。 */
+   SUB 可选路线在右面板。卡片上只写方法名。 */
 const SUB = [
-  { task: "sft_lora", t: "LoRA", tip: "基于预训练基座的低秩微调，与 SFT 并列" },
-  { task: "ppo", t: "PPO", tip: "与 DPO 并列的偏好优化路线" },
-  { task: "grpo", t: "GRPO", tip: "与 DPO 并列的偏好优化路线" },
+  { task: "sft_lora", t: "LoRA" },
+  { task: "ppo", t: "PPO" },
+  { task: "grpo", t: "GRPO" },
 ];
 const FLOW = [
-  { task: "sft", t: "SFT", tip: "基于预训练基座" },
-  { task: "dpo_data", t: "DPO数据", tip: "由 SFT 模型生成偏好数据", gen: true },
-  { task: "dpo", t: "DPO", tip: "基于生成的偏好数据" },
-  { task: "opd", t: "OPD", tip: "DPO 之后可选继续", opt: true },
+  { task: "sft", t: "SFT" },
+  { task: "dpo_data", t: "DPO数据", gen: true },
+  { task: "dpo", t: "DPO" },
+  { task: "opd", t: "OPD", opt: true },
 ];
 
 const pt2 = {
@@ -56,7 +56,7 @@ function renderStages() {
     const t = (r.config || {}).task;
     if (t && !latest.has(t)) latest.set(t, r);
   }
-  const stageHtml = (task, name, tip, extra) => {
+  const stageHtml = (task, name, extra) => {
     const meta = taskDesc(task);
     if (!meta) return "";
     const isLive = st.task === task && st.running;
@@ -70,7 +70,9 @@ function renderStages() {
     }
     const liveTxt = isLive && st.run_id
       ? `<span class="chip running" style="margin-left:4px">step ${(st.last_metric || {}).step ?? "…"}</span>` : "";
-    return `<div class="stage-card${extra}${cls}" data-task="${task}" title="启动 ${esc(name)} — ${esc(tip)}">
+    // dpo_data 是数据生成任务，动作用“生成”
+    const verb = task === "dpo_data" ? "生成" : "启动";
+    return `<div class="stage-card${extra}${cls}" data-task="${task}" title="${verb} ${esc(name)}">
       <div class="t">${esc(name)}${liveTxt}</div>
     </div>`;
   };
@@ -81,12 +83,12 @@ function renderStages() {
 </svg>`;
   const parts = [];
   FLOW.forEach((it, i) => {
-    parts.push(stageHtml(it.task, it.t, it.tip, (it.opt ? " opt" : "") + (it.gen ? " gen" : "")));
+    parts.push(stageHtml(it.task, it.t, (it.opt ? " opt" : "") + (it.gen ? " gen" : "")));
     if (i < FLOW.length - 1) parts.push(`<div class="flow-arrow">${ARROW()}</div>`);
   });
   box.innerHTML = `<div class="flow-grid">${parts.join("")}</div>`;
   // 可选路线卡（右面板）
-  altBox.innerHTML = SUB.map((s) => stageHtml(s.task, s.t, s.tip, "")).join("");
+  altBox.innerHTML = SUB.map((s) => stageHtml(s.task, s.t, "")).join("");
   for (const b of [box, altBox]) {
     b.querySelectorAll(".stage-card").forEach((c) => {
       c.addEventListener("click", () => trainer.openStartModal([c.dataset.task]));
