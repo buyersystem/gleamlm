@@ -148,7 +148,7 @@ def test_static_assets_no_store(api):
         "/static/chat.js",
         "/static/pretrain.js",
         "/static/posttrain.js",
-        "/images/luna_night.png",
+        "/images/luna_night2.png",
     ]:
         r = api.get(path)
         assert r.status_code == 200, path

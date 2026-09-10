@@ -145,7 +145,6 @@ GleamLM/
 │   ├── pretrain.py                #   Megatron 轨预训练（GPTDataset / BlendedMegatronDatasetBuilder）
 │   ├── sft.py / dpo.py / grpo.py / ppo.py / sft_lora.py  # 工业后训练（TRL / PEFT）
 │   └── configs/                   #   工业轨专用 YAML（nano.yaml / 0.6b.yaml）
-│                                   #   预训练用法见 docs/industrial_pretrain.md
 │
 ├── hf/                            # HuggingFace 生态桥梁
 │   ├── hf_config.py               #   PretrainedConfig
@@ -172,7 +171,7 @@ GleamLM/
 ├── eval/                          # 评测入口（lm-evaluation-harness：CEVAL / CMMLU / MMLU）
 ├── tests/                         # 单元测试 + 集成测试
 ├── tools/                         # 辅助工具（checkpoint 检查/转换、快速运行、RAG demo）
-├── CONTEXT.md                   # 项目上下文（术语表 + 领域约定，编码规范见 docs/GleamLM设计文档.md §15）
+├── CONTEXT.md                   # 项目上下文（术语表 + 领域约定）
 ├── requirements.txt
 ├── pyproject.toml
 ├── LICENSE

@@ -55,6 +55,9 @@ opencode.json
 .claude/
 AGENTS.md
 
+# WorkBuddy agent 工作目录（会话记忆/项目数据，非源码，不入库）
+.workbuddy/
+
 # 本地 skill（复用旧仓库，不入库）
 .opencode/skills/
 
