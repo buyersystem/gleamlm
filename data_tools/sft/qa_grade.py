@@ -27,8 +27,6 @@ import time
 
 import torch
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 _CLASS_SYSTEM = (
     "你是文本分类器。判断用户提供的“回答”属于哪种类型，只输出一个词：\n"
     "知识：客观事实、原理、方法、清单、教程；\n"
@@ -54,8 +52,9 @@ def classify(model, tok, prompts: list[str], device: torch.device) -> list[str]:
     200+ token）；本机 transformers 5.x 不支持 enable_thinking=False，故生成
     足量 token 让思考走完，剥离闭合思考块后在答案区匹配。思考块未闭合（384
     token 仍没走完）→ 标“噪音”(保守，不猜)。"""
-    enc = tok(prompts, return_tensors="pt", padding=True, truncation=True,
-              max_length=1024).to(device)
+    enc = tok(prompts, return_tensors="pt", padding=True, truncation=True, max_length=1024).to(
+        device
+    )
     input_len = enc["input_ids"].shape[1]
     out = model.generate(
         **enc,
@@ -88,20 +87,27 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tok = AutoTokenizer.from_pretrained(args.teacher_model_path)
     tok.padding_side = "left"  # decoder-only：生成需左侧 padding
-    model = AutoModelForCausalLM.from_pretrained(
-        args.teacher_model_path,
-        torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
-    ).to(device).eval()
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            args.teacher_model_path,
+            torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
+        )
+        .to(device)
+        .eval()
+    )
     print(f"Teacher loaded: {args.teacher_model_path} on {device}")
 
     with open(args.input, encoding="utf-8") as f:
-        rows = [json.loads(l) for l in f if l.strip()]
+        rows = [json.loads(line) for line in f if line.strip()]
     if args.limit:
         rows = rows[: args.limit]
     print(f"Rows: {len(rows)}")
 
     prompts = [
-        format_chatml(_CLASS_SYSTEM, f"问题：{r['instruction']}\n回答：{r['output'][:400]}\n这段回答的类型是：")
+        format_chatml(
+            _CLASS_SYSTEM,
+            f"问题：{r['instruction']}\n回答：{r['output'][:400]}\n这段回答的类型是：",
+        )
         for r in rows
     ]
 
@@ -109,9 +115,12 @@ def main():
     t0 = time.time()
     with torch.no_grad():
         for start in range(0, len(prompts), args.batch_size):
-            batch = prompts[start: start + args.batch_size]
+            batch = prompts[start : start + args.batch_size]
             labels = classify(model, tok, batch, device)
-            for r, lab in zip(rows[start: start + args.batch_size], labels):
+            # strict=True: labels 与 batch 同源，长度必须一致；不一致说明
+            # classify 丢/多了标签，会让标签错位写入 rows（静默污染训练数据），
+            # 宁可在此处直接抛错暴露。
+            for r, lab in zip(rows[start : start + args.batch_size], labels, strict=True):
                 r["label"] = lab
                 counts[lab] = counts.get(lab, 0) + 1
             if (start // args.batch_size) % 25 == 0:

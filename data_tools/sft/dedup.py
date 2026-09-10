@@ -38,7 +38,9 @@ def instruction_quality(ins: str, out: str) -> float:
 def main():
     parser = argparse.ArgumentParser(description="SFT 数据 output 去重")
     parser.add_argument("--input", type=str, required=True, help="输入 JSONL")
-    parser.add_argument("--chat-extra", type=str, default=None, help="闲聊样本 JSONL（追加到输出末尾）")
+    parser.add_argument(
+        "--chat-extra", type=str, default=None, help="闲聊样本 JSONL（追加到输出末尾）"
+    )
     parser.add_argument("--apply", action="store_true", help="真正写文件；缺省为预览")
     args = parser.parse_args()
 
@@ -79,7 +81,7 @@ def main():
     print(f"Dup groups: {dup_groups}, removed: {removed}, kept: {len(keep) + len(multi)}")
 
     # 大重复组摘要（>=5 连）
-    for out, members in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:10]:
+    for _key, members in sorted(groups.items(), key=lambda kv: -len(kv[1]))[:10]:
         if len(members) >= 5:
             sample = members[0].get("instruction", "")[:40]
             print(f"  {len(members)}x | ins: {sample}")
@@ -91,14 +93,17 @@ def main():
     # 备份原文件
     backup = args.input.replace(".jsonl", "_bak_dup.jsonl")
     if not os.path.exists(backup):
-        with open(args.input, encoding="utf-8") as f_src, open(backup, "w", encoding="utf-8") as f_dst:
+        with (
+            open(args.input, encoding="utf-8") as f_src,
+            open(backup, "w", encoding="utf-8") as f_dst,
+        ):
             f_dst.write(f_src.read())
         print(f"Backup: {backup}")
 
     chat_n = 0
     if args.chat_extra:
         with open(args.chat_extra, encoding="utf-8") as f:
-            chat_rows = [json.loads(l) for l in f if l.strip()]
+            chat_rows = [json.loads(line) for line in f if line.strip()]
         chat_n = len(chat_rows)
         print(f"Chat extra: {chat_n}")
 

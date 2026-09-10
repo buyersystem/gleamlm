@@ -22,10 +22,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - run: pip install -e ".[dev,hf]"
+      # serve extra 必须装：tests/test_webui_api.py 在第 20-21 行用
+      # pytest.importorskip("fastapi"/"httpx") 整模块跳过；缺 serve 时
+      # 那 18 个用例在 CI 中永远不会执行，而 pytest 步骤仍显示为绿（假绿）。
+      - run: pip install -e ".[dev,hf,serve]"
 
       - run: python -m pytest tests/ -v --cov=gleamlm --cov-report=term
 
-      - run: ruff check
-
+      # mypy 必须排在 ruff 之前：ruff 是纯 lint，一旦它失败，排在后面的步骤
+      # 会被 GitHub Actions 直接 skipped。曾因此导致类型门禁自 2026-09-07 起
+      # 静默失效数日无人察觉。类型检查是核心库门禁，优先级高于 lint。
       - run: python -m mypy gleamlm/
+
+      - run: ruff check

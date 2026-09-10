@@ -24,7 +24,7 @@ _QA_SRC = "data/nano/sft/qa_sft.jsonl"
 
 def _load(path: str) -> list:
     with open(path, encoding="utf-8") as f:
-        return [json.loads(l) for l in f if l.strip()]
+        return [json.loads(line) for line in f if line.strip()]
 
 
 def main():

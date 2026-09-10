@@ -111,26 +111,28 @@ def eligible(q: str, a: str) -> bool:
         return False
     if _CHATTY_A.search(a):
         return False
-    if _URL_GARBAGE.search(q) or _URL_GARBAGE.search(a):
-        return False
-    return True
+    return not (_URL_GARBAGE.search(q) or _URL_GARBAGE.search(a))
 
 
 def _load_rows(path: str) -> list:
     with open(path, encoding="utf-8") as f:
-        return [json.loads(l) for l in f if l.strip()]
+        return [json.loads(line) for line in f if line.strip()]
 
 
 def main():
     p = argparse.ArgumentParser(description="QA 语料 → SFT 指令提取")
     p.add_argument("--input", default="data/raw/qa_dedup.txt")
-    p.add_argument("--output", default="data/nano/sft/qa_sft.jsonl",
-                   help="输出 JSONL（{instruction, output}）")
-    p.add_argument("--max", type=int, default=20000, help="抽取条数上限（默认按 --ratio 取候选池比例）")
+    p.add_argument(
+        "--output", default="data/nano/sft/qa_sft.jsonl", help="输出 JSONL（{instruction, output}）"
+    )
+    p.add_argument(
+        "--max", type=int, default=20000, help="抽取条数上限（默认按 --ratio 取候选池比例）"
+    )
     p.add_argument("--ratio", type=float, default=0.06, help="抽取比例（默认 6%≈2 万条）")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--append-to", default=None,
-                   help="把抽取结果追加合并到该 JSONL（自动备份 *.bak_preqa）")
+    p.add_argument(
+        "--append-to", default=None, help="把抽取结果追加合并到该 JSONL（自动备份 *.bak_preqa）"
+    )
     p.add_argument("--preview", action="store_true", help="预览模式：打印抽样前 5 条到 stderr")
     args = p.parse_args()
 

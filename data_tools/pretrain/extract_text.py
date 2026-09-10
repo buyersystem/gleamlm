@@ -190,7 +190,7 @@ def _open_archive(path):
         target = train[0] if train else max(json_files, key=lambda n: zf.getinfo(n).file_size)
         return io.TextIOWrapper(zf.open(target), encoding="utf-8")
     if path.endswith((".json", ".jsonl")):
-        return open(path, "r", encoding="utf-8")
+        return open(path, encoding="utf-8")
     return None
 
 

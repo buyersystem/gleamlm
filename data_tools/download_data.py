@@ -21,7 +21,7 @@ def download_chinese_fineweb_edu(output_dir: str, split: str = "train"):
             f.write((row.get("text") or "").strip() + "\n")
             if i > 0 and i % 10000 == 0:
                 print(f"  chinese-fineweb-edu: {i} lines")
-    print(f"Saved: {out_path} ({i+1} lines)")
+    print(f"Saved: {out_path} ({i + 1} lines)")
 
 
 def download_wiki_zh(output_dir: str):
@@ -29,7 +29,7 @@ def download_wiki_zh(output_dir: str):
     ds = load_dataset("wikimedia/wikipedia", "20231101.zh", split="train", streaming=True)
     out_path = os.path.join(output_dir, "wiki_raw.txt")
     with open(out_path, "w", encoding="utf-8") as f:
-        for i, row in enumerate(ds):
+        for row in ds:
             f.write((row.get("text") or "").strip() + "\n")
     print(f"Saved: {out_path}")
 

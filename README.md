@@ -80,6 +80,12 @@ GleamLM 面向大语言模型预训练与后训练工程师，目标是理解原
 | **HF 集成** | `from_pretrained` / `GleamLMForCausalLM` | 自定义模型接入标准姿势 |
 | **部署** | vLLM + ONNX + FastAPI | 模型上线全链路 |
 
+> **验证状态说明**：上表中的 **注意力变体**（NoPE / ALiBi / Sliding Window）、**MoE**、
+> **状态空间**（Mamba-1）为**教学实现**——代码与单测齐全（可通过 `attn_registry` / `ffn_registry`
+> 切换启用），但**成品配置（nano / lite / pro / 0.6b）均未启用**，属**长期实验方向**。
+> **分布式**（FSDP / DeepSpeed）与 **Megatron 工业轨**已完成冒烟验证；
+> 全量训练验证目前只在单卡路径上完成，**多卡全量训练尚未验证**。
+
 ### 模型规格
 
 | 参数 | Nano ~40M | Lite ~87M | Pro ~126M | 0.6B |
@@ -276,6 +282,26 @@ python data_tools/pretrain/run_pipeline.py \
     --max-chars 6130000000
 ```
 
+
+### 0.5 冒烟验收：先跑通，再训全量
+
+数据备好之后（见上），**不必等完整训练**即可确认代码链路正常：
+
+```bash
+# Level 1 冒烟测试（~30s）：跑通前向/反向，确认 loss 在下降
+python tools/quick_run.py --level 1 --variant nano
+
+# Level 2 小规模（~5min）：看模型是否开始学、生成是否出现语义
+python tools/quick_run.py --level 2 --variant nano
+```
+
+脚本会从 `data/nano/pretrain/{train,valid}.txt` 取前若干行做小样本，产物落在
+`data/smoke_splits/` 与 `checkpoints_smoke/`，**不污染正式数据与 checkpoint**。
+缺少数据文件时会跳过该步并失败——所以要先执行上一节。
+三级阶梯的判定标准见 `tools/quick_run.py` 头部 docstring。
+
+> **注意**：该脚本默认用 `conda run -n dl2llm` 执行子命令。若你的环境名不同，
+> 加 `--conda_env ""` 用当前解释器直接运行，或 `--conda_env <你的环境名>` 指定。
 
 ### 1. 预训练
 
