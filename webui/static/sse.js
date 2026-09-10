@@ -4,12 +4,20 @@
 "use strict";
 
 /**
- * 连接 SSE 端点。handlers: { onData(ev), onExit(ev), onError(err), signal }
- * 事件格式: data: {"type":"log"|"exit"|..., ...}（": ping" 心跳注释行自动忽略）
- * 返回 Promise，流自然结束后 resolve。
+ * 连接 SSE 端点。handlers: { onData(ev), onExit(ev), onError(err), onHeartbeat(), signal }
+ * 事件格式: data: {"type":"log"|"exit"|..., ...}（": ping" 注释行不产生数据事件，
+ * 只回调 onHeartbeat 供调用方做存活检测）
+ * 返回 Promise，流自然结束后 resolve（服务端无 exit 帧静默关闭也走 resolve，
+ * 调用方需自行兜底重连）。
  */
 async function sseFetch(url, handlers = {}) {
-  const { onData = () => {}, onExit = () => {}, onError = () => {}, signal } = handlers;
+  const {
+    onData = () => {},
+    onExit = () => {},
+    onError = () => {},
+    onHeartbeat = () => {},
+    signal,
+  } = handlers;
   let resp;
   try {
     resp = await fetch(url, { signal });
@@ -39,7 +47,10 @@ async function sseFetch(url, handlers = {}) {
       const frame = buf.slice(0, idx);
       buf = buf.slice(idx + 2);
       const dataLine = frame.split("\n").find((l) => l.startsWith("data:"));
-      if (!dataLine) continue; // 心跳 ": ping" 等注释帧
+      if (!dataLine) {
+        onHeartbeat(); // 注释帧(心跳): 仅通知存活，不产生数据事件
+        continue;
+      }
       let ev;
       try {
         ev = JSON.parse(dataLine.slice(5).trim());

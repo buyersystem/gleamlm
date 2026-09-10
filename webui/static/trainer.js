@@ -15,6 +15,7 @@ const trainer = {
   _sseTimer: null,
   _alive: false,
   _ended: true,
+  _lastSse: 0, // 最近收到 SSE 帧(含心跳)的时间戳 — 看门狗存活依据
   subs: { status: [], metric: [], log: [], exit: [], ended: [], ready: [] },
 
   on(evt, fn) {
@@ -149,26 +150,41 @@ const trainer = {
     if (!this._runId || this._ended || this._alive) return;
     const url = `/api/train/stream?run_id=${encodeURIComponent(this._runId)}&seq=${this.seq}`;
     this._alive = true;
+    this._lastSse = Date.now();
+    const ctl = new AbortController();
+    // 看门狗: 服务端每 15s 发心跳(注释帧)喂狗，45s 无任何帧即判定假死并 abort。
+    // TCP 半开/中间层静默丢弃时 read() 悬住既不返回也不报错，只等 onError
+    // 永远等不到 —— 日志面板停更而曲线轮询照常的根因。
+    const wd = setInterval(() => {
+      if (Date.now() - this._lastSse > 45000) ctl.abort();
+    }, 5000);
     sseFetch(url, {
+      signal: ctl.signal,
+      onHeartbeat: () => {
+        this._lastSse = Date.now();
+      },
       onData: (ev) => {
+        this._lastSse = Date.now();
         if (ev.type === "log") {
           this.appendLine(ev.text);
           this.seq = ev.seq + 1;
         }
       },
       onExit: (ev) => {
-        this._alive = false;
         this._ended = true;
         this.emit("exit", ev);
         this.pollMetrics();
       },
-      onError: () => {
-        this._alive = false;
-        if (!this._ended) {
-          // 断线重连：seq 续传（fetch 无 Last-Event-ID，行号由本端记录）
-          this._sseTimer = setTimeout(() => this.connectSse(), 2000);
-        }
-      },
+      onError: () => {}, // 统一由下方 finally 兜底（重置存活态 + 调度重连）
+    }).finally(() => {
+      clearInterval(wd);
+      this._alive = false;
+      if (!this._ended) {
+        // 断线重连: seq 续传（fetch 无 Last-Event-ID，行号由本端记录）。
+        // 覆盖三类非正常结束: 网络错误 / 看门狗 abort / 服务端无 exit 帧
+        // 静默关闭 —— 此前静默关闭直接 resolve 无人重置 _alive, 永不重连。
+        this._sseTimer = setTimeout(() => this.connectSse(), 2000);
+      }
     });
   },
 
