@@ -15,7 +15,8 @@ const trainer = {
   _sseTimer: null,
   _alive: false,
   _ended: true,
-  _lastSse: 0, // 最近收到 SSE 帧(含心跳)的时间戳 — 看门狗存活依据
+  _sseGen: 0, // SSE 连接代际: 换代(bindRun/replay)后旧连接的帧与收尾全部失效
+  _sseCtl: null, // 当前连接的 AbortController（换代时主动掐断旧连接）
   subs: { status: [], metric: [], log: [], exit: [], ended: [], ready: [] },
 
   on(evt, fn) {
@@ -138,6 +139,9 @@ const trainer = {
     this._live = !!live;
     if (resetSeq) this.seq = 0;
     this._ended = !live;
+    this._sseGen++; // 换代: 在途旧连接的回调/收尾全部失效
+    if (this._sseCtl) this._sseCtl.abort();
+    this._alive = false;
     if (this._poll) clearInterval(this._poll);
     if (this._sseTimer) clearTimeout(this._sseTimer);
     this._poll = setInterval(() => this.poll(), 2000);
@@ -150,27 +154,32 @@ const trainer = {
     if (!this._runId || this._ended || this._alive) return;
     const url = `/api/train/stream?run_id=${encodeURIComponent(this._runId)}&seq=${this.seq}`;
     this._alive = true;
-    this._lastSse = Date.now();
+    const gen = ++this._sseGen; // 本连接的代际号: 换代后本连接的回调全部失效
     const ctl = new AbortController();
+    this._sseCtl = ctl;
+    let last = Date.now(); // 连接局部存活时间戳 — 看门狗只由本流的帧喂
     // 看门狗: 服务端每 15s 发心跳(注释帧)喂狗，45s 无任何帧即判定假死并 abort。
     // TCP 半开/中间层静默丢弃时 read() 悬住既不返回也不报错，只等 onError
     // 永远等不到 —— 日志面板停更而曲线轮询照常的根因。
     const wd = setInterval(() => {
-      if (Date.now() - this._lastSse > 45000) ctl.abort();
+      if (Date.now() - last > 45000) ctl.abort();
     }, 5000);
+    const stale = () => gen !== this._sseGen; // 已被换代（bindRun/replay）→ 静默丢弃
     sseFetch(url, {
       signal: ctl.signal,
       onHeartbeat: () => {
-        this._lastSse = Date.now();
+        if (!stale()) last = Date.now();
       },
       onData: (ev) => {
-        this._lastSse = Date.now();
+        if (stale()) return;
+        last = Date.now();
         if (ev.type === "log") {
           this.appendLine(ev.text);
           this.seq = ev.seq + 1;
         }
       },
       onExit: (ev) => {
+        if (stale()) return; // 旧连接的结束帧不得污染新连接状态
         this._ended = true;
         this.emit("exit", ev);
         this.pollMetrics();
@@ -178,6 +187,8 @@ const trainer = {
       onError: () => {}, // 统一由下方 finally 兜底（重置存活态 + 调度重连）
     }).finally(() => {
       clearInterval(wd);
+      if (stale()) return; // 旧代际收尾: 不碰共享状态、不调度重连
+      this._sseCtl = null;
       this._alive = false;
       if (!this._ended) {
         // 断线重连: seq 续传（fetch 无 Last-Event-ID，行号由本端记录）。
@@ -240,6 +251,8 @@ const trainer = {
     this._live = false;
     this.seq = 0;
     this._ended = false;
+    this._sseGen++; // 换代: 在途旧连接（含其 exit/finally）不得污染本次回放
+    if (this._sseCtl) this._sseCtl.abort();
     this._alive = false;
     this.emit("metric", null); // 各 tab 切换主曲线数据源
     this.pollMetrics(runId);
