@@ -160,7 +160,8 @@ def _write_idx(prefix: str, sequence_lengths: np.ndarray) -> int:
     """由每文档 token 长度数组写出 .idx（megatron 0.16 标准布局）。"""
     num_docs = len(sequence_lengths)
     # 每序列起始字节偏移（N 个，第一个=0，不含末尾 total）: uint16 → 2B/token
-    sequence_pointers = np.zeros(num_docs, dtype=np.int64)
+    # 显式注解：旧 numpy stub（2.2.x）下 concatenate 返回形状参数过宽，精确推断会误报
+    sequence_pointers: np.ndarray = np.zeros(num_docs, dtype=np.int64)
     np.cumsum(sequence_lengths.astype(np.int64) * 2, out=sequence_pointers)
     sequence_pointers = np.concatenate(([0], sequence_pointers[:-1]))
     # 文档边界索引（N+1 个，含前导 0）: 本文档=序列 → [0, 1, ..., N]
