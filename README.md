@@ -301,8 +301,9 @@ python tools/quick_run.py --level 2 --variant nano
 缺少数据文件时会跳过该步并失败——所以要先执行上一节。
 三级阶梯的判定标准见 `tools/quick_run.py` 头部 docstring。
 
-> **注意**：该脚本默认用 `conda run -n dl2llm` 执行子命令。若你的环境名不同，
-> 加 `--conda_env ""` 用当前解释器直接运行，或 `--conda_env <你的环境名>` 指定。
+> **注意**：该脚本默认用 `conda run -n dl2llm` 执行子命令；**该环境不存在时会自动回退**到
+> 当前解释器并打印提示，因此他人 clone 后可直接运行。也可显式指定 `--conda_env <环境名>`，
+> 或用 `--conda_env ""` 完全不用 conda。
 
 ### 1. 预训练
 
@@ -584,7 +585,7 @@ Nano 与 Lite 同为四源（含 [Chinese FineWeb Edu](https://huggingface.co/da
 | 版本 | 参数量 | 定位 | 状态 |
 |------|--------|------|------|
 | GleamLM-Nano | ~40M | 单卡 12GB 完整训练 | ✅ 已完成 |
-| GleamLM-Lite | ~87M | FFN 3.4× 扩容 | 待重新训练（6 月版已完成，项目重构后需重训）|
+| GleamLM-Lite | ~87M | FFN 3.4× 扩容 | ✅ 已重训完成（2026-09-11，step 34,054 / epoch 0 完成）；全量验证结果待补（需与 Nano 同口径） |
 | GleamLM-Pro | ~126M | 18L×768d / BBPE 12K | 开发中 |
 | GleamLM-0.6B | ~0.6B | 工业级验证 / 37L×1024d / BBPE 24K 跨字合并 | 规划中 |
 

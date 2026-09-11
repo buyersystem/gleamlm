@@ -181,6 +181,13 @@ ignore_errors = true
 module = "tqdm"
 ignore_missing_imports = true
 
+# zhconv: 繁→简转换，属 tools extra 可选依赖，核心库 try-import。
+# 已装 (开发者环境) 报 import-untyped、未装 (CI 只装 dev/hf/serve) 报
+# import-not-found —— 行内 ignore 一次只能覆盖一种错误码，必须在此统一静默。
+[[tool.mypy.overrides]]
+module = "zhconv"
+ignore_missing_imports = true
+
 # megatron-core: 仅 Linux 可装 (industrial extra，Windows 无轮子)，无 py.typed 且
 # try 块内可选加载；未装/已装均按 Any 处理，避免 import 类误报
 [[tool.mypy.overrides]]

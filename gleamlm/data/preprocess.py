@@ -31,7 +31,7 @@ from collections import OrderedDict
 from typing import TextIO
 
 try:
-    import zhconv  # type: ignore[import-untyped]
+    import zhconv
 
     HAS_ZHCONV = True
 except ImportError:
