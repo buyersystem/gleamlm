@@ -237,6 +237,10 @@ def test_config_copy_save_roundtrip(api):
 
 # ── checkpoint 树 / 任务注册表 ───────────────────────────────────────
 def test_models_tree(api):
+    # 依赖真实训练产物：checkpoints/ 被 .gitignore 忽略，CI 全新 checkout 为空目录。
+    # 与推理用例同模式（见 _MODEL_PT 用法）——产物缺失时跳过，而不是让门禁变红。
+    if not os.path.isfile(os.path.join(T.ROOT_DIR, _MODEL_PT)):
+        pytest.skip(f"缺少训练产物 {_MODEL_PT}（全新 checkout 不含 checkpoints/）")
     body = api.get("/api/models").json()
     assert body["files"], "checkpoints/ 下应有 .pt 产物"
     assert "nano" in body["groups"]
