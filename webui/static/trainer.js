@@ -50,13 +50,21 @@ const trainer = {
   /* ── 候选清单（配置 yaml 一个池 / 模型 ckpt 一个池，按语义拆分，
        避免“配置 YAML”输入框建议里混进 checkpoints 下的模型文件）──
        每次打开启动弹窗前实时重拉：新建/删除的文件立即可见，无需刷新页面 */
+  /* 片一：改用 allSettled —— 原先两个 .catch() 无法区分「哪个失败」，
+     失败时会静默变成空候选（用户以为没有配置文件）。
+     策略：失败**不清空**旧候选（stale-but-usable，输入框仍可用旧值补全），
+     只提示一句。弹窗里没有位置放整屏失败态，所以这里用 toast。 */
   async refreshCandidates() {
-    const [models, configs] = await Promise.all([
-      api("/api/models").catch(() => ({ files: [] })),
-      api("/api/configs").catch(() => []),
-    ]);
-    this.files = (models.files || []).map((f) => f.path);
-    this.cfgFiles = configs.map((c) => c.path);
+    const [mRes, cRes] = await Promise.allSettled([api("/api/models"), api("/api/configs")]);
+    const okM = mRes.status === "fulfilled";
+    const okC = cRes.status === "fulfilled";
+    if (okM) this.files = (mRes.value.files || []).map((f) => f.path);
+    if (okC) this.cfgFiles = cRes.value.map((c) => c.path);
+    if (okM && okC) return;
+    const what = !okM && !okC
+      ? "模型与配置文件列表"
+      : okM ? "配置文件列表" : "模型文件列表";
+    toast(`无法读取${what} —— 输入框仍可手填路径`, "err", 6000);
   },
 
   tasks(filter) {
@@ -112,7 +120,8 @@ const trainer = {
     // 必填前置检查（元数据已声明 required）
     for (const f of ts[task].fields) {
       if (f.required && !fields[f.name]) {
-        alert(`缺少必填参数: ${f.name}`);
+        // E6：字段级反馈取代 alert —— 弹窗会给不出「是哪个字段」
+        showFieldError(box, f.name, `缺少必填参数：${f.label || f.name}`);
         return;
       }
     }
@@ -133,7 +142,7 @@ const trainer = {
     } catch (err) {
       btn.disabled = false;
       btn.textContent = "启动";
-      alert("启动失败：" + err.message);
+      toast("启动失败：" + err.message, "err");
     }
   },
 
@@ -148,7 +157,10 @@ const trainer = {
     this._alive = false;
     if (this._poll) clearInterval(this._poll);
     if (this._sseTimer) clearTimeout(this._sseTimer);
-    this._poll = setInterval(() => this.poll(), 2000);
+    // F4：后台标签页停止轮询（切回前台由 visibilitychange 立即补一次）
+    this._poll = setInterval(() => {
+      if (!document.hidden) this.poll();
+    }, 2000);
     if (live) this.connectSse();
     this.emit("metric", null); // 通知各 tab 切换数据源
     this.pollMetrics();
@@ -207,6 +219,7 @@ const trainer = {
   async poll() {
     try {
       const st = await api("/api/train/status");
+      notePoll(true); // F3：在线（清除顶部失联提示）
       this.run = st;
       const running = !!st.running;
       // 绑定失效检测（服务重启后 manager 内存态丢失是常态）:
@@ -232,7 +245,7 @@ const trainer = {
       }
       if (running) this.pollMetrics();
     } catch (_) {
-      /* 服务未就绪 */
+      notePoll(false); // F3：失联计数（3 次后顶部提示）
     }
   },
 
@@ -276,12 +289,31 @@ const trainer = {
     this.emit("log", "__clear__");
   },
 
+  /* E7：停止是不可逆的破坏性操作，必须先确认。
+     原实现是单击即停 —— 而"删除一条已完成 run"反而有 confirm，
+     保护强度与破坏性倒挂。这里顺带把当前进度显示出来，好判断值不值得停。
+     （选样式化确认而非"按住 1 秒"：能展示 step/checkpoint 上下文，信息量更大。）*/
   async stop() {
+    const st = this.run || {};
+    const lm = st.last_metric || {};
+    const stepLine =
+      lm.step != null
+        ? `step <b>${esc(lm.step)}</b>${st.total_steps ? ` / ${esc(st.total_steps)}` : ""}`
+        : "尚未产生 step";
+    const ok = await confirmDialog({
+      title: "停止训练？",
+      okText: "停止训练",
+      body: `<p style="margin:0">当前任务　<b>${esc(st.task || "-")}</b>${esc(stepLine)}</p>
+        <p style="margin:0;color:var(--dim);font-size:13px">训练不会继续；已落盘的 checkpoint 保留，
+        未保存的优化器状态会丢失。</p>`,
+    });
+    if (!ok) return;
     try {
       const r = await api("/api/train/stop", { method: "POST", body: "{}" });
       this.emit("status", { ...(this.run || {}), running: false, status: r.status });
+      toast("已请求停止，等待进程退出…");
     } catch (err) {
-      alert("停止失败：" + err.message);
+      toast("停止失败：" + err.message, "err");
     }
   },
 };
@@ -313,16 +345,16 @@ function startFormHtml(tasks, meta, defaultTask) {
         <input id="start-nproc" type="number" min="1" max="8" value="2" style="width:90px" />
       </span>
     </div>
-    <div class="full" style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px">
+    <div class="full" style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
       <div id="req-area"></div>
       <details id="adv-area" style="margin-top:12px">
         <summary style="font-size:12px;color:var(--dim);cursor:pointer;user-select:none">
           ☰ 高级参数
         </summary>
-        <div id="opt-area" style="margin-top:10px"></div>
+        <div id="opt-area" style="margin-top:8px"></div>
       </details>
     </div>
-    <div class="full" style="margin-top:12px;display:flex;justify-content:flex-end;gap:10px">
+    <div class="full" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
       <button type="button" class="btn ghost" data-close="modal-mask">取消</button>
       <button type="submit" class="btn" id="start-submit">启动训练</button>
     </div>
@@ -460,37 +492,243 @@ function refreshTaskUi(box, taskKey, task) {
   applyPrefill(box, taskKey, task);
 }
 
-/* ── 日志面板：全局行同步到所有 .log 容器 ── */
-/* 日志行批量写：逐行 append + scrollTop 会强制 reflow，回放上千行时卡
+/* ── 日志面板：工具条（C1~C4/C7）+ 全局行同步到所有 .log 容器 ── */
+/* 关键约定：**分类只发生在屏幕**。trainer.lines 始终保留全量原文，
+   复制/下载给出的是完整日志 —— 否则排障时会缺掉被隐藏的那一半信息。
+   日志行批量写：逐行 append + scrollTop 会强制 reflow，回放上千行时卡
    主线程。攒 200 行冲刷一次；慢速流用 rAF 合帧（每帧至多一次）。 */
+
+const MAX_LOG_NODES = 2000;
+
+/* 行分类 */
+function logKind(text) {
+  if (text.startsWith("@@GLEAM_METRIC")) return "machine"; // 哨兵行（metrics.py 的 SENTINEL）
+  if (/\d+\/\d+ \[/.test(text)) return "pbar"; // tqdm 帧，与后端 _STEP_RE 同源形状
+  return "text";
+}
+
+/* 级别启发式（C3）：formatter 是 "%(message)s"，日志文本里**没有级别字段**，
+   所以只能按关键词判。排障要找的就是这些词。
+   ⚠️ 不要用 \b(error|warn)\b 这种"词边界"写法 —— Python 的异常/警告类名全是
+   `ValueError` / `RuntimeError` / `UserWarning` / `FutureWarning` 形状，
+   词边界在拼接处**不存在**，那样写会把最常见的两类行整片漏掉（单测已锁）。
+   代价是 "0 errors" 这类良性行也会被判为错误 —— 对"吸引注意力"的用途，宁可多报。 */
+const RE_LOG_ERR =
+  /error|traceback|exception|failed|failure|fatal|critical|oom|assertion|\bnan\b|\binf\b|out of memory/i;
+const RE_LOG_WARN = /warn|deprecat|skipping|skipped|retrying/i;
+
 function initLogSync() {
+  const state = { follow: true, pbar: false, machine: false, level: "all", query: "" };
+  let newCount = 0;
+
+  const BAR_HTML = `
+    <button class="lg-toggle" type="button" data-lg="follow" aria-pressed="true"
+      title="自动滚到最新；手动向上滚动会暂停，滚回底部自动恢复">
+      <span class="lg-dot"></span>跟随</button>
+    <button class="lg-toggle" type="button" data-lg="pbar" aria-pressed="false"
+      title="tqdm 逐帧进度行（默认折叠为一行原地刷新）">进度帧</button>
+    <button class="lg-toggle" type="button" data-lg="machine" aria-pressed="false"
+      title="结构化机器行 @@GLEAM_METRIC（默认隐藏；指标条已在消费这些字段）">机器行</button>
+    <select class="lg-sel" data-lg="level"
+      title="按级别过滤 —— 日志文本不含级别字段，此处为关键词启发式">
+      <option value="all">全部</option>
+      <option value="warn">WARN+</option>
+      <option value="err">ERROR+</option>
+    </select>
+    <input class="lg-search" type="search" data-lg="query" placeholder="搜索…" />
+    <span class="log-hit" data-lg="hit"></span>
+    <span class="spacer"></span>
+    <button class="btn ghost sm" type="button" data-lg="copy" title="复制屏幕上当前可见的日志">复制</button>
+    <button class="btn ghost sm" type="button" data-lg="download"
+      title="下载完整日志文件（含进度帧与机器行）">下载</button>`;
+
+  const logs = () => $$(".log");
+
+  function syncToggles() {
+    $$("[data-lg=follow]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(state.follow))
+    );
+    $$("[data-lg=pbar]").forEach((b) => b.setAttribute("aria-pressed", String(state.pbar)));
+    $$("[data-lg=machine]").forEach((b) =>
+      b.setAttribute("aria-pressed", String(state.machine))
+    );
+    $$("[data-lg=level]").forEach((s) => (s.value = state.level));
+  }
+
+  function applyClasses() {
+    logs().forEach((el) => {
+      el.classList.toggle("show-pbar", state.pbar);
+      el.classList.toggle("show-machine", state.machine);
+      el.classList.toggle("lvl-warn", state.level === "warn");
+      el.classList.toggle("lvl-err", state.level === "err");
+    });
+  }
+
+  function applySearch() {
+    const q = state.query.trim().toLowerCase();
+    let shown = 0;
+    logs().forEach((el, ci) => {
+      for (const ln of el.children) {
+        const hide = q !== "" && !ln.textContent.toLowerCase().includes(q);
+        ln.classList.toggle("f-hidden", hide);
+        if (ci === 0 && !hide) shown++;
+      }
+    });
+    const txt = q ? `命中 ${shown} 行` : "";
+    $$("[data-lg=hit]").forEach((e) => (e.textContent = txt));
+  }
+
+  function updateJump() {
+    const show = !state.follow;
+    $$("[data-log-jump]").forEach((b) => {
+      b.hidden = !show;
+      b.textContent = show ? `↓ 已暂停跟随${newCount ? `（新 ${newCount} 行）` : ""}` : "";
+    });
+  }
+
+  function setFollow(on) {
+    state.follow = on;
+    if (on) newCount = 0;
+    syncToggles();
+    updateJump();
+    if (on) logs().forEach((el) => (el.scrollTop = el.scrollHeight));
+  }
+
+  function appendTo(el, text) {
+    const kind = logKind(text);
+    // C2：连续进度帧原地刷新一行，不追加。哨兵行默认不可见，
+    // 所以「最后一个是哨兵行」时也应视为可折叠（帧与哨兵是交替到达的）。
+    const last = el.lastElementChild;
+    const collapsible =
+      el._pbar &&
+      el._pbar.parentNode === el &&
+      (last === el._pbar || (last && last.classList.contains("ln-machine")));
+    if (kind === "pbar" && collapsible) {
+      el._pbar.textContent = text;
+      return;
+    }
+    const d = document.createElement("div");
+    let cls = "ln";
+    if (kind === "pbar") cls += " ln-pbar";
+    else if (kind === "machine") cls += " ln-machine";
+    else if (RE_LOG_ERR.test(text)) cls += " ln-err";
+    else if (RE_LOG_WARN.test(text)) cls += " ln-warn";
+    d.className = cls;
+    d.textContent = text;
+    el.appendChild(d);
+    // 哨兵行不打断折叠链：帧与哨兵交替到达时，帧仍刷新上一进度行
+    if (kind === "pbar") el._pbar = d;
+    else if (kind !== "machine") el._pbar = null;
+    while (el.children.length > MAX_LOG_NODES) el.removeChild(el.firstChild);
+  }
+
   let buf = [];
   let raf = 0;
   const flush = () => {
     raf = 0;
     if (!buf.length) return;
-    const lines = buf;
+    const batch = buf;
     buf = [];
-    const frag = document.createDocumentFragment();
-    for (const t of lines) {
-      const d = document.createElement("div");
-      d.textContent = t;
-      frag.appendChild(d);
-    }
-    $$(".log").forEach((el) => {
-      el.appendChild(frag.cloneNode(true));
-      while (el.children.length > 2000) el.removeChild(el.firstChild);
-      el.scrollTop = el.scrollHeight; // 每批只强制一次滚动定位
+    logs().forEach((el) => {
+      for (const t of batch) appendTo(el, t);
+      if (state.follow) el.scrollTop = el.scrollHeight; // 每批只强制一次滚动定位
     });
+    if (!state.follow) {
+      newCount += batch.length;
+      updateJump();
+    }
+    if (state.query) applySearch(); // 新行也要参与搜索过滤
   };
+
+  /* 工具条注入（两页共用同一份模板）+ 绑定 */
+  $$("[data-log-bar]").forEach((bar) => {
+    bar.innerHTML = BAR_HTML;
+    bar.querySelector("[data-lg=follow]").addEventListener("click", () =>
+      setFollow(!state.follow)
+    );
+    bar.querySelector("[data-lg=pbar]").addEventListener("click", () => {
+      state.pbar = !state.pbar;
+      applyClasses();
+      syncToggles();
+    });
+    bar.querySelector("[data-lg=machine]").addEventListener("click", () => {
+      state.machine = !state.machine;
+      applyClasses();
+      syncToggles();
+    });
+    bar.querySelector("[data-lg=level]").addEventListener("change", (e) => {
+      state.level = e.target.value;
+      applyClasses();
+      applySearch();
+    });
+    const si = bar.querySelector("[data-lg=query]");
+    let t = 0;
+    si.addEventListener("input", () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        state.query = si.value;
+        applySearch();
+      }, 150);
+    });
+    bar.querySelector("[data-lg=copy]").addEventListener("click", async () => {
+      const el = logs()[0];
+      if (!el) return;
+      const keep = (n) =>
+        !n.classList.contains("f-hidden") &&
+        (state.pbar || !n.classList.contains("ln-pbar")) &&
+        (state.machine || !n.classList.contains("ln-machine")) &&
+        (state.level === "all" ||
+          (state.level === "err" && n.classList.contains("ln-err")) ||
+          (state.level === "warn" &&
+            (n.classList.contains("ln-warn") || n.classList.contains("ln-err"))));
+      const text = [...el.children].filter(keep).map((n) => n.textContent).join("\n");
+      try {
+        await navigator.clipboard.writeText(text);
+        toast(`已复制当前可见的 ${text ? text.split("\n").length : 0} 行`, "ok");
+      } catch (_) {
+        toast("复制失败：浏览器拒绝了剪贴板访问", "err");
+      }
+    });
+    bar.querySelector("[data-lg=download]").addEventListener("click", () => {
+      // 下载给**全量原文**（含被隐藏的进度帧与机器行）—— 排障需要完整记录
+      const text = trainer.lines.join("\n");
+      const rid = (trainer.run && trainer.run.run_id) || "trainer";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+      a.download = `${rid}.log`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      toast(`已下载完整日志 ${trainer.lines.length} 行`, "ok");
+    });
+  });
+  syncToggles();
+
+  /* 跟随开关：滚到底=跟随，向上滚=自动暂停（DevTools / tail -f 的通行做法） */
+  logs().forEach((el) => {
+    el.addEventListener("scroll", () => {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+      if (state.follow && !atBottom) setFollow(false);
+      else if (!state.follow && atBottom) setFollow(true);
+    });
+  });
+  $$("[data-log-jump]").forEach((b) =>
+    b.addEventListener("click", () => setFollow(true))
+  );
+
   trainer.on("log", (text) => {
     if (text === "__clear__") {
       buf = [];
+      newCount = 0;
       if (raf) {
         cancelAnimationFrame(raf);
         raf = 0;
       }
-      $$(".log").forEach((el) => (el.textContent = ""));
+      logs().forEach((el) => {
+        el.textContent = "";
+        el._pbar = null;
+      });
+      applySearch();
+      updateJump();
       return;
     }
     buf.push(text);
@@ -505,23 +743,141 @@ function initLogSync() {
     }
     if (!raf) raf = requestAnimationFrame(flush);
   });
-  // 历史 run 重放点击 → 直接在此显示？由各 tab 的 run 列表绑定。
 }
 
 /* ── 停止按钮与 header 训练徽章 ── */
 // 注: 本函数由 boot 的 DOMContentLoaded 回调调用; 旧实现内部再嵌套一层
 // DOMContentLoaded 监听, 在事件派发中注册永不触发 → 徽章/停止按钮失效。
+/* F6：训练结束主动提示。
+   本项目的训练以「几十小时」计，而结束信号原先只落在 header 徽章的文字上 ——
+   你从别的标签页切回来根本不会注意到。
+   标题前缀 + toast 两条路：前者让「切回来一眼看到」，后者在页面内留痕。
+   （不做 Notification API：需要用户授权，且权限弹窗本身是打扰。） */
+const BASE_TITLE = document.title;
+
+function clearExitTitle() {
+  document.title = BASE_TITLE;
+}
+
+function noticeExit(ev) {
+  const st = trainer.run || {};
+  const lm = st.last_metric || {};
+  const task = st.task || "任务";
+  const tail = lm.loss != null ? ` · loss ${fmtNum(lm.loss)}` : "";
+  if (ev.status === "lost") {
+    document.title = "⚠ 训练绑定丢失 · " + BASE_TITLE;
+    toast("与训练进程失去绑定 —— 界面数据可能已过期，请刷新确认", "err", 9000);
+  } else if (ev.code != null && ev.code !== 0) {
+    document.title = "❌ 训练失败 · " + BASE_TITLE;
+    // R4：失败时用户要看的是 traceback，不是推理页 —— 所以指向日志。
+    toast(`${task} 失败（exit=${ev.code}）${tail}`, "err", 12000, [
+      { label: "查看日志", onClick: () => gotoLogs(task) },
+    ]);
+  } else {
+    document.title = "✅ 训练完成 · " + BASE_TITLE;
+    // R3：**不自动切页** —— 你很可能正在看曲线或日志，自动跳转会打断。
+    // 按钮是「邀请」而不是「劫持」（GitHub 的 Create PR / Vercel 的 Visit 同款）。
+    toast(`${task} 已完成${tail}`, "ok", 12000, [
+      { label: "去推理验证", onClick: () => clickTab("inference") },
+    ]);
+  }
+}
+
+/* 片二：切 tab —— 直接触发那个按钮的 click，与用户手点走**完全同一条**路径
+   （含 aria 状态与 hash 深链更新），也不依赖 util.js 内部符号是否已暴露。 */
+function clickTab(name) {
+  const b = document.querySelector('#tabs .tab[data-tab="' + name + '"]');
+  if (b) b.click();
+}
+
+/* R4：失败时的去向 —— 切到该任务所属的 tab，并把日志区滚入视野。
+   日志面板在两训练页都有；「查看日志」比「重试训练」更贴合失败当下要看的东西
+   （重试要重新配参，是更大的动作，不适合塞进 toast）。 */
+function gotoLogs(task) {
+  clickTab(task === "pretrain" ? "pretrain" : "posttrain");
+  const el =
+    document.querySelector(".tabpane.active .log-wrap") ||
+    document.querySelector(".tabpane.active .log");
+  if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+/* ── H18 运行条：状态机与文案（纯函数，可单测）── */
+function runBarState(st) {
+  if (!st) return "idle";
+  if (st.status === "stopping") return "stopping";
+  if (st.running) return "running";
+  if (st.status === "finished") return "finished";
+  if (st.status === "failed") return "failed";
+  return "idle";
+}
+
+function runBarText(st, lm) {
+  const s = runBarState(st);
+  if (s === "stopping") return "停止中…";
+  if (s === "running") {
+    const step = lm && lm.step != null ? String(lm.step) : "—";
+    const total = st.total_steps ? String(st.total_steps) : "?";
+    return `${st.task || "任务"} · ${step} / ${total}`;
+  }
+  if (s === "finished") return `已完成 ${st.task || ""}`.trim();
+  if (s === "failed") {
+    // exit_code 可能缺失（进程被杀 / 状态还没落定）—— 不能直接拼，否则文案变成 "exit undefined"
+    const code = st.exit_code != null ? ` (exit ${st.exit_code})` : "";
+    return `失败 ${st.task || ""}${code}`.trim();
+  }
+  return "空闲";
+}
+
+/* 写入运行条。文本/状态不变就不写 DOM —— 这条每 2s 跑一次（D5）。 */
+function syncRunBars(st, lm) {
+  const bars = $$("[data-run-bar]");
+  if (!bars.length) return;
+  const state = runBarState(st);
+  const text = runBarText(st, lm);
+  for (const bar of bars) {
+    if (bar.dataset.state !== state) bar.dataset.state = state;
+    const el = bar.querySelector(".rb-state-text");
+    if (el && el.textContent !== text) el.textContent = text;
+  }
+}
+
 function initTrainHeader() {
   $$("[data-stop-btn]").forEach((b) => {
     b.addEventListener("click", () => trainer.stop());
   });
+  trainer.on("exit", noticeExit);
+  // 回到前台即清掉标题前缀（它只为「切回来看到」而存在）
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) clearExitTitle();
+  });
   trainer.on("status", (st) => {
-    $$("[data-stop-btn]").forEach((b) => (b.disabled = !st.running));
+    // H18：停止中再点停止没有意义
+    $$("[data-stop-btn]").forEach(
+      (b) => (b.disabled = !st.running || st.status === "stopping")
+    );
     $$("[data-start-btn]").forEach((b) => (b.disabled = !!st.running)); // 运行中禁用启动（变暗）
+    // C6：指标条不逐帧播报（每 2s 刷新会变成噪音），只把「任务状态变化」推给读屏。
+    // 文本不变就不写 —— 读屏只在真正变化时出声。
+    const sr = $("#sr-status");
+    if (sr) {
+      const label =
+        st.status === "stopping"
+          ? `${st.task || "任务"} 正在停止`
+          : st.running
+            ? `${st.task || "任务"} 训练中`
+            : st.status === "finished"
+              ? `${st.task || "任务"} 已完成`
+              : st.status === "failed"
+                ? `${st.task || "任务"} 失败`
+                : "空闲";
+      if (sr.textContent !== label) sr.textContent = label;
+    }
+    const lm = st.last_metric || {};
+    // H18：运行条独立于 header 徽章 —— 徽章缺失不该让运行条停更
+    syncRunBars(st, lm);
     const badge = $("#train-text");
     const dot = $("#train-dot");
     if (!badge) return;
-    const lm = st.last_metric || {};
     if (st.status === "stopping") {
       badge.textContent = "停止中…";
       dot.className = "dot run";

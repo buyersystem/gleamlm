@@ -1,23 +1,155 @@
 /* GleamLM WebUI 共享主题 — luna-agent 暗色变量 + 三 tab 门户布局。
-   外观机制（背景图/透明度/预设主题）由 appearance.js 写入 body data-* 属性。 */
+   外观机制（背景图/透明度）由 util.js 写入 body 的 --bg-image / --bg-alpha 与 .bg-on。 */
 
 :root {
+  /* ── 基础色 ── */
   --bg: #0f1117;
   --panel: #171a23;
   --panel-rgb: 23 26 35; /* = --panel 的 RGB 分量，玻璃联动时转 rgba 用 */
   --panel2: #1e222d;
   --border: #262b3a;
-  --text: #e6e9f0;
-  --dim: #8b93a7;
+
+  /* ── 文字层级（A6：面板标题不能与说明文字同色，否则层级被抹平）──
+     括号内为在 --panel #171a23 上的实测对比度，均 >= 4.5:1 */
+  --text: #e6e9f0;       /* 正文 · 14.30:1 */
+  --text-title: #a8b0c2; /* 面板标题 · 7.99:1 */
+  --dim: #8b93a7;        /* 次要说明 / 标签 · 5.65:1 */
+  --log-fg: #c7cdd8;     /* 日志正文 · 10.88:1 */
+
+  /* ── 表面（surface）：原来散落在各处的 3 个一次性色值 ── */
+  --surface-inset: #1b1f2a;  /* 内容块（阶段卡） */
+  --surface-hover: #1e2330;  /* 列表悬停 */
+  --surface-raised: #20242f; /* 徽章 / chip 底 */
+
+  /* ── 品牌与语义色 ──
+     accent / err 用于边框、图标、文字等着色场景（那里对比度够用）；
+     accent-strong / err-strong 是"配白字用"的深色版（需 >= 4.5:1）。
+     H20 后主按钮改为描边式 —— 这两个现在只由 seg-on / ab-badge.a / log-jump 与确认弹窗消费。 */
   --accent: #5b8cff;
   --accent2: #8fb3ff;
+  --accent3: #b48cff;
+  --accent-strong: #3a63d6;       /* 白字 5.34:1 */
+  --accent-strong-hover: #3560cf; /* 白字 5.64:1 —— hover 往深走（A2） */
   --ok: #2ecc71;
   --warn: #e6a23c;
   --err: #e05252;
-  --mono: Consolas, "Courier New", monospace;
+  --err-strong: #c93b3b;          /* 白字 5.03:1 */
+  --err-strong-hover: #b83232;    /* 白字 5.93:1 */
+  /* H18：运行控制的两个新层级。实心红（--err-strong）只留给确认弹窗的确认按钮 ——
+     常驻界面上破坏性操作用**描边**表达就够，实心红会让人不敢点，
+     也把整条界面的调性压到"危险"上。 */
+  --err-text: #ff9b9b;            /* danger-ghost 文字/图标：on --panel 8.62:1 */
+  /* 描边是"这个控件是按钮"的边界，按 WCAG 1.4.11 的非文本 3:1 要求取值。
+     实测：0.45 → 合成 #713338 只有 1.85:1（不达标）；0.75 → #ae4446 得 3.07:1（达标）。
+     起点就取 0.75，不是"看着顺眼"取的值。 */
+  --err-line: rgba(224, 82, 82, 0.75);
+  --err-line-strong: rgba(224, 82, 82, 1);   /* hover：#e05252，4.55:1 */
+  --err-wash: rgba(224, 82, 82, 0.12);       /* hover 底；白字在合成底上 15.32:1 */
+  /* H20（用户选 C）：主操作改为「中性描边」。
+     原实心蓝 #3a63d6 实测 V=84%，而界面所有表面 V=14~25% —— 比界面亮 3~6 倍，
+     在暗景里就是一块发光体。刺眼的是「明度 + 饱和」，不是色相（色相 224 本就与底色同族）。
+     改描边后按钮仍要压住「界面底色」，取值全按实测：
+       ⚠ 描边不能再往暗走 —— S30~48% × V46~56% 的整组候选只有 2.22~2.71:1，全部不达 3:1。
+     --accent-strong-line(#4a78ef) / --btn-top(rgba(255,255,255,.1)) 原是给实心块做
+     "实体感"的，H20 后无使用已移除；若回到实心方案，从这两个原值取回即可。 */
+  --btn-primary-fg: var(--text);                 /* 对 --panel 14.30:1 */
+  --btn-primary-line: #5d667c;                   /* 静止描边 · 对 --panel 3.03:1（1.4.11 需 >=3） */
+  --btn-primary-line-hover: #75809a;             /* hover 提亮一档 · 对 --panel 4.39:1 */
+  --btn-primary-wash: rgba(230, 233, 240, 0.06); /* hover 底 · 文字在其上仍 12.43:1 */
+
+  /* ── 对话气泡 ── */
+  --bubble-user: #2f5ac4;  /* 用户气泡底 · 配 --text 5.11:1 */
+  --bubble-err-bg: #4a2020;
+  --bubble-err-bd: #7a3a3a;
+  --bubble-err-fg: #ffb3b3; /* 8.13:1 */
+
+  /* ── 滚动条 ── */
+  --scroll-thumb: #2a3040;
+  --scroll-thumb-hover: #384055;
+
+  /* ── 圆角梯队（原为 2/4/6/7/8/10/12/14 八种，收敛为 5 档）── */
+  --radius-sm: 6px;   /* 小控件（btn.sm / 行内删除） */
+  --radius-md: 8px;   /* 常规控件（按钮 / 输入 / 列表行 / 阶段卡） */
+  --radius-lg: 10px;  /* 卡片面板 / 徽章 / 选项卡 */
+  --radius-xl: 12px;  /* 弹窗 */
+  --radius-2xl: 14px; /* 对话气泡 */
+
+  /* ── 字号梯队（原为 11/12/12.5/13/14/14.5/15/17，非整数值已归一）── */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 17px;
+
+  /* ── 间距栅格（A5）──
+     4px 基准，只留 6 档。**结构性间距**（main / 面板 / 行 / 列的 gap）用 var(--space-n)；
+     组件内部微距（按钮内边距、chip 厚度）仍写字面值 —— 阅读时更需要「就地可见」，
+     token 化反而降低可读性。
+     例外：负值补偿（.sr-only / .form-grid .help）、1px 微调（.flow-arrow）、
+     对齐偏移（.form-grid label 的 padding-top）不参与栅格。 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ── 布局尺寸 ── */
+  /* 三页左栏统一宽度。原为 270 / 270 / 260 —— 10px 差异肉眼几乎看不出，
+     但属于"没有理由的不一致"。抽成 token 后三处引用同一值，不可能再漂。 */
+  --pane-left: 270px;
+
+  /* ── 动效 ── */
+  --dur-fast: 0.15s;
+
+  /* ── 图表（B1/B2）：canvas 读不到 CSS 变量，由 chart.js 在构造时
+     getComputedStyle 取一次并缓存。改这里即可换主题。── */
+  --chart-grid: #1f2430;
+  --chart-axis: #8b93a7;   /* 实测 5.65:1 on --panel */
+  --chart-faint: #8b93a7;  /* 空态/tooltip 文字，原 #5c6474 只有 2.92:1 */
+  --chart-phase: rgba(180, 140, 255, 0.5);
+  --chart-tip-bg: rgba(23, 26, 35, 0.92);
+  --chart-tip-bd: #262b3a;
+  --chart-loss: #5dd0c9;
+  --chart-lr: #f5a97f;
+  --chart-val: #b48ce0;
+  /* H4：阶段专属指标（DPO 的 margin/acc、GRPO/PPO 的 reward/kl）。
+     刻意避开 palette 里已有的 5 个色相（teal/orange/purple/blue/pink）——
+     副图上主序列与对比序列会同时出现，同色相会让"同色相+虚线=对比线"
+     这条规则（Q3）失效。金/绿是剩余色相里最易分辨的一对。 */
+  --chart-x1: #e3b341;
+  --chart-x2: #7fd17f;
+  /* P1：lr 副图的 WSD 三阶段底色。设计文档 §6.1 要求「三阶段着色」，
+     此前只画了分界线 —— 分界线说明「在哪切」，底色说明「这一段是什么」。 */
+  --chart-band-warmup: rgba(180, 140, 255, 0.10);
+  --chart-band-stable: rgba(91, 140, 255, 0.07);
+  --chart-band-decay: rgba(245, 169, 127, 0.09);
+  /* A/B 对比线（B4/Q3）：同色相不同线型 —— 保留「历史降权」的意图，
+     但不引入两个与主曲线竞争的新色相 */
+  --chart-cmp-a: #5b8cff;
+  --chart-cmp-b: #d08cff;
+
+  /* ── 字体（A8）──
+     Consolas 不含中文字形，中英混排时中文回退到别的字体、字宽不一致，
+     日志的列对齐会散掉；补一层含 CJK 的等宽族。 */
+  --mono: Consolas, "Cascadia Mono", "Sarasa Mono SC", "Microsoft YaHei Mono",
+    "Microsoft YaHei", monospace;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* hidden 属性必须**总是**生效 —— HTML 语义就是「这个元素不该显示」。
+   不能用 `.foo { display: flex }` 盖掉 UA 的 `[hidden] { display: none }`：
+   片一的两条警告条正是踩了这个 —— `class="warnbar err" hidden` 里 .warnbar 的
+   `display:flex` 让 hidden 失效，于是**界面常驻一条空的红色长条**（看到的人会以为出 BUG 了）。
+   !important 是通行做法（HTML5 Boilerplate 同款）；一次根治，以后新元素也不会再踩。
+   （`.chart-err` / `.ab-diff` / `.log-jump` 各自还有一条 `[hidden]` 规则，现在是冗余的防御。） */
+[hidden] { display: none !important; }
+
+/* 键盘焦点可见（E1）：原来全站没有任何聚焦样式，键盘用户看不见焦点在哪。
+   outline-offset 取负值让焦点环画在元素内侧 —— .panel 是 overflow:hidden、
+   .p-body 是 overflow:auto，画在外侧会被容器裁掉。 */
+:focus-visible { outline: 2px solid var(--accent2); outline-offset: -2px; }
 
 html, body { height: 100%; }
 
@@ -28,6 +160,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* F2：窄浏览器地址栏不计入视口；不支持 dvh 时退回上一行 */
   overflow: hidden;
 }
 
@@ -61,7 +194,7 @@ body.bg-on .panel {
 
 /* ── header ── */
 header {
-  padding: 10px 18px;
+  padding: 8px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -72,30 +205,34 @@ header {
 }
 
 header h1 {
-  font-size: 17px;
+  font-size: var(--fs-xl);
   font-weight: 800;
   letter-spacing: 0.5px;
-  background: linear-gradient(90deg, #8fb3ff, #5b8cff, #b48cff, #8fb3ff);
-  background-size: 200% auto;
+  background: linear-gradient(
+    90deg,
+    var(--accent2),
+    var(--accent),
+    var(--accent3),
+    var(--accent2)
+  );
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
 }
 
 .logo { display: flex; align-items: center; gap: 8px; }
-.logo img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }
 .spacer { flex: 1; }
 
 .meta-item {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   color: var(--dim);
-  font-size: 12px;
-  background: #20242f;
+  font-size: var(--fs-sm);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
-  padding: 4px 10px;
-  border-radius: 10px;
+  padding: 4px 8px;
+  border-radius: var(--radius-lg);
   white-space: nowrap;
 }
 .meta-item b { color: var(--text); font-weight: 600; font-family: var(--mono); }
@@ -115,13 +252,13 @@ nav.tabs {
   flex-shrink: 0;
 }
 .tab {
-  padding: 8px 22px;
-  font-size: 14px;
+  padding: 8px 24px;
+  font-size: var(--fs-lg);
   color: var(--dim);
   background: transparent;
   border: 1px solid transparent;
   border-bottom: none;
-  border-radius: 10px 10px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   cursor: pointer;
   user-select: none;
   transition: color 0.15s, background 0.15s;
@@ -141,20 +278,24 @@ main {
   display: flex;
   flex-direction: column;
   padding: 12px 16px;
-  gap: 10px;
-  overflow: hidden;
+  gap: var(--space-2);
+  /* F2：原为 overflow:hidden —— 矮视口下 tabpane 被压到不可用高度，内容无声消失。
+     改为纵向可滚：正常视口不出现滚动条，矮视口下内容不丢。 */
+  overflow: hidden auto;
 }
-.tabpane { display: none; flex: 1; min-height: 0; flex-direction: column; gap: 10px; }
+/* F2：内容下限。窗口被拖小 / 开 DevTools 时不再把图表与日志压扁到看不见，
+   而是在 main 上出现滚动条。 */
+.tabpane { display: none; flex: 1; min-height: 460px; flex-direction: column; gap: var(--space-2); }
 .tabpane.active { display: flex; }
 
-.pane-row { display: flex; gap: 10px; min-height: 0; flex: 1; }
-.pane-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pane-row { display: flex; gap: var(--space-2); min-height: 0; flex: 1; }
+.pane-col { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 
 /* 侧栏 / 主区卡片 */
 .panel {
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -162,68 +303,140 @@ main {
 }
 .panel .p-title {
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 600;
-  color: var(--dim);
+  color: var(--text-title);
   border-bottom: 1px solid var(--border);
   display: flex;
   gap: 8px;
   align-items: center;
   flex-shrink: 0;
 }
-.panel .p-title .grow { flex: 1; }
-.panel .p-body { padding: 10px 12px; overflow: auto; min-height: 0; }
+.panel .p-body { padding: 8px 12px; overflow: auto; min-height: 0; }
 .panel .p-body.pad0 { padding: 0; }
 
+/* C6：读屏专用文本。不能用 display:none（会同时移出无障碍树，读屏读不到）。 */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
 /* ── 控件 ── */
+/* H20：基类不再自带实心色 —— 四个变体（ghost / primary / danger-ghost / danger）
+   各自声明底、边、字。原基类是实心蓝，等于让"新加一个按钮"默认长出实心色。
+   border 统一 1px（透明也占位）→ 各变体盒模型一致，不再有变体比别的矮/高 2px。 */
 .btn {
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  padding: 8px 18px;
-  font-size: 14px;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: 8px 16px;
+  font-size: var(--fs-lg);
   cursor: pointer;
   flex-shrink: 0;
+  transition: background var(--dur-fast), border-color var(--dur-fast),
+    color var(--dur-fast), transform var(--dur-fast);
+  gap: var(--space-1); /* H18：图标与文字之间 */
+  /* E8：inline-flex + 居中，让下面的 min-height 生效时文字仍居中
+     （button 默认 inline-block，加 min-height 会把文字顶到上边） */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.btn:hover { filter: brightness(1.1); }
+/* A2：悬停往「深」走。原实现是 filter:brightness(1.1)（变亮），
+   而实心按钮是白字 —— 变亮会让对比度从 3.16 掉到约 2.6，方向是反的。
+   H20：原先那条通用 `.btn:not(.ghost):hover` 一并移除 —— 它按"非 ghost 即实心"写死
+   accent-strong-hover，而 primary 已改描边，留着会让主按钮一悬停就变蓝。
+   现在四个变体各自声明 hover（ghost/primary/danger-ghost/danger，无遗漏）。 */
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .btn.ghost {
   background: transparent;
   border: 1px solid var(--border);
   color: var(--dim);
-  font-size: 12px;
-  padding: 5px 12px;
+  font-size: var(--fs-sm);
+  padding: 4px 12px;
 }
 .btn.ghost:hover { color: var(--text); border-color: var(--accent); }
-.btn.danger { background: var(--err); }
-.btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
-.btn.sm.seg-on { background: var(--accent); border-color: var(--accent); color: #fff; }
-.btn.okline { background: transparent; border: 1px solid var(--ok); color: var(--ok); }
+/* H20：主操作 = 中性描边。取值依据见文件头 --btn-primary-* 的注释（都是实测值）。
+   与 .btn.danger-ghost 形态同构、靠色相区分（灰 H≈222 vs 红 H≈358）——
+   两者共用单槽位、永不同框，所以同构不会混。 */
+.btn.primary {
+  background: transparent;
+  border: 1px solid var(--btn-primary-line);
+  color: var(--btn-primary-fg);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--btn-primary-wash);
+  border-color: var(--btn-primary-line-hover);
+}
+.btn.primary:active:not(:disabled) { transform: translateY(1px); }
+
+/* H18：破坏性操作 = 描边不实心（"次级危险"）。
+   与 .btn.danger（实心红）的分工：danger = 确认弹窗里那个"确认"，
+   danger-ghost = 常驻界面上那个"可以停止"。 */
+.btn.danger-ghost {
+  background: transparent;
+  border: 1px solid var(--err-line);
+  color: var(--err-text);
+}
+.btn.danger-ghost:hover:not(:disabled) {
+  background: var(--err-wash);
+  border-color: var(--err-line-strong);
+  color: #fff;
+}
+.btn.danger-ghost:active:not(:disabled) { transform: translateY(1px); }
+
+.btn.danger {
+  background: var(--err-strong);
+  color: #fff;
+  /* H20 顺手：补齐 border。原先它没有 border，而 ghost/primary/danger-ghost 都有 1px
+     -> 确认弹窗里的"确认"比旁边的按钮矮 2px。 */
+  border-color: var(--err-strong);
+}
+.btn.danger:hover { background: var(--err-strong-hover); border-color: var(--err-strong-hover); }
+
+/* H18：按钮内联图标。currentColor —— 图标跟着文字色变，
+   不用给每个变体写一遍 fill（变体一多必漂）。 */
+.btn .i { width: 10px; height: 10px; fill: currentColor; flex: none; }
+/* E8：小按钮原高约 22px（4+4 padding + ~14 行高），低于 WCAG 2.2 的
+   24×24 最小目标尺寸（2.5.8 AA；2.5.5 AAA 的 44px 是触屏优先场景，本地桌面工具不追）。
+   抬到 26px，观感几乎不变，触屏/投影下点得中。 */
+.btn.sm { padding: 4px 8px; font-size: var(--fs-sm); border-radius: var(--radius-sm); min-height: 26px; }
+.btn.sm.seg-on { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
 
 input[type="text"], input[type="number"], select, textarea {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 7px;
-  padding: 6px 9px;
-  font-size: 13px;
+  border-radius: var(--radius-md);
+  padding: 8px;
+  font-size: var(--fs-md);
   font-family: inherit;
   outline: none;
   width: 100%;
 }
-input:focus, select:focus, textarea:focus { border-color: #5a7fe0; }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 input[type="range"] { accent-color: var(--accent); }
-label { font-size: 13px; color: var(--dim); }
+label { font-size: var(--fs-md); color: var(--dim); }
 
 .form-grid {
   display: grid;
   grid-template-columns: auto minmax(120px, 1fr);
   gap: 8px 12px;
-  align-items: center;
+  /* F7：原为 center —— help 文字嵌在 value 单元格内换行会撑高该行，
+     label 随之居中于两行之间，与相邻字段的首行基线错开。 */
+  align-items: start;
 }
-.form-grid .help { grid-column: 2; font-size: 11px; color: var(--dim); margin-top: -4px; }
+/* 只给「值包在 span 里」的行加偏移；checkbox 行的 label 紧邻 input，加了反而错位。
+   9px = 输入框 padding-top(8px，A5 收敛后) + 边框(1px)，使 label 首行与输入文字同基线。
+   ⚠️ 这个值跟着输入框 padding 走 —— 改输入框内边距时必须一起改。
+   :has 不受支持时退化为纯顶对齐，仍优于原先的垂直居中。 */
+.form-grid > label:has(+ span) { padding-top: 9px; }
+.form-grid .help { font-size: var(--fs-xs); color: var(--dim); margin-top: -4px; }
 .form-grid .full { grid-column: 1 / -1; }
+
+/* E6：必填校验的字段级反馈（替代原生 alert —— 弹窗会丢掉「是哪个字段」的上下文） */
+[data-err] { border-color: var(--err) !important; }
 
 select.path-select { font-family: var(--mono); font-size: 12px; }
 
@@ -231,13 +444,13 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  padding: 2px 9px;
-  border-radius: 10px;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  padding: 4px 8px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   color: var(--dim);
-  background: #20242f;
+  background: var(--surface-raised);
   white-space: nowrap;
 }
 .chip b { color: var(--text); font-family: var(--mono); }
@@ -253,67 +466,160 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-right: 10px;
+  margin-right: 8px;
 }
 .p-title .run-info b { color: var(--text); font-family: var(--mono); font-weight: 600; }
 
 /* ── 日志 ── */
 .log {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.55;
   white-space: pre-wrap;
-  word-break: break-all;
+  /* C5：break-all 会把长路径/URL 从单词中间硬断；anywhere 只在必要时断，且先试单词边界 */
+  overflow-wrap: anywhere;
+  word-break: normal;
   overflow: auto;
-  color: #c7cdd8;
-  padding: 8px 10px;
+  color: var(--log-fg);
+  padding: 8px;
 }
-.log .dim { color: #5c6474; }
 
 /* ── 曲线图 ── */
-.chart-box { position: relative; flex: 1; min-height: 0; }
-.chart-box canvas { width: 100%; height: 100%; display: block; }
+/* 曲线容器：canvas 占满剩余高度，下面留一行图例（B3）。
+   改成 flex 列是为了让图例参与布局而不是盖在图上。 */
+.chart-box {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chart-box canvas { width: 100%; flex: 1; min-height: 0; display: block; }
 .chart-legend {
-  display: flex; gap: 14px; flex-wrap: wrap;
+  display: flex; gap: 16px; flex-wrap: wrap;
   padding: 4px 12px 0; font-size: 12px; color: var(--dim);
 }
-.chart-legend .it { display: inline-flex; align-items: center; gap: 5px; }
+.chart-legend .it { display: inline-flex; align-items: center; gap: 4px; }
 .chart-legend .sw { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 
+/* ── 采样参数条（推理页，E10）──
+   同一组采样参数必须在一处、同一套视觉语法：原先温度孤零零挂在面板标题栏，
+   其余四项在底部，而温度恰恰是调得最勤的那个。
+   宽度统一后，五个控件在视觉上是「一排」，而不是「四处拼起来的」。 */
+.sampler {
+  display: flex; align-items: center; gap: var(--space-3);
+  flex-wrap: wrap; font-size: var(--fs-sm); color: var(--dim);
+}
+.sampler > label {
+  display: inline-flex; align-items: center; gap: var(--space-1); white-space: nowrap;
+}
+.sampler input[type="number"] { width: 76px; }
+.sampler input[type="range"] { width: 96px; }
+.sampler select { width: 84px; }
+.sampler #temp-val { width: 32px; text-align: right; color: var(--text); font-family: var(--mono); }
+
+/* ── 推理页：模型状态条（P5）── */
+.model-status {
+  border-top: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  display: flex; flex-direction: column; gap: var(--space-1);
+  flex-shrink: 0;
+}
+.model-status .ms-main { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.model-status .ms-name {
+  font-family: var(--mono); font-size: var(--fs-md); color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.model-status .ms-dev {
+  flex: none; font-size: var(--fs-xs); color: var(--accent2);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 var(--space-2);
+}
+.model-status .ms-sub {
+  font-size: var(--fs-xs); color: var(--dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── 「新训练」徽章（P6）── */
+.badge-new {
+  flex: none; font-size: var(--fs-xs); color: var(--ok);
+  border: 1px solid rgba(46, 204, 113, 0.45); background: rgba(46, 204, 113, 0.1);
+  border-radius: var(--radius-sm); padding: 0 var(--space-2);
+}
+
+/* ── 每回合操作（P7）──
+   默认隐藏、悬停或键盘聚焦时显形 —— 与 run 行的删除按钮同一套语法。 */
+.msg.assistant { flex-direction: column; }
+.msg-acts {
+  display: flex; align-items: center; gap: var(--space-1);
+  margin-top: var(--space-1); align-self: flex-start;
+  opacity: 0; transition: opacity var(--dur-fast);
+}
+.msg.assistant:hover .msg-acts, .msg-acts:focus-within { opacity: 1; }
+.msg-acts button {
+  background: transparent; border: 1px solid var(--border); color: var(--dim);
+  border-radius: var(--radius-sm); padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-xs); cursor: pointer; transition: color var(--dur-fast), border-color var(--dur-fast);
+}
+.msg-acts button:hover { color: var(--text); border-color: var(--accent); }
+.msg-acts .meta { color: var(--dim); font-size: var(--fs-xs); }
+
 /* ── 对话 ── */
-#chat-scroll { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex;
+#chat-scroll { flex: 1; overflow-y: auto; padding: 16px; display: flex;
   flex-direction: column; gap: 12px; }
 .msg { display: flex; }
 .msg.user { justify-content: flex-end; }
 .bubble {
   max-width: 78%;
-  padding: 10px 14px;
-  border-radius: 14px;
+  padding: 8px 16px;
+  border-radius: var(--radius-2xl);
   line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
-  font-size: 14.5px;
+  font-size: var(--fs-lg);
 }
-.msg.user .bubble { background: #3b6fe0; }
+.msg.user .bubble { background: var(--bubble-user); }
 .msg.assistant .bubble { background: var(--panel2); border: 1px solid var(--border); }
-.msg.error .bubble { background: #4a2020; border: 1px solid #7a3a3a; font-size: 13px; color: #ffb3b3; }
+.msg.error .bubble { background: var(--bubble-err-bg); border: 1px solid var(--bubble-err-bd); font-size: var(--fs-md); color: var(--bubble-err-fg); }
 .thinking::after {
   content: "";
-  display: inline-block; width: 8px; height: 8px; margin-left: 6px;
+  display: inline-block; width: 8px; height: 8px; margin-left: 8px;
   border-radius: 50%; background: var(--dim);
   animation: blink 1s infinite; vertical-align: middle;
 }
 @keyframes blink { 50% { opacity: 0.2; } }
-.hint { text-align: center; color: var(--dim); font-size: 13px; padding: 40px 0; }
+.hint { text-align: center; color: var(--dim); font-size: 13px; padding: 32px 0; }
 .hint b { color: var(--text); }
+/* 片一：失败态 —— 与空态同位置，但要「一眼看出是提示」而不是「没有数据」。
+   修正：读取失败改用**琥珀**而非红。红色在这套界面里有专属语义 ——
+   破坏性操作（停止/删除）与进程失败；再让「读取失败」也用红，界面就显得一直在报错
+   （用户原话：「很像是软件出BUG了」）。琥珀 =「需要留意，但可恢复」——旁边就有「重试」。
+   --warn 对 --panel 实测 7.94:1。 */
+.hint.warn { color: var(--warn); }
+/* 紧凑变体：用在列表容器内，取代原先的内联 padding:8px 4px */
+.hint.sm { padding: var(--space-2) var(--space-1); }
+.hint-act { margin-top: var(--space-2); }
+
+/* 曲线失败叠加层（.chart-box 已 position:relative）。
+   注意：display:flex 会盖掉 UA 的 [hidden]{display:none}，所以必须显式补一条。 */
+.chart-err {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: var(--space-2);
+  background: var(--panel);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+  text-align: center;
+  padding: var(--space-2);
+}
+.chart-err[hidden] { display: none; }
 
 /* ── 警告条（GPU 互斥 / 状态）── */
 .warnbar {
   display: flex; gap: 8px; align-items: center;
-  font-size: 12.5px; color: var(--warn);
+  font-size: var(--fs-sm); color: var(--warn);
   background: rgba(230, 162, 60, 0.08);
   border: 1px solid rgba(230, 162, 60, 0.35);
-  border-radius: 8px; padding: 6px 12px;
+  border-radius: var(--radius-md); padding: 8px 12px;
 }
 .warnbar.err { color: var(--err); background: rgba(224, 82, 82, 0.08); border-color: rgba(224, 82, 82, 0.35); }
 .warnbar.ok { color: var(--ok); background: rgba(46, 204, 113, 0.07); border-color: rgba(46, 204, 113, 0.3); }
@@ -330,39 +636,98 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
   max-height: 86vh;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   display: flex; flex-direction: column;
   overflow: hidden;
 }
 .modal .m-head {
   padding: 12px 16px; border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; gap: 8px;
 }
-.modal .m-head b { font-size: 15px; }
-.modal .m-body { padding: 14px 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+.modal .m-head b { font-size: var(--fs-lg); font-weight: 600; }
+.modal .m-body { padding: 16px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .modal .m-foot {
-  padding: 10px 16px; border-top: 1px solid var(--border);
-  display: flex; gap: 10px; justify-content: flex-end;
+  padding: 8px 16px; border-top: 1px solid var(--border);
+  display: flex; gap: 8px; justify-content: flex-end;
 }
-#cfg-editor { font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+#cfg-editor { font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.5;
   min-height: 380px; resize: vertical; }
 
+/* ── H18 运行条 ──
+   商业级运行控制的三个要点：
+   ① 状态与动作在**同一条**上各占一端（状态在左、动作在右）—— 用户扫一眼就知道"在跑什么"；
+   ② 启动/停止**共用同一槽位**，随 data-state 切换 —— 不再有两块饱和色并排，
+      也不再"任一时刻必有一颗是死的"；
+   ③ 状态同时用**颜色和文字**表达（WCAG 1.4.1：不能只靠颜色）。 */
+.run-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.run-bar .rb-state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-sm);
+  color: var(--dim);
+  min-width: 0;
+}
+.run-bar .rb-state-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-bar .rb-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--dim); flex: none;
+}
+/* 状态色（与 header 徽章同一套语义：灰=空闲 / 绿=在跑 / 琥珀=停止中 / 红=失败） */
+.run-bar[data-state="running"] .rb-state { color: var(--text); }
+.run-bar[data-state="running"] .rb-dot { background: var(--ok); animation: rbPulse 2s ease-in-out infinite; }
+.run-bar[data-state="stopping"] .rb-state { color: var(--warn); }
+.run-bar[data-state="stopping"] .rb-dot { background: var(--warn); animation: rbPulse 1s ease-in-out infinite; }
+.run-bar[data-state="finished"] .rb-dot { background: var(--ok); }
+.run-bar[data-state="failed"] .rb-state { color: var(--err-text); }
+.run-bar[data-state="failed"] .rb-dot { background: var(--err-strong); }
+@keyframes rbPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .run-bar .rb-dot { animation: none !important; } }
+
+/* 单槽位两态：同一格里只出现一个动作 */
+.run-bar [data-stop-btn] { display: none; }
+.run-bar[data-state="running"] [data-stop-btn],
+.run-bar[data-state="stopping"] [data-stop-btn] { display: inline-flex; }
+.run-bar[data-state="running"] [data-start-btn],
+.run-bar[data-state="stopping"] [data-start-btn] { display: none; }
+
 /* ── 后训练任务卡 ── */
+/* F1：主链 4 卡 + 3 箭头约需 384px，而 .panel 是 overflow:hidden ——
+   窄视口（约 <1024px）下末尾的 OPD 卡会被静默裁掉且无滚动条。
+   改为横向可滚（margin:0 auto 在溢出时按 CSS 规则退化为 0，不会裁掉左侧）。 */
 .pipeline {
   display: flex; flex-direction: column; gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px;
+  overflow-x: auto;
 }
 .flow-grid {
-  display: flex; align-items: center; gap: 2px;
+  display: flex; align-items: center; gap: 4px;
   width: max-content; margin: 0 auto;   /* 居中：与下方 Loss 面板同轴 */
 }
-/* 右面板：可选路线卡水平居中 */
+/* 右面板：可选路线卡**横排**（与主链同向）。
+   注意不能只改 flex-direction —— 3 张卡最少需 3×78(min-width) + 2×8(gap) = 250px，
+   而 .panel 带 overflow:hidden，窄视口下会静默裁掉最后一张（F1 是同一个坑）。
+   所以这里自己开横向滚动；配套 index.html 的 min-width 从 120px 提到 250px，
+   让"够宽就用满、不够宽才滚"。 */
 #pt2-alts {
   flex-direction: row;
+  /* 卡片尺寸必须与主链卡**一致**：不给 flex-grow（宽度按内容，min-width 78px 由
+     .stage-card 提供）、align-items 用 center（不拉伸高度）——
+     `.flow-grid` 用的就是这一组值。早先写 stretch + flex:1 1 0 会把三张卡拉成
+     三条等分横幅，跟主链卡对不上。 */
   align-items: center;
   justify-content: center;
   gap: 8px;
   flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 .flow-arrow { display: flex; align-items: center; justify-content: center; align-self: center; padding: 0 1px; }
 .flow-arrow svg { display: block; }
@@ -371,14 +736,19 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 /* 默认灰；悬停前一张卡时整支变蓝 */
 .stage-card:hover + .flow-arrow line,
 .stage-card:hover + .flow-arrow path { stroke: var(--accent); }
+/* H23：名称与状态**同行**（原为上下两行，卡高 48px -> 28px）。
+   后训练页右区因此省下 20px 给曲线 —— 原曲线区仅约 91px，是预训练页的 0.55 倍。
+   放得下：1680 视口下主链面板内容宽 884px，4 卡 + 3 箭头后每卡 197px，
+   而最坏情况"DPO数据 + 待生成"只需 98px。（窄屏会让 .pipeline 出横向滚动，不裁内容。） */
 .stage-card {
+  display: flex; align-items: baseline; justify-content: center; gap: var(--space-1);
   border: 1px solid rgba(91, 140, 255, 0.5);
-  border-radius: 8px; padding: 5px 10px;
-  background: #1b1f2a;
-  font-size: 12px; min-width: 78px; text-align: center;
+  border-radius: var(--radius-md); padding: 4px 8px;
+  background: var(--surface-inset);
+  font-size: 12px; min-width: 78px;
 }
-.stage-card .t { font-weight: 700; font-size: 12px; display: flex; gap: 6px; align-items: center; justify-content: center; }
-.stage-card .s { color: var(--dim); font-size: 11px; margin-top: 3px; }
+.stage-card .t { font-weight: 700; font-size: 12px; display: flex; gap: 8px; align-items: center; justify-content: center; }
+/* .stage-card .s 的唯一定义在下方 D3 段落（原先这里还有一条完全重复的，已删） */
 /* 任务类型装饰在状态规则之前：状态类与其同特异性、定义在后，才能压过 */
 /* 数据生成卡（DPO数据）：产物已生成则可跳过，虚线提示非每次必跑 */
 .stage-card.gen { border-color: var(--accent); border-style: dashed; }
@@ -391,29 +761,61 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 .stage-card.run { border-color: var(--accent); box-shadow: 0 0 10px rgba(91, 140, 255, 0.25); }
 .stage-card.fail { border-color: var(--err); }
 
+/* H12：A/B 角标 —— 与图里的对比线一一对应（A=蓝虚线 / B=紫虚线）。
+   原先只有两个 checkbox，勾完完全看不出谁对应哪条线；角标把「左栏那一行」
+   和「图上那一条」直接连起来。 */
+.ab-badge {
+  flex: none; font-size: var(--fs-xs); font-weight: 700;
+  border-radius: var(--radius-sm); padding: 0 var(--space-1); min-width: 16px;
+  text-align: center;
+}
+.ab-badge.a { background: var(--accent-strong); color: #fff; }
+.ab-badge.b { border: 1px solid var(--accent); color: var(--accent2); }
+
 /* ── 列表（runs / 模型）── */
 .list-item {
   display: flex; gap: 8px; align-items: center;
-  padding: 7px 9px; border-radius: 8px; cursor: pointer;
-  font-size: 12.5px; border: 1px solid transparent;
+  padding: 8px; border-radius: var(--radius-md); cursor: pointer;
+  font-size: var(--fs-sm); border: 1px solid transparent;
 }
-.list-item:hover { background: #1e2330; }
+.list-item:hover { background: var(--surface-hover); }
 .list-item.on { border-color: var(--accent); background: rgba(91, 140, 255, 0.08); }
-.list-item .name { font-family: var(--mono); font-size: 12px; color: var(--accent2); }
-.list-item .sub { color: var(--dim); font-size: 11px; margin-top: 2px; }
+.list-item .name { font-family: var(--mono); font-size: var(--fs-sm); color: var(--accent2); }
+.list-item .sub { color: var(--dim); font-size: var(--fs-xs); margin-top: 4px; }
 .list-item .sub b { color: var(--text); font-family: var(--mono); font-weight: 600; }
-.list-item.ckpt { display: block; }
-.list-item.ckpt .stage { color: var(--warn); font-size: 11px; }
+/* H22：推理页 checkpoint 行。260px 面板下一行放不下 ——
+   实测固定部分（徽章 49 + 元信息 156 + 按钮 40 + 3 个 8px 间距）共 269px，
+   而行内容区只有 244px → 名称被压成 0，且 .p-body 是 overflow:auto，会出横向滚动条。
+   改两行：行1 名称+徽章，行2 元信息；按钮跨两行、垂直居中右对齐。
+   这一条原来是 `display: block` 的占位规则，从未被使用 —— 正好接上。 */
+.list-item.ckpt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name btn" "meta btn";
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.list-item.ckpt .ck-name {
+  grid-area: name;
+  display: flex; align-items: center; gap: var(--space-2);
+  min-width: 0; /* 必须：否则 flex 子项不收缩，下面的 ellipsis 不生效 */
+}
+.list-item.ckpt .ck-name .name {
+  min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.list-item.ckpt .sub { grid-area: meta; margin-top: 0; }
+.list-item.ckpt > .btn { grid-area: btn; }
 .check { accent-color: var(--accent); }
 /* run 列表行内删除按钮（悬停变红，确认在 JS 侧） */
 .del-run {
   background: transparent;
   border: none;
   color: var(--dim);
-  font-size: 14px;
+  font-size: var(--fs-lg);
   line-height: 1;
-  padding: 3px 7px;
-  border-radius: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   flex-shrink: 0;
   opacity: 0;
@@ -424,13 +826,212 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 
 footer {
   text-align: center;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--dim);
-  padding: 5px;
+  padding: 4px;
   flex-shrink: 0;
   border-top: 1px solid var(--border);
 }
 
+/* A8：尊重系统「减少动态效果」偏好（.thinking 的闪烁点、各处 transition） */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: #384055; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
+
+/* ══════════════════════════════════════════════════════════════════
+   批次 1 新增组件：指标条（D1/D2）· 日志工具条（C1~C4/C7）· toast（E6/E9）
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ── 指标条：一屏可扫的关键指标，替代原先散落三处的 chip ── */
+.metrics {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+.m-cell {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--surface-inset);
+  border-radius: var(--radius-md);
+}
+.m-k {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}
+.m-v {
+  font-size: var(--fs-sm);
+  color: var(--text);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── 日志工具条 ── */
+.log-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.lg-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.lg-toggle:hover { color: var(--text); border-color: var(--accent); }
+.lg-toggle[aria-pressed="true"] {
+  color: var(--accent2);
+  border-color: var(--accent);
+  background: rgba(91, 140, 255, 0.1);
+}
+.lg-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+.lg-toggle[aria-pressed="true"] .lg-dot { background: var(--ok); }
+.lg-sel,
+.lg-search {
+  font-size: var(--fs-xs);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  width: auto;
+}
+.lg-search { flex: 0 1 200px; min-width: 110px; }
+.log-hit { font-size: var(--fs-xs); color: var(--dim); white-space: nowrap; }
+
+/* 日志容器 + 「已暂停跟随」浮标 */
+.log-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.log-wrap > .log { flex: 1; min-height: 0; }
+.log-jump {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  font-size: var(--fs-xs);
+  color: #fff;
+  background: var(--accent-strong);
+  border: none;
+  border-radius: 999px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.log-jump:hover { background: var(--accent-strong-hover); }
+.log-jump[hidden] { display: none; }
+
+/* 日志行分类（C2/C3/C7）：分类只发生在屏幕，数据层始终保留全量原文 */
+.log .ln { border-left: 2px solid transparent; padding-left: 8px; }
+.log .ln-pbar,
+.log .ln-machine { display: none; }
+.log.show-pbar .ln-pbar { display: block; }
+.log.show-machine .ln-machine { display: block; }
+.log .ln-warn { color: var(--warn); border-left-color: var(--warn); }
+.log .ln-err { color: var(--err); border-left-color: var(--err); }
+.log.lvl-warn .ln:not(.ln-warn):not(.ln-err) { display: none; }
+.log.lvl-err .ln:not(.ln-err) { display: none; }
+/* 搜索过滤：必须排在最后 —— 与上面几条同特异性，靠源码顺序取胜 */
+.log .ln.f-hidden { display: none; }
+
+/* ── toast ── */
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 380px;
+}
+.toast {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.toast.ok { border-left-color: var(--ok); }
+.toast.err { border-left-color: var(--err); }
+/* 片二：带动作按钮的 toast（如「训练完成 → 去推理验证」）。
+   消息在左、动作靠右（snackbar 的惯例）。 */
+.toast.has-acts { display: flex; align-items: center; gap: var(--space-3); }
+.toast-acts { display: flex; gap: var(--space-2); flex: none; margin-left: auto; }
+
+/* ── 批次 2 新增 ── */
+
+/* B3 图例：由 chart.js 注入到 .chart-box 内（每个图自带，不用改 HTML） */
+.chart-box .chart-legend { padding: 4px 0 0; gap: 12px; font-size: var(--fs-xs); }
+
+/* D3 阶段卡状态文字：状态必须能"读"出来，不能只靠边框颜色（WCAG 1.4.1） */
+.stage-card .s { font-size: var(--fs-xs); color: var(--dim); } /* H23：同行后不再需要上边距 */
+.stage-card .s[data-tone="done"] { color: var(--ok); }
+.stage-card .s[data-tone="run"] { color: var(--accent2); }
+.stage-card .s[data-tone="fail"] { color: var(--err); }
+
+/* D4 A/B 最终指标差异条 */
+.ab-diff {
+  display: flex;
+  gap: var(--space-2);
+  /* H4：指标片数量随 run 数据变化（1~3 片），窄栏换行而不是压碎 */
+  flex-wrap: wrap;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  flex-shrink: 0;
+}
+.ab-diff[hidden] { display: none; }
+.ab-diff .c {
+  flex: 1 1 0;
+  /* H4：1 片时不拉满整行（3 片时仍是等分，与提案图一致） */
+  min-width: 96px;
+  max-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--surface-inset);
+  border-radius: var(--radius-md);
+}
+.ab-diff .k { font-size: var(--fs-xs); color: var(--dim); }
+.ab-diff .v { font-size: var(--fs-sm); color: var(--text); font-family: var(--mono); }
+.ab-diff .v.better { color: var(--ok); }
+.ab-diff .v.worse { color: var(--warn); }
+
+/* E3：删除按钮悬停才显形，但键盘聚焦时也必须可见 ——
+   否则 Tab 会停在一个完全看不见的破坏性按钮上 */
+.list-item:focus-within .del-run { opacity: 1; }

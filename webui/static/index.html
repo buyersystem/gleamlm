@@ -21,116 +21,215 @@
   <span id="train-badge" class="meta-item" title="当前训练任务">
     <span class="dot idle" id="train-dot"></span>训练 <b id="train-text">空闲</b>
   </span>
+  <!-- P3：连接状态。训练以「几十小时」计，界面必须先能说清自己是不是还在跟后端通话 ——
+       原先只在页内出一条横幅，header 上看不出「这个界面现在是不是活的」。 -->
+  <span id="link-badge" class="meta-item" title="与后端的连接状态（连续 3 次轮询失败即置为已断开）">
+    <span class="dot idle" id="link-dot"></span>连接 <b id="link-text">正常</b>
+  </span>
   <button id="look-btn" class="btn ghost" type="button">外观</button>
 </header>
 
-<nav class="tabs" id="tabs">
-  <button class="tab active" type="button" data-tab="pretrain">预训练</button>
-  <button class="tab" type="button" data-tab="posttrain">后训练</button>
-  <button class="tab" type="button" data-tab="inference">推理</button>
+<!-- E5：tablist 语义 + roving tabindex（左右方向键切换在 util.js 的 initShell 里） -->
+<nav class="tabs" id="tabs" role="tablist" aria-label="工作区">
+  <button class="tab active" type="button" role="tab" id="tab-pretrain" data-tab="pretrain"
+          aria-controls="pane-pretrain" aria-selected="true" tabindex="0">预训练</button>
+  <button class="tab" type="button" role="tab" id="tab-posttrain" data-tab="posttrain"
+          aria-controls="pane-posttrain" aria-selected="false" tabindex="-1">后训练</button>
+  <button class="tab" type="button" role="tab" id="tab-inference" data-tab="inference"
+          aria-controls="pane-inference" aria-selected="false" tabindex="-1">推理</button>
 </nav>
 
 <main>
+  <!-- F3：后端失联提示（独立容器 —— 与 GPU 互斥提示各占一行，互不覆盖） -->
+  <div id="link-warn" role="status" aria-live="polite"></div>
   <div id="warn-line"></div>
 
-  <!-- ── ① 预训练：左栏任务/配置 + 中央 loss/lr + 底部日志 ── -->
-  <section id="pane-pretrain" class="tabpane active">
+  <!-- ── ① 预训练：左栏任务/配置 + 中央指标条/loss 主图 + lr 副图 + 底部日志 ── -->
+  <section id="pane-pretrain" class="tabpane active" role="tabpanel" aria-labelledby="tab-pretrain" tabindex="-1">
     <div class="pane-row" style="flex:3">
-      <div class="panel" style="width:270px;flex:none">
+      <div class="panel" style="width:var(--pane-left);flex:none">
+        <!-- P2 + H18：运行控制收成一条「运行条」—— 状态在左、动作在右，启动/停止**共用同一槽位**
+             （靠 .run-bar[data-state] 切换显示，见 theme.css）。标题栏只留标题 + 次级工具。
+             接线仍是全局的：trainer.js 的 initTrainHeader() 按 [data-start-btn]/[data-stop-btn] 绑定。 -->
         <div class="p-title">任务列表
           <span class="spacer"></span>
           <button id="pt-cfg-btn" class="btn ghost sm" type="button">YAML 配置</button>
         </div>
+        <div class="run-bar" data-run-bar data-state="idle">
+          <span class="rb-state"><i class="rb-dot"></i><span class="rb-state-text">空闲</span></span>
+          <span class="spacer"></span>
+          <button id="pt-start-btn" class="btn primary sm" type="button" data-start-btn>
+            <svg class="i" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2 8.4 5 2 8.8Z"/></svg>启动训练
+          </button>
+          <button id="pt-stop" class="btn danger-ghost sm" type="button" disabled data-stop-btn
+                  title="停止当前训练（会二次确认）">
+            <svg class="i" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.6" y="1.6" width="6.8" height="6.8" rx="1.4"/></svg>停止
+          </button>
+        </div>
+        <!-- 片一：保留旧数据时的警告条。独立于 #pt-runs ——
+             若并进去会破坏 D5 的 sig 原地更新（每 2s 会重建列表，丢悬停与焦点）。 -->
+        <div id="pt-runs-warn" class="warnbar" hidden></div>
         <div id="pt-runs" class="p-body" style="flex:1"></div>
       </div>
-      <div class="panel" style="flex:1;min-width:180px">
-        <div class="p-title">损失曲线 Loss
-          <span class="spacer"></span><span class="chip" id="pt-loss-live"></span>
+      <div class="pane-col" style="flex:1">
+        <!-- D1/D2 指标条：原先把 step/loss、lr、val ppl 分散在三处 chip，现收成一条 -->
+        <div class="metrics" id="pt-metrics" role="group" aria-label="实时指标">
+          <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span></div>
+          <div class="m-cell"><span class="m-k">loss</span><span class="m-v" data-m="loss">—</span></div>
+          <div class="m-cell"><span class="m-k">lr</span><span class="m-v" data-m="lr">—</span></div>
+          <div class="m-cell"><span class="m-k">tok/s</span><span class="m-v" data-m="tok">—</span></div>
+          <div class="m-cell"><span class="m-k">val ppl</span><span class="m-v" data-m="vppl">—</span></div>
+          <div class="m-cell"><span class="m-k">ETA</span><span class="m-v" data-m="eta">—</span></div>
         </div>
-        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt-loss-chart"></canvas></div>
-      </div>
-      <div class="panel" style="flex:1;min-width:180px">
-        <div class="p-title">学习率 LR
-          <span class="spacer"></span><span class="chip" id="pt-lr-live"></span>
+        <!-- loss 占 2/3 主视觉，lr 副图 1/3（设计文档 §6.1） -->
+        <div class="pane-row" style="flex:1">
+          <div class="panel" style="flex:2;min-width:200px">
+            <div class="p-title">损失曲线 Loss
+              <span class="spacer"></span>
+              <!-- B6：log y 纵轴（默认关 —— 默认开会让人误读轴刻度） -->
+              <button id="pt-logy" class="btn ghost sm" type="button" aria-pressed="false"
+                      title="对数纵轴：loss 跨量级时把曲线拉开">log y</button>
+              <!-- 片三：导出 CSV（含勾选的 A/B 对比；原始精度，不做图表那样的抽稀） -->
+              <button id="pt-csv" class="btn ghost sm" type="button"
+                      title="导出当前曲线（含 A/B 对比）为 CSV">导出</button>
+            </div>
+            <div class="chart-box" style="margin:8px"><canvas id="pt-loss-chart"></canvas><div id="pt-loss-err" class="chart-err" hidden></div></div>
+          </div>
+          <div class="panel" style="flex:1;min-width:150px">
+            <div class="p-title">学习率 LR</div>
+            <div class="chart-box" style="margin:8px"><canvas id="pt-lr-chart"></canvas><div id="pt-lr-err" class="chart-err" hidden></div></div>
+          </div>
         </div>
-        <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt-lr-chart"></canvas></div>
+        <!-- D4：勾选 A/B 对比时才出现 -->
+        <div class="ab-diff" id="pt-abdiff" hidden></div>
       </div>
     </div>
     <div class="panel" style="flex:1.8;min-height:120px">
       <div class="p-title">训练日志
         <span class="spacer"></span>
         <span id="pt-run-info" class="run-info"></span>
-        <button id="pt-start-btn" class="btn sm" type="button" data-start-btn>＋ 启动预训练</button>
-        <button id="pt-stop" class="btn danger sm" type="button" disabled data-stop-btn>停止</button>
       </div>
-      <pre id="pt-log" class="log"></pre>
+      <!-- 工具条由 trainer.js 注入（两页共用同一份模板，避免 HTML 抄两遍漂移） -->
+      <div class="log-bar" data-log-bar></div>
+      <div class="log-wrap">
+        <pre id="pt-log" class="log"></pre>
+        <button class="log-jump" type="button" data-log-jump hidden></button>
+      </div>
     </div>
   </section>
 
   <!-- ── ② 后训练：左栏任务列表 + 右侧（任务卡在上、曲线在下），底部通栏日志 ── -->
-  <section id="pane-posttrain" class="tabpane">
+  <section id="pane-posttrain" class="tabpane" role="tabpanel" aria-labelledby="tab-posttrain" tabindex="-1">
     <div class="pane-row" style="flex:3">
-      <div class="panel" style="width:270px;flex:none">
+      <div class="panel" style="width:var(--pane-left);flex:none">
+        <!-- H18：运行条（与预训练页同一形态） -->
         <div class="p-title">任务列表</div>
+        <div class="run-bar" data-run-bar data-state="idle">
+          <span class="rb-state"><i class="rb-dot"></i><span class="rb-state-text">空闲</span></span>
+          <span class="spacer"></span>
+          <button id="pt2-start-btn" class="btn primary sm" type="button" data-start-btn>
+            <svg class="i" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2 8.4 5 2 8.8Z"/></svg>启动训练
+          </button>
+          <button id="pt2-stop" class="btn danger-ghost sm" type="button" disabled data-stop-btn
+                  title="停止当前训练（会二次确认）">
+            <svg class="i" viewBox="0 0 10 10" aria-hidden="true"><rect x="1.6" y="1.6" width="6.8" height="6.8" rx="1.4"/></svg>停止
+          </button>
+        </div>
+        <!-- 片一：保留旧数据时的警告条。独立于 #pt2-runs ——
+             若并进去会破坏 D5 的 sig 原地更新（每 2s 会重建列表，丢悬停与焦点）。 -->
+        <div id="pt2-runs-warn" class="warnbar" hidden></div>
         <div id="pt2-runs" class="p-body" style="flex:1"></div>
       </div>
       <div class="pane-col" style="flex:1">
+        <!-- D1/D2 + H4 指标条（后训练）。槽位与提案图一致为**六格**:
+             step · loss · <专属> · <专属> · lr · ETA。
+             - 第 3/4 格是「阶段专属指标」: DPO→margin/acc、GRPO/PPO→reward/kl，
+               标签随实际数据切换；无数据时保持槽位与默认标签、值显示「—」
+               —— 槽位数不变才能维持与提案图相同的格宽比例。
+             - tok·s 与 GPU 已移出本条: tok·s 进日志标题栏的运行摘要（信息不丢），
+               GPU 去掉（header 的徽章已是面板侧 NVML 全卡占用，两处并存反而易误读）。 -->
+        <div class="metrics" id="pt2-metrics" role="group" aria-label="实时指标">
+          <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span></div>
+          <div class="m-cell"><span class="m-k">loss</span><span class="m-v" data-m="loss">—</span></div>
+          <div class="m-cell"><span class="m-k" data-mk="x1">margin</span><span class="m-v" data-m="x1">—</span></div>
+          <div class="m-cell"><span class="m-k" data-mk="x2">acc</span><span class="m-v" data-m="x2">—</span></div>
+          <div class="m-cell"><span class="m-k">lr</span><span class="m-v" data-m="lr">—</span></div>
+          <div class="m-cell"><span class="m-k">ETA</span><span class="m-v" data-m="eta">—</span></div>
+        </div>
         <!-- 上排与曲线行同宽：左=主链卡，右=可选路线卡（LoRA/PPO/GRPO） -->
+        <!-- H11：可选路线是**分支/旁路**，视觉上从属于主链 —— 按提案图给窄栏（约 1/4）。
+             等宽会让 3 张卡撑成三条横幅，也丢掉了「主链 vs 分支」的主次关系。 -->
+        <!-- 分栏比必须与**下面的曲线行**一致（loss 2 : 副图 1），否则两条竖缝错开
+             （75% vs 67%，差 8% 列宽，面板边界连不成一条直线）。
+             曲线行那组比例是提案图定过的，所以由本行来对齐它。 -->
         <div class="pane-row" style="flex:none">
-          <div class="panel" style="flex:1">
+          <div class="panel" style="flex:2">
             <div id="pt2-stages" class="pipeline"></div>
           </div>
-          <div id="pt2-alts" class="panel" style="flex:1"></div>
+          <!-- 可选路线横排：3 张卡最少 250px（见 theme.css #pt2-alts 说明） -->
+          <div id="pt2-alts" class="panel" style="flex:1;min-width:250px"></div>
         </div>
         <div class="pane-row" style="flex:1">
-          <div class="panel" style="flex:1;min-height:140px">
+          <div class="panel" style="flex:2;min-height:140px">
             <div class="p-title">损失曲线 Loss
               <span class="spacer"></span>
-              <span id="pt2-loss-live" class="chip"></span>
+              <!-- B6：log y 纵轴（默认关 —— 默认开会让人误读轴刻度） -->
+              <button id="pt2-logy" class="btn ghost sm" type="button" aria-pressed="false"
+                      title="对数纵轴：loss 跨量级时把曲线拉开">log y</button>
+              <!-- 片三：导出 CSV（含勾选的 A/B 对比；原始精度，不做图表那样的抽稀） -->
+              <button id="pt2-csv" class="btn ghost sm" type="button"
+                      title="导出当前曲线（含 A/B 对比）为 CSV">导出</button>
             </div>
-            <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-loss-chart"></canvas></div>
+            <div class="chart-box" style="margin:8px"><canvas id="pt2-loss-chart"></canvas><div id="pt2-loss-err" class="chart-err" hidden></div></div>
           </div>
           <div class="panel" style="flex:1;min-height:140px">
-            <div class="p-title">学习率 LR
-              <span class="spacer"></span>
-              <span id="pt2-lr-live" class="chip"></span>
-            </div>
-            <div class="chart-box" style="margin:6px 10px 10px"><canvas id="pt2-lr-chart"></canvas></div>
+            <!-- H4: 副图随任务切换 —— 有阶段专属指标就画它，否则回落「学习率 LR」
+                 （标签由 posttrain.js 按实际数据切换，初始文本即回落态） -->
+            <div class="p-title"><span id="pt2-sub-title">学习率 LR</span></div>
+            <div class="chart-box" style="margin:8px"><canvas id="pt2-lr-chart"></canvas><div id="pt2-lr-err" class="chart-err" hidden></div></div>
           </div>
         </div>
+        <!-- D4：勾选 A/B 对比时才出现 -->
+        <div class="ab-diff" id="pt2-abdiff" hidden></div>
       </div>
     </div>
     <div class="panel" style="flex:1.8;min-height:120px">
       <div class="p-title">训练日志
         <span class="spacer"></span>
         <span id="pt2-status" class="run-info"></span>
-        <button id="pt2-start-btn" class="btn sm" type="button" data-start-btn>＋ 启动任务</button>
-        <button id="pt2-stop" class="btn danger sm" type="button" disabled data-stop-btn>停止</button>
       </div>
-      <pre id="pt2-log" class="log"></pre>
+      <div class="log-bar" data-log-bar></div>
+      <div class="log-wrap">
+        <pre id="pt2-log" class="log"></pre>
+        <button class="log-jump" type="button" data-log-jump hidden></button>
+      </div>
     </div>
   </section>
 
   <!-- ── ③ 推理：模型栏 + 对话台 ── -->
-  <section id="pane-inference" class="tabpane">
+  <section id="pane-inference" class="tabpane" role="tabpanel" aria-labelledby="tab-inference" tabindex="-1">
     <div class="pane-row" style="flex:1">
-      <div class="panel" style="width:260px;flex:none">
+      <div class="panel" style="width:var(--pane-left);flex:none">
         <div class="p-title">加载语言模型
           <span class="spacer"></span>
           <button id="chat-refresh" class="btn ghost sm" type="button">刷新</button>
         </div>
         <div id="chat-models" class="p-body" style="flex:1"></div>
-        <div class="p-body" style="border-top:1px solid var(--border)">
-          <label>当前：<b id="chat-cur" style="color:var(--text);font-family:var(--mono);font-size:12px">未加载</b></label>
+        <!-- P5：模型状态条 —— 当前模型 / 设备 / 参数量集中一处，
+             而不是原来那行只有个 basename 的裸文字。 -->
+        <div class="model-status" id="chat-status">
+          <div class="ms-main">
+            <span class="ms-name" id="chat-cur">未加载</span>
+            <span class="ms-dev" id="chat-dev"></span>
+          </div>
+          <div class="ms-sub" id="chat-sub">选择左侧 checkpoint 并加载</div>
         </div>
       </div>
       <div class="panel" style="flex:1">
-        <div class="p-title">对话（多轮自动带最近 6 轮，上下文 512 溢出会提示）
+        <!-- E10：标题栏原先同时挤着「一长句标题 + 温度滑杆 + 清空按钮」三样东西。
+             标题缩短、长说明移进 title（悬停可见），滑杆归位到下面的采样参数条。 -->
+        <div class="p-title" title="多轮自动带最近 6 轮；上下文 512，溢出会提示">对话
           <span class="spacer"></span>
-          <label style="display:flex;align-items:center;gap:6px">温度
-            <input id="temp" type="range" min="0.1" max="1.5" step="0.05" value="0.8" style="width:100px" />
-            <span id="temp-val" style="color:var(--text);width:36px;text-align:right">0.8</span>
-          </label>
           <button id="chat-clear" class="btn ghost sm" type="button">清空对话</button>
         </div>
         <div id="chat-scroll">
@@ -140,15 +239,26 @@
           </div>
         </div>
         <div class="p-body" style="border-top:1px solid var(--border)">
-          <div class="pane-row" style="flex:none;gap:8px;align-items:center;flex-wrap:wrap">
-            <select id="chat-topk" style="width:92px" title="top_k"><option>50</option><option>40</option><option>30</option><option>20</option><option>10</option><option>0</option></select>
-            <label style="font-size:12px">top_p <input id="chat-topp" type="number" min="0" max="1" step="0.05" value="0.9" style="width:70px" /></label>
-            <label style="font-size:12px">rep_penalty <input id="chat-rep" type="number" min="1" max="2" step="0.05" value="1.15" style="width:76px" /></label>
-            <label style="font-size:12px">max_tokens <input id="chat-maxtok" type="number" min="16" max="512" step="16" value="256" style="width:84px" /></label>
+          <!-- E10：同一组采样参数原先分居两处（温度在标题栏，这四项在底部），
+               而温度恰恰是调得最勤的那个。现在归成一条，控件形态也统一。
+               top_k 原来是裸 select（只靠 title 提示），补上文字标签。 -->
+          <div class="sampler">
+            <label>温度
+              <input id="temp" type="range" min="0.1" max="1.5" step="0.05" value="0.8" />
+              <span id="temp-val">0.8</span>
+            </label>
+            <label>top_k
+              <select id="chat-topk"><option>50</option><option>40</option><option>30</option><option>20</option><option>10</option><option>0</option></select>
+            </label>
+            <label>top_p <input id="chat-topp" type="number" min="0" max="1" step="0.05" value="0.9" /></label>
+            <label>rep_penalty <input id="chat-rep" type="number" min="1" max="2" step="0.05" value="1.15" /></label>
+            <label>max_tokens <input id="chat-maxtok" type="number" min="16" max="512" step="16" value="256" /></label>
             <span class="spacer"></span>
+            <button id="chat-reset" class="btn ghost sm" type="button"
+                    title="恢复各参数的默认值（与后端请求默认值对齐）">重置</button>
             <span id="chat-stream-lbl" class="chip" title="SSE 流式输出（fetch + ReadableStream）">流式 ✓</span>
           </div>
-          <form id="chat-form" style="display:flex;gap:10px;margin-top:8px;align-items:flex-end">
+          <form id="chat-form" style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">
             <textarea id="chat-input" rows="1" placeholder="输入消息…" style="resize:none;max-height:160px"></textarea>
             <button id="chat-send" class="btn" type="submit">发送</button>
           </form>
@@ -156,6 +266,9 @@
       </div>
     </div>
   </section>
+<!-- C6：指标条本身不播报（每 2s 刷新会变成噪音）。只有「任务状态变化」
+     经这里推给读屏 —— 文本不变就不写，所以不会反复出声。 -->
+<div id="sr-status" class="sr-only" role="status" aria-live="polite"></div>
 </main>
 
 <footer>GleamLM WebUI · https://github.com/philexohf/gleamlm</footer>
@@ -169,11 +282,11 @@
       <label>背景图
         <select id="look-bg">
           <option value="none">无</option>
-          <option value="night">luna_logo</option>
-          <option value="night2">luna_night</option>
+          <option value="night">gleamlm-title2</option>
+          <option value="night2">luna_night2</option>
         </select>
       </label>
-      <label style="display:flex;gap:10px;align-items:center">图案透明度
+      <label style="display:flex;gap:8px;align-items:center">图案透明度
         <input id="look-alpha" type="range" min="0" max="0.85" step="0.05" value="0" style="flex:1" />
         <span id="look-alpha-val" style="width:32px;text-align:right;color:var(--text)">0</span>
       </label>

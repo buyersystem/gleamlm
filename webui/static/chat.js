@@ -9,25 +9,78 @@ const chat = {
   ctrl: null,   // AbortController（生成中再次点发送 = 停止）
 };
 
+/* P6：「新训练」徽章 —— 24 小时内产出的 checkpoint。
+   mtime 是后端给的 "YYYY-MM-DD HH:MM" 字符串，手动解析（各浏览器对
+   这个格式的 Date 解析行为并不一致，不能直接 new Date(str)）。 */
+function isNewModel(mtime) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(String(mtime || ""));
+  if (!m) return false;
+  const t = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime();
+  return Date.now() - t < 24 * 3600 * 1000;
+}
+
+/* H22：列表里只显示日期 —— 260px 面板下 "2026-09-11 14:13" 要占 156px，
+   而同一个 run 的各产物时间只差几分钟，精确到分的价值很低。
+   完整时间挪进 title（悬停可见），不丢信息。 */
+function shortDate(mtime) {
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(String(mtime || ""));
+  return m ? m[1] : String(mtime || "");
+}
+
 async function loadModels() {
-  const [m, st] = await Promise.all([
-    api("/api/models").catch(() => ({ groups: {} })),
-    api("/v1/models/status").catch(() => ({ loaded: false, model_path: "" })),
+  // 片一：allSettled 而非逐个 catch —— 要能区分「哪个端点失败」才能说出是哪个数据源。
+  // 失败不清空已渲染的列表（stale-but-usable），避免轮询闪烁。
+  const box0 = $("#chat-models");
+  const hadData = !!(box0 && box0.children.length);
+  const [mRes, stRes] = await Promise.allSettled([
+    api("/api/models"),
+    api("/v1/models/status"),
   ]);
+  if (mRes.status === "fulfilled") {
+    chat.modelsErr = "";
+    clearFetchFail("chat-models");
+  } else {
+    chat.modelsErr = (mRes.reason && mRes.reason.message) || "请求失败";
+    noteFetchFail("chat-models", hadData);
+  }
+  const m = mRes.status === "fulfilled" ? mRes.value : { groups: {} };
+  const st = stRes.status === "fulfilled" ? stRes.value : { loaded: false, model_path: "" };
   const stPath = String(st.model_path || "").replace(/\\/g, "/");
   if (!chat.model && st.loaded) chat.model = stPath.split("/").pop(); // 刷新后只认 basename
   const cur = st.loaded ? stPath.split("/").pop() : "";
-  $("#chat-cur").textContent = st.loaded
-    ? stPath.split("/").slice(-2).join("/")
-    : "未加载";
-  $("#chat-cur").title = stPath;
+  // P5：模型状态条 —— 当前模型 / 设备 / 参数量集中一处（原来是只有 basename 的裸文字）
+  const nameEl = $("#chat-cur");
+  if (nameEl) {
+    nameEl.textContent = st.loaded ? cur : "未加载";
+    nameEl.title = stPath;
+  }
+  const devEl = $("#chat-dev");
+  if (devEl) devEl.textContent = st.loaded ? String(st.device || "") : "";
+  const subEl = $("#chat-sub");
+  if (subEl) {
+    // H22：原先拼的是**完整路径**，而 #chat-cur 已经显示了 basename → 重复且过长。
+    // 改为只显示所在目录；完整路径仍在 title（nameEl 与 subEl 都有）。
+    const stDir = stPath.split("/").filter(Boolean).slice(0, -1).join("/") || stPath;
+    subEl.textContent = st.loaded
+      ? `${st.params_m ? st.params_m + "M 参数 · " : ""}${stDir}`
+      : "选择左侧 checkpoint 并加载";
+    subEl.title = stPath;
+  }
   const groups = m.groups || {};
   const box = $("#chat-models");
   const vks = Object.keys(groups);
   if (!vks.length) {
-    box.innerHTML =
-      '<div class="hint" style="padding:14px 4px">checkpoints/ 下暂无 .pt<br/>' +
-      "训练产出后点「刷新」即时出现</div>";
+    // 片一：失败态优先于空态 —— 否则「读取失败」会被说成「checkpoints/ 下暂无 .pt」
+    if (isLinkDown()) {
+      box.innerHTML = '<div class="hint sm">与后端失联 —— 恢复后自动加载</div>';
+    } else if (failShown("chat-models")) {
+      box.innerHTML = failHtml(`无法读取 checkpoint 列表 · ${chat.modelsErr}`);
+      bindRetry(box, () => loadModels());
+    } else {
+      box.innerHTML =
+        '<div class="hint sm">checkpoints/ 下暂无 .pt<br/>' +
+        "训练产出后点「刷新」即时出现</div>";
+    }
     return;
   }
   box.innerHTML = vks
@@ -36,16 +89,22 @@ async function loadModels() {
         .map((f) => {
           const name = f.stage ? `${f.stage}/${f.name}` : f.name;
           const on = st.loaded && cur === f.name;
-          return `<div class="list-item ${on ? "on" : ""}" title="${esc(f.path)}"
+          const badge = isNewModel(f.mtime)
+            ? '<span class="badge-new" title="24 小时内产出">新训练</span>'
+            : "";
+          return `<div class="list-item ckpt ${on ? "on" : ""}" title="${esc(f.path)} · ${esc(f.mtime)}"
      data-path="${esc(f.path)}">
-    <span class="name" style="flex:1;overflow:hidden;text-overflow:ellipsis">${esc(name)}</span>
-    <span class="sub" style="white-space:nowrap">${f.size_mb}MB · ${esc(f.mtime)}</span>
+    <div class="ck-name">
+      <span class="name">${esc(name)}</span>
+      ${badge}
+    </div>
+    <span class="sub">${f.size_mb}MB · ${shortDate(f.mtime)}</span>
     <button class="btn sm ${on ? "ghost" : ""}" type="button" data-load="${esc(f.path)}">${on ? "已加载" : "加载"}</button>
   </div>`;
         })
         .join("");
       return `<div class="p-body pad0">
-    <div style="padding:6px 10px 2px;font-size:12px;color:var(--warn)">◈ ${esc(v)}</div>
+    <div style="padding:8px 8px 4px;font-size:12px;color:var(--warn)">◈ ${esc(v)}</div>
     ${rows}
   </div>`;
     })
@@ -77,11 +136,13 @@ async function loadModel(path, btn) {
     });
     chat.model = path;
     await loadModels(); // 刷新列表高亮 + 状态行
-    pushMsg("ok", `模型已加载：${path}（对话参数沿用上方滑杆/输入框）`);
+    // E9：加载结果不进对话流 —— 它不是一个对话轮次；且 .msg.ok 没有对应样式
+    // （原先就是无底无边的裸文字，插在气泡之间）。改用右上角 toast。
+    toast(`模型已加载：${path}`, "ok", 5200);
   } catch (err) {
     btn.disabled = false;
     btn.textContent = old;
-    pushMsg("error", `加载失败：${err.message}`);
+    toast(`加载失败：${err.message}`, "err", 7000);
   }
 }
 
@@ -100,8 +161,71 @@ function pushMsg(kind, text, streaming) {
   bubble.textContent = text;
   wrap.appendChild(bubble);
   $("#chat-scroll").appendChild(wrap);
+  // P7：助手回合带操作行（复制 / 重生成 / 删除）—— 默认隐藏，悬停或键盘聚焦时显形
+  if (kind === "assistant") buildActs(wrap, bubble);
   scrollChat();
   return bubble;
+}
+
+/* P7：气泡与 chat.convs 的下标对应。
+   convs 只存 user/assistant，顺序与 #chat-scroll 里这两类气泡完全一致；
+   error 气泡不入 convs，也不在选择器内 —— 所以「第几个气泡」就是「convs 第几条」。 */
+function convIndexOf(wrap) {
+  return $$("#chat-scroll .msg.user, #chat-scroll .msg.assistant").indexOf(wrap);
+}
+
+function buildActs(wrap, bubble) {
+  const acts = document.createElement("div");
+  acts.className = "msg-acts";
+  const add = (label, title, fn) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", fn);
+    acts.appendChild(b);
+  };
+  add("复制", "复制这条回复", async () => {
+    try {
+      await navigator.clipboard.writeText(bubble.textContent || "");
+      toast("已复制");
+    } catch (_) {
+      toast("复制失败（浏览器未授权剪贴板）", "err");
+    }
+  });
+  add("重生成", "删掉这一轮及之后的对话，对同一个提问重新生成", () => regenerateAt(wrap));
+  add("删除", "删除这一轮问答", () => deleteTurnAt(wrap));
+  wrap.appendChild(acts);
+}
+
+function deleteTurnAt(wrap) {
+  if (chat.busy) {
+    toast("生成中，请先停止再删除", "err");
+    return;
+  }
+  const i = convIndexOf(wrap);
+  if (i < 0) return;
+  const bubbles = $$("#chat-scroll .msg.user, #chat-scroll .msg.assistant");
+  if (i - 1 >= 0) bubbles[i - 1].remove(); // 配对的提问
+  bubbles[i].remove();
+  chat.convs.splice(Math.max(0, i - 1), 2);
+  toast("已删除该轮问答");
+}
+
+/* 重生成该轮：截断到这一轮之前，再对同一个提问走一遍完整发送流程 */
+async function regenerateAt(wrap) {
+  if (chat.busy) {
+    toast("生成中，请先停止再重生成", "err");
+    return;
+  }
+  const i = convIndexOf(wrap);
+  if (i < 0) return;
+  const ask = chat.convs[i - 1];
+  if (!ask || ask.role !== "user") return;
+  const bubbles = $$("#chat-scroll .msg.user, #chat-scroll .msg.assistant");
+  for (let k = i - 1; k < bubbles.length; k++) bubbles[k].remove(); // 该轮及其之后全移除
+  chat.convs = chat.convs.slice(0, i - 1);
+  await doSend(ask.content);
 }
 
 function scrollChat() {
@@ -145,7 +269,7 @@ async function readSseStream(resp, onDelta) {
   return full;
 }
 
-async function sendChat(e) {
+function sendChat(e) {
   e.preventDefault();
   if (chat.busy) {
     // 生成中再点发送 = 停止
@@ -159,10 +283,16 @@ async function sendChat(e) {
     pushMsg("error", "请先在左侧模型列表选择一个 checkpoint 并加载");
     return;
   }
-  chat.convs.push({ role: "user", content: text });
-  pushMsg("user", text);
   ta.value = "";
   autoGrow(ta);
+  doSend(text); // 不 await：submit 立即返回，避免表单被卡住
+}
+
+/* P7：从「一条用户输入」开始跑完整一轮。抽出来是为了让「重生成」复用 ——
+   它先截断到该轮之前，然后走完全同一条路径。 */
+async function doSend(text) {
+  chat.convs.push({ role: "user", content: text });
+  pushMsg("user", text);
   const sendBtn = $("#chat-send");
   chat.busy = true;
   sendBtn.textContent = "停止";
@@ -257,7 +387,30 @@ function initChat() {
       "左侧选择 checkpoint 并点「加载」；下方输入开始对话，Enter 发送，Shift+Enter 换行。</div>";
   });
   $("#chat-refresh").addEventListener("click", () => loadModels());
+  // P8：采样参数重置（默认值与 serve/api.py 的请求默认值对齐）
+  $("#chat-reset").addEventListener("click", () => {
+    const DEFAULTS = {
+      temp: "0.8",
+      "chat-topk": "50",
+      "chat-topp": "0.9",
+      "chat-rep": "1.15",
+      "chat-maxtok": "256",
+    };
+    for (const [id, v] of Object.entries(DEFAULTS)) {
+      const el = document.getElementById(id);
+      if (el) el.value = v;
+    }
+    const tv = $("#temp-val");
+    if (tv) tv.textContent = DEFAULTS.temp;
+    toast("采样参数已重置为默认值");
+  });
   loadModels().catch(() => {});
+  // 片二：切到推理页时重拉模型列表 —— 两个训练页早就有 tabchange
+  // 监听（pretrain.js / posttrain.js），只有这里缺；后果是训练完切过来看不到新产的
+  // checkpoint，必须刷新页面。（loadModels 内部已有失败态，这里不用再兜）
+  window.addEventListener("tabchange", (e) => {
+    if (e.detail === "inference") loadModels().catch(() => {});
+  });
 }
 
 document.addEventListener("DOMContentLoaded", initChat);

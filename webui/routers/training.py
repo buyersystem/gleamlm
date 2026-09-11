@@ -747,6 +747,15 @@ _VAL_RE = re.compile(r"Val step (\d+): loss=([\d.eE+-]+)  ppl=([\d.eE+-]+)")
 # 且后跟 ->, 宽松正则会把 lr 捕获成 '-' 导致 float 崩溃杀死解析线程。
 _TQDM_RE = re.compile(r"loss=([\d.eE+-]+),\s*lr=([\d.eE+-]+)")
 _STEP_RE = re.compile(r"(\d+)/(\d+) \[")
+# 后训练各阶段专属指标（设计文档 §7.3）: DPO 的 margin/acc、GRPO/PPO 的 reward/kl。
+# **许可名单而非通配** —— 通配会把 tqdm 帧里将来任何 k=v 都当指标入库（含噪声）。
+# 训练侧只要在 set_postfix 里多打印一个键，面板即自动可见（本文件之外零改动）。
+# 注意: 值用严格浮点模式, 避免 "margin=-" 这类残帧把整行解析炸掉。
+_EXTRA_KEYS = ("margin", "acc", "reward", "kl", "len")
+_EXTRA_RE = re.compile(
+    r"(?<![A-Za-z0-9_])(" + "|".join(_EXTRA_KEYS) + r")="
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+)
 
 
 def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int, float]]:
@@ -773,6 +782,12 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
                         out.append(("tok_per_sec", step, float(rec["tok_per_s"])))
                     if rec.get("gpu_mem") is not None:
                         out.append(("gpu_mem", step, float(rec["gpu_mem"])))
+                    # H4：后训练阶段专属指标（DPO 的 margin/acc、GRPO/PPO 的 reward/kl）。
+                    # 键名与 _EXTRA_KEYS 同一份名单 —— 哨兵与正则回退两条路产出的键必须一致，
+                    # 否则同一指标会因来源不同而落在不同的键上。
+                    for _ek in _EXTRA_KEYS:
+                        if rec.get(_ek) is not None:
+                            out.append((_ek, step, float(rec[_ek])))
                 total = int(rec.get("total") or 0)
                 if total > 0:
                     run.total_steps = total
@@ -808,6 +823,9 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
                 step = int(s.group(1)) if s else fallback_step + 1
                 fallback_step = step
                 out += [("loss", step, float(loss)), ("lr", step, float(lr))]
+                # 专属指标: 只在日志里真的出现时才产出（缺失 → 前端静默回落）
+                for ekey, eval_ in _EXTRA_RE.findall(line):
+                    out.append((ekey, step, float(eval_)))
         except (ValueError, TypeError, KeyError):
             # 单行解析失败（脏行/畸形帧/哨兵行缺字段）只丢弃该行, 不杀解析线程 ——
             # 否则面板指标管线会在长跑中途整体死掉。

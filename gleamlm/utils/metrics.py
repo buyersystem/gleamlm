@@ -12,6 +12,15 @@
   lr        float — 当前学习率
   tok_per_s float — 吞吐（tok/s）
   gpu_mem   float — 进程显存占用（GiB）
+  margin    float — DPO 隐式奖励间隔 β·mean((logπc−logπref_c)−(logπr−logπref_r))
+  acc       float — 上式的排序正确率（term>0 的配对占比）
+  reward    float — GRPO/PPO 的平均奖励（尚未有脚本产出）
+  kl        float — GRPO/PPO 的 KL 散度（尚未有脚本产出）
+  len       float — 平均响应长度（尚未有脚本产出）
+
+**键名即契约**：解析侧的许可名单在 `webui/routers/training.py::_EXTRA_KEYS`，
+两条通道（哨兵 / tqdm 正则回退）共用同一份。未知键会被静默忽略 ——
+写错键名不会报错、只会不显示，所以新指标要同时改这里与 _EXTRA_KEYS。
 
 WebUI 解析侧（webui/routers/training.py::_parse_metric_lines）优先消费哨兵行
 （结构化、零正则），未命中时回退旧格式正则 —— 哨兵行之前的老日志重放不受影响。

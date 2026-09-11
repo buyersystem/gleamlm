@@ -310,6 +310,18 @@ def main() -> None:
                     lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
                 pbar.set_postfix({"loss": f"{loss.item() * denom:.4f}", "lr": f"{cur_lr:.2e}"})
+                # DPO 专属监控量（设计文档 §7.3）。定义与 dpo_loss 自洽, 不另发明量:
+                #   term   = (logπ_c - logπ_ref_c) - (logπ_r - logπ_ref_r)
+                #   margin = β · mean(term)     ← loss = -logsigmoid(β·term) 的 pre-sigmoid 值,
+                #                                  正 = 偏好 chosen, 与 loss 一一对应
+                #   acc    = mean(term > 0)     ← chosen 隐式奖励高于 rejected 的配对占比
+                # 只在日志步计算（no_grad, 不进入训练路径）。
+                # **不放进 set_postfix**: tqdm 帧的 N/M 是 dataloader 位置而非 global_step,
+                # 经正则回退路径入库会落在错的 x 上 —— 所以只走哨兵（step 由下面显式给出）。
+                with torch.no_grad():
+                    _term = (policy_cho - ref_cho) - (policy_rej - ref_rej)
+                    dpo_margin = (beta * _term).mean().item()
+                    dpo_acc = (_term > 0).float().mean().item()
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
                 # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）
                 emit_metric(
@@ -318,6 +330,8 @@ def main() -> None:
                     total=total_steps,
                     loss=loss.item() * denom,
                     lr=cur_lr,
+                    margin=dpo_margin,
+                    acc=dpo_acc,
                 )
 
         epoch_loss /= max(n_batches, 1)
