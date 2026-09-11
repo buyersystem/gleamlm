@@ -14,7 +14,7 @@
   gpu_mem   float — 进程显存占用（GiB）
   margin    float — DPO 隐式奖励间隔 β·mean((logπc−logπref_c)−(logπr−logπref_r))
   acc       float — 上式的排序正确率（term>0 的配对占比）
-  reward    float — GRPO/PPO 的平均奖励（尚未有脚本产出）
+  reward    float — GRPO/PPO 的平均奖励（GRPO 已产出；PPO 尚未）
   kl        float — GRPO/PPO 的 KL 散度（尚未有脚本产出）
   len       float — 平均响应长度（尚未有脚本产出）
 

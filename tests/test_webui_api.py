@@ -451,6 +451,35 @@ def test_dedup_points_filters_flushed_steps():
     assert T._dedup_points(pts, {"loss": 3}) == [("loss", 4, 1.1)]
 
 
+# ── H19: 哨兵出现后关闭 tqdm 帧回退 ──────────────────────────────────
+def test_sentinel_closes_tqdm_fallback():
+    """H19: 见过哨兵后 tqdm 帧不再产点。
+
+    帧 step 是 dataloader 位置（N/M 的 N）—— accumulate_grad>1 时比哨兵
+    global_step 大 accumulate 倍且先到, 会以「已写最大 step」把哨兵点滤掉;
+    见哨兵即关回退, x 轴回到 global_step 单刻度。
+    """
+    run = T.TrainRun(T.TrainStartRequest(task="probe"), ["echo"], "t_h19")
+    lines = [
+        # 首个哨兵之前: 帧照常入列（哨兵之前的老日志兼容窗口）
+        "4/100 [00:01<00:25, 3.9it/s, loss=1.5000, lr=5.00e-07]",
+        '@@GLEAM_METRIC {"split":"train","step":1,"total":25,"loss":1.5,"lr":5e-07,"reward":0.25}',
+        # 哨兵之后: 帧必须退场（否则 dataloader 位置的 8/12 会挤掉后续哨兵点）
+        "8/100 [00:02<00:24, 3.9it/s, loss=1.4000, lr=5.00e-07]",
+        "12/100 [00:03<00:23, 3.9it/s, loss=1.3000, lr=5.00e-07]",
+    ]
+    pts = T._parse_metric_lines(run, lines)
+    assert {s for k, s, _ in pts if k == "loss"} == {4, 1}
+    assert ("reward", 1, 0.25) in pts  # 契约字段直接入列（grpo 的 reward 走这里）
+
+
+def test_tqdm_fallback_kept_for_legacy_logs():
+    """无哨兵的老日志: 帧回退照常（H19 修复只对「见过哨兵」的 run 生效）。"""
+    run = T.TrainRun(T.TrainStartRequest(task="probe"), ["echo"], "t_h19b")
+    pts = T._parse_metric_lines(run, ["3/50 [00:01<00:20, 4.0it/s, loss=2.0000, lr=1.00e-04]"])
+    assert ("loss", 3, 2.0) in pts and ("lr", 3, 1e-4) in pts
+
+
 # ── 推理 ─────────────────────────────────────────────────────────────
 def test_inference_unloaded_guards(api):
     assert api.get("/v1/models/status").json()["loaded"] is False

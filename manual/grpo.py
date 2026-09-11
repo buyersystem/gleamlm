@@ -36,6 +36,7 @@ from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.trainer.rl_trainer import compute_reward, grpo_loss
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
+from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
 
@@ -184,6 +185,17 @@ def train(args):
                 print(
                     f"{global_step}/{len(loader) * args.epochs} [loss={total_loss.item():.4f}, lr={args.lr:.2e}]",
                     flush=True,
+                )
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
+                # 不再依赖手工帧格式; reward 为组内平均奖励（§7.3 的 GRPO 监控量,
+                # 与优势同源, 无额外前向开销）
+                emit_metric(
+                    split="train",
+                    step=global_step,
+                    total=len(loader) * args.epochs,
+                    loss=total_loss.item(),
+                    lr=args.lr,
+                    reward=rewards.mean().item(),
                 )
             global_step += 1
 

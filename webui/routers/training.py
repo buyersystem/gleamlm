@@ -644,6 +644,7 @@ class TrainRun:
         self.last_metric: dict[str, float] = {}
         self._stop_requested = False
         self._last_step = 0  # tqdm 行缺 step 时的帧计数器
+        self._sentinel_seen = False  # 已解析到哨兵行 → 关闭 tqdm 帧回退（H19）
         self.total_steps: int | None = None  # 日志式行 step N/M 的 M（lr 图 WSD 阶段线坐标）
 
     def summary(self) -> dict:
@@ -734,6 +735,10 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
 #  - 预训练 --no-pbar 日志式:  step N/M (pct%)  loss=.. lr=.. Xk tok/s  GPU:u/tG
 #  - SFT/DPO tqdm 帧(\r 行):   N/M [..it/s, loss=.., lr=..]   （管道下每帧完整一行）
 #    上述两条为回退路径: 哨兵行之前的老日志重放不受影响。
+#  H19: 同一 run 见过哨兵后, tqdm 帧回退关闭 —— 帧 step 取 N/M 的 N（dataloader
+#  位置）, accumulate>1 时比哨兵 global_step 大 accumulate 倍且先到, 会以「每 key
+#  已写最大 step」把哨兵点滤掉（曲线/ETA 跟着 dataloader 位置走）; --no-pbar
+#  日志式与哨兵同为真步坐标, 不受此限。
 _PT_RE = re.compile(
     r"step (\d+)/(\d+) \([\d.]+%\)  loss=([\d.eE+-]+)  lr=([\d.eE+-]+)  "
     r"([\d.]+)k tok/s(?:  GPU:([\d.]+)/[\d.]+G)?"
@@ -767,6 +772,7 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
             rec = parse_metric_line(line)
             if rec is not None:
                 # 哨兵行: 结构化直接入列, 不走正则
+                run._sentinel_seen = True  # H19: 帧回退从此对该 run 关闭（见 _TQDM_RE 分支）
                 step = int(rec["step"])
                 if rec.get("split") == "val":
                     out += [
@@ -818,6 +824,10 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
                 continue
             m = _TQDM_RE.search(line)
             if m:
+                # H19: 帧 step 是 dataloader 位置, 与哨兵 global_step 不同源 ——
+                # 见过哨兵后帧退场（无哨兵的老日志回退照常, 见文件头格式说明）
+                if run._sentinel_seen:
+                    continue
                 loss, lr = m.groups()
                 s = _STEP_RE.search(line)
                 step = int(s.group(1)) if s else fallback_step + 1
