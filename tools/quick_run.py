@@ -22,6 +22,24 @@ TEST_DATA_DIR = "data/smoke_splits"
 TEST_CKPT_DIR = "checkpoints_smoke"
 
 
+def conda_env_usable(name):
+    """探测 conda 环境是否可用：conda 未安装 / 环境不存在都算不可用。
+
+    用于 --conda_env 的回退判断——默认值是本机环境名，他人 clone 后通常没有该环境，
+    直接 conda run -n 会以 non-zero 退出，脚本开箱即失败。
+    """
+    try:
+        r = subprocess.run(
+            ["conda", "run", "-n", name, "python", "-c", ""],
+            capture_output=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # OSError 含 FileNotFoundError：conda 本身不在 PATH
+        return False
+    return r.returncode == 0
+
+
 def run(cmd, desc="", conda_env="dl2llm"):
     if conda_env:
         cmd = f"conda run -n {conda_env} {cmd}"
@@ -87,9 +105,18 @@ def main():
         "--conda_env",
         type=str,
         default="dl2llm",
-        help="conda 环境名 (默认: dl2llm，传空字符串则不使用 conda)",
+        help="conda 环境名 (默认: dl2llm；该环境不存在时自动回退到当前解释器，传空字符串则不用 conda)",
     )
     args = parser.parse_args()
+
+    # 回退：指定的 conda 环境若不可用（他人 clone 后默认的 "dl2llm" 通常不存在），
+    # 改用当前解释器直接运行，避免开箱即失败。显式指定且可用的环境不受影响。
+    if args.conda_env and not conda_env_usable(args.conda_env):
+        print(
+            f"[!] conda 环境 '{args.conda_env}' 不可用，改用当前解释器直接运行。\n"
+            f'    （指定其它环境: --conda_env <名称>；完全不使用 conda: --conda_env ""）'
+        )
+        args.conda_env = ""
 
     v = args.variant
     ckpt_dir = f"checkpoints/{v}"

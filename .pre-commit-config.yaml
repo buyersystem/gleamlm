@@ -9,7 +9,14 @@ repos:
     rev: v2.2.0
     hooks:
       # language: system — 直接复用项目 conda 环境(已装 mypy/torch/numpy)，
-      # 避免独立 venv 重复下载 torch(~2GB)。CI 亦用同一环境跑 mypy，无漂移。
+      # 避免独立 venv 重复下载 torch(~2GB)。
+      #
+      # 注意：language: system 下 rev **不生效**——钩子跑的是 PATH 上的 mypy，
+      # 不是按 rev 建的 venv。因此 pyproject 的 dev extra 必须把 mypy 固定为
+      # 同一版本(mypy==2.2.0)并声明同一套 stub(types-PyYAML)，否则 CI(只装
+      # dev extra)与本地(开发者环境)会用不同工具，出现"本地绿 / CI 红"。
+      # 2026-09-11 实测：CI 缺 types-PyYAML 时 mypy 报
+      #   gleamlm/utils/config.py:20: Library stubs not installed for "yaml"
       #
       # pass_filenames: false — 只对 gleamlm/ 包做 mypy 门禁。mypy 的 --exclude
       # 只作用于"发现"的文件, 对显式传入的路径不生效; 而 pre-commit 默认把

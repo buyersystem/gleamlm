@@ -39,9 +39,20 @@ dev = [
     "pytest",
     "pytest-cov",
     "tensorboard>=2.21",
-    "ruff>=0.15",
-    "mypy>=2.0",
+    # ruff / mypy 与 .pre-commit-config.yaml 的 rev 精确对齐（单一事实来源）。
+    # 原先只写下限（ruff>=0.15 / mypy>=2.0），CI 会解析到更新的版本，导致同一个
+    # 门禁在本地与 CI 用不同工具：如 ruff 0.16 起 `ruff format` 会一并格式化
+    # Markdown 代码块，使 CI 的 `ruff format --check .` 与本地 0.15.20 结论不一致。
+    "ruff==0.15.20",
+    "mypy==2.2.0",
     "pre-commit>=4.0",
+    # mypy strict 会对"已安装但缺 py.typed"的库报 import-untyped。
+    # PyYAML 的官方 stub 必须在此显式声明：它此前只存在于开发者本机环境，
+    # 所以本地 `mypy gleamlm/` 全绿、CI 却必然失败：
+    #   gleamlm/utils/config.py:20: error: Library stubs not installed for "yaml"
+    # （mypy 门禁自 2026-09-07 起因排在 ruff 之后被静默 skip，从未在 CI 跑过；
+    #   2026-09-11 修正步骤顺序后，该缺口第一次暴露。）
+    "types-PyYAML>=6.0",
 ]
 data = [
     "pandas",
