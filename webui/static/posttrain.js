@@ -36,7 +36,9 @@ function pt2RunList() {
 
 function liveTaskId() {
   const st = trainer.run || {};
-  return st.task && st.task !== "pretrain" ? st.run_id : null;
+  // 仅 running 时才算 live（同 livePretrainId: 已结束 run 不得再视为 live，
+  // 否则拦掉回放、列表误挂 LIVE 徽章）
+  return st.task && st.task !== "pretrain" && st.running ? st.run_id : null;
 }
 
 /* ── 阶段卡 ── */

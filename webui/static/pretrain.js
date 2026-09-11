@@ -26,7 +26,9 @@ function ptRunList() {
 
 function livePretrainId() {
   const st = trainer.run || {};
-  return st.task === "pretrain" && st.run_id ? st.run_id : null;
+  // 仅 running 时才算 live: 训练结束后 run_id 仍留在 status 里, 不检查会把
+  // 已完成的 run 继续当 live —— 拦掉 setMain 的日志回放、列表误挂 LIVE 徽章
+  return st.task === "pretrain" && st.running ? st.run_id : null;
 }
 
 /* ── 事件接入 ── */
@@ -43,7 +45,7 @@ function onStatus(st) {
     pt.live = false;
     renderStatusLine();
   }
-  if (liveId && st.running === false && pt.live) {
+  if (st.task === "pretrain" && st.run_id && !st.running && pt.live) {
     pt.live = false; // 刚结束的 pretrain run：曲线保留最后一帧
     renderStatusLine();
     loadRuns(false);

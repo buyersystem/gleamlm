@@ -36,7 +36,11 @@ const trainer = {
     await this.refreshCandidates();
     if (st && st.run_id) {
       this.run = st;
-      this.bindRun(st.run_id, st.running === true, false);
+      if (st.running === true) {
+        this.bindRun(st.run_id, true, false);
+      } else {
+        this.replay(st.run_id); // 刚结束的 run：自动回放日志（只读），刷新即见
+      }
     }
     // 日志面板重绑（后端重启后 run 丢了但日志文件在: status 返回 running=false
     // 且无 run_id 时，runs 里最后一条 unfinished 的可手动点开重放 — 见各 tab）
@@ -254,6 +258,7 @@ const trainer = {
     this._sseGen++; // 换代: 在途旧连接（含其 exit/finally）不得污染本次回放
     if (this._sseCtl) this._sseCtl.abort();
     this._alive = false;
+    this.clearLog(); // 重放前清空日志面板：跨 run 点击不堆叠、重复回放不翻倍
     this.emit("metric", null); // 各 tab 切换主曲线数据源
     this.pollMetrics(runId);
     this.connectSse();
