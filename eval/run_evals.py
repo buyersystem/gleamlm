@@ -28,7 +28,10 @@ def _build_hf_tokenizer(tokenizer_dir: str, output_dir: str) -> PreTrainedTokeni
 
 
 def evaluate_from_ckpt(
-    ckpt_path: str, tasks: list[str], output_dir: str, limit: int | None = None,
+    ckpt_path: str,
+    tasks: list[str],
+    output_dir: str,
+    limit: int | None = None,
     tokenizer_dir: str | None = None,
 ) -> dict:
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)

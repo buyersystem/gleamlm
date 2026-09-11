@@ -27,7 +27,9 @@ jobs:
       # 那 18 个用例在 CI 中永远不会执行，而 pytest 步骤仍显示为绿（假绿）。
       - run: pip install -e ".[dev,hf,serve]"
 
-      - run: python -m pytest tests/ -v --cov=gleamlm --cov-report=term
+      # --cov-fail-under=60：实测总覆盖率 66%（3476 stmts / 1186 missed，2026-09 Windows+py3.12），
+      # 留 6pp 余量以适应跨 OS / Python 版本差异。覆盖率此前只打印不拦截，等于没有回归保护。
+      - run: python -m pytest tests/ -v --cov=gleamlm --cov-report=term --cov-fail-under=60
 
       # mypy 必须排在 ruff 之前：ruff 是纯 lint，一旦它失败，排在后面的步骤
       # 会被 GitHub Actions 直接 skipped。曾因此导致类型门禁自 2026-09-07 起
@@ -35,3 +37,8 @@ jobs:
       - run: python -m mypy gleamlm/
 
       - run: ruff check
+
+      # 格式门禁：pre-commit 的 ruff-format 只作用于**暂存文件**（增量），
+      # 未被触碰的文件格式违规永远不会暴露——2026-09 之前因此累积了 11 个未格式化文件。
+      # CI 全仓检查格式，才能兜住 pre-commit 结构上看不见的存量。
+      - run: ruff format --check .

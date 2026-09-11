@@ -22,7 +22,10 @@ def truncate_news(input_path: str, output_path: str, max_len: int = 400) -> None
     buf: list[str] = []
     buf_len = 0
 
-    with open(input_path, encoding="utf-8") as fin, open(output_path, "w", encoding="utf-8") as fout:
+    with (
+        open(input_path, encoding="utf-8") as fin,
+        open(output_path, "w", encoding="utf-8") as fout,
+    ):
         for line in fin:
             total += 1
             text = line.strip()

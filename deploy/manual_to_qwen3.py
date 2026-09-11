@@ -43,7 +43,7 @@ def convert(gleamlm_ckpt: str, output_dir: str, tokenizer_dir: str | None) -> st
     ckpt = torch.load(gleamlm_ckpt, map_location="cpu", weights_only=False)
     sd = ckpt.get("model_state_dict", ckpt.get("model", ckpt))
     if any(k.startswith("module.") for k in sd):
-        sd = {k[len("module."):]: v for k, v in sd.items()}
+        sd = {k[len("module.") :]: v for k, v in sd.items()}
     if not any(k.startswith("model.") for k in sd):
         sd = {f"model.{k}": v for k, v in sd.items()}
 
@@ -112,16 +112,20 @@ def convert(gleamlm_ckpt: str, output_dir: str, tokenizer_dir: str | None) -> st
         BBPETokenizer.load(tokenizer_dir).export_to_hf_format(output_dir)
 
     print(f"手工轨 → Qwen3 HF 导出完成: {gleamlm_ckpt} → {output_dir}")
-    print(f"  {cfg['num_layers']}L × {cfg['d_model']}d, "
-          f"GQA {cfg['num_heads']}/{cfg['num_kv_heads']}, "
-          f"ffn {cfg['d_ff']}, head_dim {head_dim}")
+    print(
+        f"  {cfg['num_layers']}L × {cfg['d_model']}d, "
+        f"GQA {cfg['num_heads']}/{cfg['num_kv_heads']}, "
+        f"ffn {cfg['d_ff']}, head_dim {head_dim}"
+    )
     print(f"  {len(hf_sd)} 个权重键（lm_head 省略，tied 由 config 重建）")
     return output_dir
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="手工轨 checkpoint → Qwen3 HF (vLLM)")
-    p.add_argument("--input", required=True, help="手工轨 checkpoint .pt (sft_best.pt / dpo_best.pt)")
+    p.add_argument(
+        "--input", required=True, help="手工轨 checkpoint .pt (sft_best.pt / dpo_best.pt)"
+    )
     p.add_argument("--output", required=True, help="输出目录")
     p.add_argument("--tokenizer-path", default=None, help="BBPE tokenizer 目录")
     args = p.parse_args()

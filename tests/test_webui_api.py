@@ -197,6 +197,13 @@ def test_builtin_write_forbidden(api):
 
 def test_config_copy_save_roundtrip(api):
     dest = "my_configs/_ft_probe_nano.yaml"
+    # 预清理：本测试首步 copy 依赖 dest「不存在」。
+    # 若上一次运行被中断（Ctrl-C / 进程被杀 / 沙箱拦截），finally 不会执行，
+    # 遗留的 dest 会让首步误判重名返回 409，表现为与本改动无关的假失败。
+    # 只在 finally 里清理不够——必须在开始前也清一次，测试才是幂等的。
+    leftover = os.path.join(T.ROOT_DIR, dest)
+    if os.path.exists(leftover):
+        os.remove(leftover)
     try:
         r = api.post(
             "/api/config/copy",

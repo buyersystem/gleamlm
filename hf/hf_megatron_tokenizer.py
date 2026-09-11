@@ -32,9 +32,7 @@ class MegatronBBPETokenizer(MegatronTokenizerBase):
         self.eos = tokenizer.eos_id
         self.bos = tokenizer.bos_id
         # megatron 检查 pad 是否与其他特殊 token 冲突（_PAD_TOKEN_ID 兜底）
-        self.special_tokens_dict = {
-            k: v for k, v in tokenizer.special_tokens.items()
-        }
+        self.special_tokens_dict = {k: v for k, v in tokenizer.special_tokens.items()}
 
     @property
     def vocab_size(self) -> int:

@@ -1,4 +1,3 @@
-
 """LoRA + SFT 微调脚本 — PEFT LoRA 注入 + TRL SFTTrainer。
 
 用法:
@@ -59,8 +58,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
-    parser.add_argument("--tokenizer_path", type=str, default=None,
-                        help="Directory with tokenizer.json (HF format)")
+    parser.add_argument(
+        "--tokenizer_path", type=str, default=None, help="Directory with tokenizer.json (HF format)"
+    )
     return parser.parse_args()
 
 

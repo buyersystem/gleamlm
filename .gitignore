@@ -74,6 +74,11 @@ AGENTS.md
 # Pytest cache
 .pytest_cache/
 
+# Coverage（本地跑 pytest --cov 的产物；CI 只打印报告不落盘）
+.coverage
+.coverage.*
+htmlcov/
+
 # Temporary files
 *.log
 temp_*

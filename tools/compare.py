@@ -18,9 +18,7 @@ def compare_runs(
     tracker = ExperimentTracker("_compare", db_path=db_path)
     results = {}
     for rid in run_ids:
-        config_data = tracker._conn.execute(
-            "SELECT config FROM runs WHERE id=?", (rid,)
-        ).fetchone()
+        config_data = tracker._conn.execute("SELECT config FROM runs WHERE id=?", (rid,)).fetchone()
         config = __import__("json").loads(config_data[0]) if config_data else {}
         metrics = tracker.get_metrics(rid, keys=metric_keys)
         results[rid] = {"config": config, "metrics": metrics}
