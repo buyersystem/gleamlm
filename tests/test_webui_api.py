@@ -257,8 +257,11 @@ def test_models_tree(api):
     for f in body["files"]:
         assert f["path"].startswith("checkpoints/") and "\\" not in f["path"]
         assert os.path.isfile(os.path.join(T.ROOT_DIR, f["path"]))
-    sft = next(f for f in body["files"] if f["name"] == "sft_best.pt")
-    assert sft["variant"] == "nano" and sft["stage"] == "sft" and sft["size_mb"] > 0
+    # 多变体并存: lite/pro 的 sft_best.pt 与 nano 同名, 不能无脑取第一个匹配
+    sft_files = [f for f in body["files"] if f["name"] == "sft_best.pt"]
+    sft = next((f for f in sft_files if f["variant"] == "nano"), None)
+    assert sft is not None, "models 树应含 nano 的 sft_best.pt"
+    assert sft["stage"] == "sft" and sft["size_mb"] > 0
 
 
 def test_task_registry(api):
@@ -478,6 +481,23 @@ def test_tqdm_fallback_kept_for_legacy_logs():
     run = T.TrainRun(T.TrainStartRequest(task="probe"), ["echo"], "t_h19b")
     pts = T._parse_metric_lines(run, ["3/50 [00:01<00:20, 4.0it/s, loss=2.0000, lr=1.00e-04]"])
     assert ("loss", 3, 2.0) in pts and ("lr", 3, 1e-4) in pts
+
+
+def test_epoch_summary_line_not_parsed_as_frame():
+    """回归: sft/dpo 的 epoch 汇总行不得命中帧回退。
+
+    “Epoch 0: train_loss=.., lr=..” 满足 loss=.., lr=.. 的逗号约束却不是帧——
+    曾以 fallback_step+1 作 step 产出假点（曲线 x 轴错位, 如 3355 假点）。
+    """
+    run = T.TrainRun(T.TrainStartRequest(task="probe"), ["echo"], "t_ep_sum")
+    lines = [
+        "4/100 [00:01<00:25, 3.9it/s, loss=1.5000, lr=5.00e-07]",
+        "Epoch 0: train_loss=2.8616, lr=7.80e-05",
+        "Epoch 1: dpo_loss=2.5360, lr=2.96e-05",
+    ]
+    pts = T._parse_metric_lines(run, lines)
+    assert [p for p in pts if p[0] == "loss"] == [("loss", 4, 1.5)]
+    assert [p for p in pts if p[0] == "lr"] == [("lr", 4, 5e-07)]
 
 
 # ── 推理 ─────────────────────────────────────────────────────────────

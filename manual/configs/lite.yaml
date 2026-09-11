@@ -76,12 +76,12 @@ advanced:
 
 # ---- SFT 微调 ----
 sft:
-  # 显式锁定（当前同 base 默认）；Lite 重训时按实测调整
+  # 显式锁定（batch_size 按 12G 卡显存下调）；Lite 重训时按实测调整
   # 数据与 nano 同源（data/<variant>/sft 为同一 sft_mix 拷贝，模型无关文本）;
   # sft_mix = 基础集 3,415 + QA→SFT 10,000（13,413 条）→ nano 基线 loss 2.6283
   epochs: 3
-  batch_size: 8
-  accumulate_grad: 4
+  batch_size: 4
+  accumulate_grad: 8
   lr: 1.0e-4
   lr_scheduler: cosine
   warmup_ratio: 0.02

@@ -750,7 +750,10 @@ _VAL_RE = re.compile(r"Val step (\d+): loss=([\d.eE+-]+)  ppl=([\d.eE+-]+)")
 # opd/grpo/ppo/sft_lora 手工帧均为 [loss=.., lr=..] 同构）。loss 后要求逗号
 # 是硬约束: pretrain 的 “Best model saved (val_loss=..) -> path” 行含 loss=..)
 # 且后跟 ->, 宽松正则会把 lr 捕获成 '-' 导致 float 崩溃杀死解析线程。
-_TQDM_RE = re.compile(r"loss=([\d.eE+-]+),\s*lr=([\d.eE+-]+)")
+# 前缀排除（负向后顾）: epoch 汇总行 “train_loss=.., lr=..”（sft）/“dpo_loss=..”
+# 同样满足逗号 + lr 约束却不是帧 —— 曾以 fallback_step+1 作 step 产出假点
+# （曲线 x 轴错位）, 带字词/下划线前缀的 loss 名一律不作帧。
+_TQDM_RE = re.compile(r"(?<![A-Za-z0-9_])loss=([\d.eE+-]+),\s*lr=([\d.eE+-]+)")
 _STEP_RE = re.compile(r"(\d+)/(\d+) \[")
 # 后训练各阶段专属指标（设计文档 §7.3）: DPO 的 margin/acc、GRPO/PPO 的 reward/kl。
 # **许可名单而非通配** —— 通配会把 tqdm 帧里将来任何 k=v 都当指标入库（含噪声）。
