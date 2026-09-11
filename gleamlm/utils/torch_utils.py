@@ -40,7 +40,9 @@ def safe_autocast(
         return
 
     if torch.cuda.is_available():
-        with torch.amp.autocast("cuda", dtype=dtype):  # type: ignore[attr-defined]
+        # 用顶层 torch.autocast（与 torch.amp.autocast 同一对象）：旧 stub 未显式
+        # re-export 会触发 strict 误报，新 stub 修好后行内 ignore 又变 unused
+        with torch.autocast("cuda", dtype=dtype):
             yield
         return
 
@@ -50,7 +52,7 @@ def safe_autocast(
         and callable(getattr(torch.cpu, "is_bf16_supported", None))
         and torch.cpu.is_bf16_supported()  # type: ignore[attr-defined]
     ):
-        with torch.amp.autocast("cpu", dtype=torch.bfloat16):  # type: ignore[attr-defined]
+        with torch.autocast("cpu", dtype=torch.bfloat16):
             yield
         return
 

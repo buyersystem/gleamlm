@@ -19,7 +19,7 @@ import math
 import os
 import random
 import sys
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -46,10 +46,15 @@ def set_seed(seed: int) -> None:
 # BF16 保留 8 位指数不丢量级；GradScaler 解决 FP16 underflow。
 
 
-def create_scaler() -> torch.amp.GradScaler | torch.cuda.amp.GradScaler:  # type: ignore[name-defined]  # pyright: ignore[reportDeprecated]
+def create_scaler() -> torch.GradScaler:
     """AMP GradScaler with CPU fallback (compatible with PyTorch 1.x / 2.x)."""
     if hasattr(torch.amp, "GradScaler"):
-        return torch.amp.GradScaler("cuda" if torch.cuda.is_available() else "cpu")
+        # 注解用顶层 torch.GradScaler（两版 stub 均可解析）；cast 目标取 cuda 子类：
+        # 旧 stub 下消 Any（strict 禁裸 any 返回），新 stub 下为父→子窄化（非冗余）
+        return cast(
+            "torch.cuda.amp.GradScaler",
+            torch.amp.GradScaler("cuda" if torch.cuda.is_available() else "cpu"),
+        )
     return torch.cuda.amp.GradScaler()  # pyright: ignore[reportDeprecated]
 
 

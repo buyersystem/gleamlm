@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -580,13 +580,16 @@ class GleamLMModel(nn.Module):
                 # aux_loss 必须作为 checkpoint fn 的输出返回，而非前向后读模块属性：
                 # no-reentrant checkpoint 只对 fn 返回值回传梯度，属性逃逸的 aux 在
                 # 反向重算后梯度路径断裂（MoE 负载均衡梯度近乎全丢）。
+                # 绑定当前层为默认参；ModuleList 迭代在新版 stub 中为 Module，cast 还原
+                cur_layer = cast(DecoderLayer, layer)
+
                 def _run_layer(
                     x: torch.Tensor,
                     rope_cos: torch.Tensor,
                     rope_sin: torch.Tensor,
                     mask: torch.Tensor | None,
                     past_kv: PastKeyValue | None,
-                    layer: DecoderLayer = layer,
+                    layer: DecoderLayer = cur_layer,
                 ) -> tuple[torch.Tensor, PastKeyValue, torch.Tensor | None]:
                     # 直接调 .forward 而非模块 __call__：torch 未标注 Module.__call__
                     # 返回类型（mypy 视为 Any，会触发 no-any-return）；项目未注册
