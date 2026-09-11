@@ -18,6 +18,7 @@ CLI:
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 import random
@@ -37,6 +38,8 @@ from gleamlm.data.preprocess import (
     stream_split,
 )
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
+
+logger = logging.getLogger(__name__)
 
 SOURCES: list[dict] = [
     {"name": "edu", "type": "text", "lang": "zh"},
@@ -207,9 +210,9 @@ def _bernoulli_sample(
         f"{probs[i] * 100:.0f}% ({s['name']})" for i, s in enumerate(sources) if probs[i] < 0.95
     ]
     if from_ratio:
-        print(f"  Bernoulli 采样率: {', '.join(from_ratio)}")
+        logger.info(f"  Bernoulli 采样率: {', '.join(from_ratio)}")
     else:
-        print("  所有源全量使用（采样率 ≥ 95%）")
+        logger.info("  所有源全量使用（采样率 ≥ 95%）")
         return sampled_files
 
     for i, s in enumerate(sources):
@@ -227,11 +230,9 @@ def _bernoulli_sample(
                     out_count += 1
                 if in_count % 500000 == 0:
                     rate = 100 * out_count / max(1, in_count)
-                    print(
-                        f"    {s['name']}: {in_count:,} → {out_count:,} ({rate:.0f}%)", flush=True
-                    )
+                    logger.info(f"    {s['name']}: {in_count:,} → {out_count:,} ({rate:.0f}%)")
         actual = 100 * out_count / max(1, in_count)
-        print(f"    {s['name']}: 完成 {out_count:,} 行 ({actual:.1f}%)")
+        logger.info(f"    {s['name']}: 完成 {out_count:,} 行 ({actual:.1f}%)")
 
     return sampled_files
 
@@ -308,29 +309,29 @@ def run_pipeline(
             raise ValueError(f"Unknown sources: {unknown}")
         all_sources = [s for s in SOURCES if s["name"] in sources]
     names = [s["name"] for s in all_sources]
-    print(f"Sources: {names}")
+    logger.info(f"Sources: {names}")
 
     # ──── step 1: 粗精确去重 ────────────────────────────────────────────────────
     if skip_exact_dedup:
-        print("\n[1/6] 跳过粗去重")
+        logger.info("\n[1/6] 跳过粗去重")
     else:
-        print("\n[1/6] 粗去重（MD5 全文 / news 前缀），先剔除完全重复以减少后续计算量")
+        logger.info("\n[1/6] 粗去重（MD5 全文 / news 前缀），先剔除完全重复以减少后续计算量")
         for s in all_sources:
             raw = _raw_path(input_dir, s["name"])
             deduped = _raw_dedup_path(input_dir, s["name"])
             if not os.path.exists(raw):
-                print(f"  Skip {s['name']}: {raw} not found")
+                logger.warning(f"  Skip {s['name']}: {raw} not found")
                 continue
             if os.path.exists(deduped) and os.path.getsize(deduped) > 0:
-                print(f"  Skip {s['name']}: {deduped} exists ({_rows(deduped):,} lines)")
+                logger.warning(f"  Skip {s['name']}: {deduped} exists ({_rows(deduped):,} lines)")
                 continue
             mode = "prefix" if s["type"] == "news" else "exact"
-            print(f"  去重: {s['name']} (mode={mode})")
+            logger.info(f"  去重: {s['name']} (mode={mode})")
             dedup_file(raw, deduped, mode=mode, prefix_len=prefix_len)
 
     # ──── step 2: 基础清洗（语言感知） ──────────────────────────────────────────
     if skip_clean:
-        print("\n[2/6] 跳过清洗")
+        logger.info("\n[2/6] 跳过清洗")
     else:
         zh_srcs = [s["name"] for s in all_sources if s.get("lang") == "zh"]
         en_srcs = [s["name"] for s in all_sources if s.get("lang") == "en"]
@@ -339,7 +340,7 @@ def run_pipeline(
             lang_info.append(f"zh: min_zh_ratio={min_zh_ratio}")
         if en_srcs:
             lang_info.append(f"en: min_en_ratio={min_en_ratio}")
-        print(
+        logger.info(
             f"\n[2/6] 基础清洗（min_len={MIN_LEN}, max_len={MAX_LEN}, "
             f"{', '.join(lang_info)}，news 滤广告 / wiki 滤垃圾）"
         )
@@ -349,15 +350,15 @@ def run_pipeline(
             )
             clean = _clean_path(input_dir, s["name"])
             if src is None:
-                print(f"  Skip {s['name']}: no source found")
+                logger.warning(f"  Skip {s['name']}: no source found")
                 continue
             if os.path.exists(clean) and os.path.getsize(clean) > 0:
-                print(f"  Skip {s['name']}: {clean} exists ({_rows(clean):,} lines)")
+                logger.warning(f"  Skip {s['name']}: {clean} exists ({_rows(clean):,} lines)")
                 continue
 
             is_zh = s.get("lang") == "zh"
             is_en = s.get("lang") == "en"
-            print(f"  Cleaning: {s['name']} (lang={s.get('lang', 'unknown')})")
+            logger.info(f"  Cleaning: {s['name']} (lang={s.get('lang', 'unknown')})")
             clean_file(
                 src,
                 clean,
@@ -371,9 +372,9 @@ def run_pipeline(
 
     # ──── step 3: 质量过滤（Gopher 5 规则） ─────────────────────────────────────
     if skip_quality:
-        print("\n[3/6] 跳过质量过滤")
+        logger.info("\n[3/6] 跳过质量过滤")
     else:
-        print(f"\n[3/6] 质量过滤（Gopher 5 规则, min_score={min_quality}）")
+        logger.info(f"\n[3/6] 质量过滤（Gopher 5 规则, min_score={min_quality}）")
         for s in all_sources:
             src = _pick_first(
                 _clean_path(input_dir, s["name"]),
@@ -382,23 +383,23 @@ def run_pipeline(
             )
             quality = _quality_path(input_dir, s["name"])
             if src is None:
-                print(f"  Skip {s['name']}: no source found")
+                logger.warning(f"  Skip {s['name']}: no source found")
                 continue
             if os.path.exists(quality) and os.path.getsize(quality) > 0:
-                print(f"  Skip {s['name']}: {quality} exists ({_rows(quality):,} lines)")
+                logger.warning(f"  Skip {s['name']}: {quality} exists ({_rows(quality):,} lines)")
                 continue
-            print(f"  Quality: {s['name']}")
+            logger.info(f"  Quality: {s['name']}")
             score_quality_file(src, quality, min_score=min_quality)
 
     # ──── step 4: 细去重（SimHash / MinHash） ──────────────────────────────────
     if skip_dedup:
-        print("\n[4/6] 跳过细去重")
+        logger.info("\n[4/6] 跳过细去重")
     else:
         mode = "minhash" if use_minhash else "simhash"
         extra = (
             f", jaccard>={minhash_threshold}" if use_minhash else f", hamming<={simhash_threshold}"
         )
-        print(f"\n[4/6] 细去重（mode={mode}{extra}）")
+        logger.info(f"\n[4/6] 细去重（mode={mode}{extra}）")
         for s in all_sources:
             src = _pick_first(
                 _quality_path(input_dir, s["name"]),
@@ -408,13 +409,13 @@ def run_pipeline(
             )
             final = _final_path(input_dir, s["name"])
             if src is None:
-                print(f"  Skip {s['name']}: no source found")
+                logger.warning(f"  Skip {s['name']}: no source found")
                 continue
             if os.path.exists(final) and os.path.getsize(final) > 0:
-                print(f"  Skip {s['name']}: {final} exists ({_rows(final):,} lines)")
+                logger.warning(f"  Skip {s['name']}: {final} exists ({_rows(final):,} lines)")
                 continue
             if s["type"] == "qa":
-                print(f"  QA过滤: {s['name']}")
+                logger.info(f"  QA过滤: {s['name']}")
                 from gleamlm.data.preprocess import filter_qa
 
                 filter_qa(src, final)
@@ -424,13 +425,13 @@ def run_pipeline(
                 # 而这类源通常是质量过滤后的高质数据（重复率极低），
                 # 精确去重足够且快几个数量级 —— 大源自动降级 exact
                 if src_rows > _SIMHASH_MAX_ROWS:
-                    print(f"  Exact: {s['name']} ({src_rows:,} 行超大源，降级精确去重)")
+                    logger.info(f"  Exact: {s['name']} ({src_rows:,} 行超大源，降级精确去重)")
                     dedup_file(src, final, mode="exact")
                 elif use_minhash:
-                    print(f"  MinHash: {s['name']} (threshold={minhash_threshold})")
+                    logger.info(f"  MinHash: {s['name']} (threshold={minhash_threshold})")
                     minhash_dedup_file(src, final, threshold=minhash_threshold)
                 else:
-                    print(f"  SimHash: {s['name']} (threshold={simhash_threshold})")
+                    logger.info(f"  SimHash: {s['name']} (threshold={simhash_threshold})")
                     fps = dedup_file(
                         src, final, mode="simhash", simhash_threshold=simhash_threshold
                     )
@@ -449,18 +450,18 @@ def run_pipeline(
         if p:
             finals.append((s["name"], p))
     if not finals:
-        print("\n[5/6] 错误: 没有可用的 {name}_dedup.txt 产物")
+        logger.error("\n[5/6] 错误: 没有可用的 {name}_dedup.txt 产物")
         return
     final_names = [n for n, _ in finals]
     final_paths = [p for _, p in finals]
     final_ratios = _parse_ratios(ratios, final_names)
 
-    print("\n[5/6] 配比切分（字符占比 → train/valid/test）")
+    logger.info("\n[5/6] 配比切分（字符占比 → train/valid/test）")
 
     # Bernoulli 采样（当 max_chars 小于总数据量时）
     sampled_paths = final_paths
     if max_chars:
-        print(f"  字符预算: {max_chars / 1e9:.2f}B")
+        logger.info(f"  字符预算: {max_chars / 1e9:.2f}B")
         avg_chars_list = [_estimate_avg_chars(fp) for fp in final_paths]
         tmp_dir = os.path.join(os.path.dirname(output_prefix) or ".", ".bernoulli_samples")
         combined_source_dicts = [s for s in all_sources if s["name"] in final_names]
@@ -475,7 +476,7 @@ def run_pipeline(
         )
         effective = [(p, r) for p, r in zip(sampled_paths, final_ratios, strict=False) if p]
         if not effective:
-            print("ERROR: Bernoulli 采样后无有效数据")
+            logger.error("Bernoulli 采样后无有效数据")
             return
         sampled_paths = [p for p, _ in effective]
         final_ratios = [r for _, r in effective]
@@ -498,22 +499,22 @@ def run_pipeline(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # ──── step 6: 打包 .bin/.idx ─────────────────────────────────────────────
-    print("\n[6/6] 打包 tokenize → .bin/.idx")
+    logger.info("\n[6/6] 打包 tokenize → .bin/.idx")
     tok_path = tokenizer_path or DEFAULT_TOKENIZER_PATH
     tok = get_tokenizer(tokenizer, tok_path)
-    print(f"tokenizer: {tokenizer} ({tok_path})")
+    logger.info(f"tokenizer: {tokenizer} ({tok_path})")
     for split in ("train", "valid", "test"):
         txt = os.path.join(output_prefix, f"{split}.txt")
         if not os.path.exists(txt) or os.path.getsize(txt) == 0:
-            print(f"  Skip {split}: {txt} not found or empty")
+            logger.warning(f"  Skip {split}: {txt} not found or empty")
             continue
         bin_prefix = os.path.join(output_prefix, split)
         if os.path.exists(bin_prefix + ".bin") and os.path.exists(bin_prefix + ".idx"):
-            print(f"  Skip {split}: {bin_prefix}.bin/.idx exists")
+            logger.warning(f"  Skip {split}: {bin_prefix}.bin/.idx exists")
             continue
-        print(f"  [{split}] 读取 {txt}")
+        logger.info(f"  [{split}] 读取 {txt}")
         docs = load_text(txt)
-        print(f"  [{split}] tokenize ({len(docs):,} docs, workers={workers})")
+        logger.info(f"  [{split}] tokenize ({len(docs):,} docs, workers={workers})")
         build_indexed_dataset(
             bin_prefix,
             docs,
@@ -524,7 +525,7 @@ def run_pipeline(
         )
 
     # ──── 汇总报告 ────────────────────────────────────────────────────────────
-    print("\n== 汇总报告 ==")
+    logger.info("\n== 汇总报告 ==")
     for name in final_names:
         chain = []
         for p_name in ("raw", "raw_dedup", "clean", "quality", "dedup"):
@@ -541,8 +542,8 @@ def run_pipeline(
         if chain:
             labels = [c[0] for c in chain]
             nums = [f"{_rows(c[1]):,}" for c in chain]
-            print(
+            logger.info(
                 f"  {name}: "
                 + " → ".join(f"{lab}={num}" for lab, num in zip(labels, nums, strict=False))
             )
-    print("完成。训练读取: gleamlm/data/dataset.py → {output_prefix}/{split}.bin/.idx")
+    logger.info("完成。训练读取: gleamlm/data/dataset.py → {output_prefix}/{split}.bin/.idx")

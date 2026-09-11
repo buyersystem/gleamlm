@@ -25,6 +25,7 @@ from gleamlm.trainer.base_trainer import (
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config
+from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -313,6 +314,15 @@ def main():
                     lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
                 pbar.set_postfix({"loss": f"{loss.item() * denom:.4f}", "lr": f"{cur_lr:.2e}"})
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
+                # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）
+                emit_metric(
+                    split="train",
+                    step=global_step,
+                    total=total_steps,
+                    loss=loss.item() * denom,
+                    lr=cur_lr,
+                )
 
         epoch_loss /= max(n_batches, 1)
 
@@ -363,4 +373,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     main()

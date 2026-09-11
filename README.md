@@ -578,6 +578,26 @@ Nano 与 Lite 同为四源（含 [Chinese FineWeb Edu](https://huggingface.co/da
 
 **效果抽查**（8 题 × 3 采样，与 DPO 基座对比）：无退化；AI 定义句向教师规范靠拢（“人工智能是计算机科学的一个分支…”），方法论类回答（缓解压力）趋向结构化列表；身份类/事实细节仍受 40M 容量限制（与 SFT/DPO 同边界）。
 
+### GleamLM-Lite 预训练
+
+**预训练配置**：87.1M / 12L×768d / GQA(12Q/6KV) / SwiGLU(d_ff=2048) / BBPE 12K（与 Nano 共用）/ tie_weights / WSD linear decay / label_smoothing 0.1 / z-loss
+
+| 项目 | 值 |
+|---|---|
+| 训练数据 | ≈4.46B tokens（与 Nano 同源四源配比，单轮遍历）|
+| 有效 batch | 64 seqs × 2048（micro 2 × accumulate 32）|
+| 训练步数 | 34,054 step（epoch 0 完成）|
+| 训练时长 | 2,187.2 min（36.5 hr，单卡 RTX 4070 Ti）|
+| **train final loss** | **3.1952**（含 label_smoothing）|
+| 学习率调度 | WSD linear：warmup 2% → stable 80% → linear decay 18%，4e-4 → 4e-5 |
+| 周期验证最优 | **val loss 2.4720 / ppl 11.85**（step 34,000）|
+
+> **训练与验证口径说明**：
+> - train loss 含 label_smoothing 项（口径同 Nano 段），不可直接取 exp 当 PPL；周期验证走裸 CrossEntropyLoss，可直接取 exp。
+> - 周期验证为训练内嵌快测（`max_val_batches: 200` 采样上限 ≈0.8M token）；与 Nano 段 2.5044（全量 248.3M token）测量协议不同，不可直接并列。
+> - 实际训练配置为 `my_configs/lite_model.yaml`：仓库版 `manual/configs/lite.yaml` 微批为 4 × 16，本次为省显存调整为 2 × 32，有效 batch 64 不变。
+> - 训练曲线图与 Lite 全量验证（与 Nano 同口径）待补。
+
 ---
 
 ## 版本路线
@@ -585,7 +605,7 @@ Nano 与 Lite 同为四源（含 [Chinese FineWeb Edu](https://huggingface.co/da
 | 版本 | 参数量 | 定位 | 状态 |
 |------|--------|------|------|
 | GleamLM-Nano | ~40M | 单卡 12GB 完整训练 | ✅ 已完成 |
-| GleamLM-Lite | ~87M | FFN 3.4× 扩容 | ✅ 已重训完成（2026-09-11，step 34,054 / epoch 0 完成）；全量验证结果待补（需与 Nano 同口径） |
+| GleamLM-Lite | ~87M | FFN 3.4× 扩容 | ✅ 预训练完成（2026-09-11，step 34,054 / epoch 0 完成）；训练曲线与全量验证待补 |
 | GleamLM-Pro | ~126M | 18L×768d / BBPE 12K | 开发中 |
 | GleamLM-0.6B | ~0.6B | 工业级验证 / 37L×1024d / BBPE 24K 跨字合并 | 规划中 |
 

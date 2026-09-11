@@ -6,6 +6,7 @@ Supports both single-turn and multi-turn conversation formats.
 from __future__ import annotations
 
 import json
+import logging
 import random
 from typing import Any
 
@@ -14,6 +15,8 @@ from torch.utils.data import Dataset
 
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.chatml import format_chatml
+
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPTS = [
     "你是一个有帮助的AI助手。",
@@ -69,7 +72,7 @@ class SFTDataset(Dataset):
                 try:
                     item = json.loads(line)
                 except json.JSONDecodeError as e:
-                    print(f"Warning: skipping line {i} in {data_path}: {e}")
+                    logger.warning(f"Warning: skipping line {i} in {data_path}: {e}")
                     continue
                 raw_lines.append(item)
 
@@ -83,14 +86,14 @@ class SFTDataset(Dataset):
             for i, item in enumerate(raw_lines):
                 msgs = item.get("messages")
                 if not isinstance(msgs, list) or len(msgs) < 2:
-                    print(f"Warning: skipping line {i} in {data_path}: invalid messages")
+                    logger.warning(f"Warning: skipping line {i} in {data_path}: invalid messages")
                     continue
                 has_assistant = any(m.get("role") == "assistant" for m in msgs)
                 if not has_assistant:
-                    print(f"Warning: skipping line {i} in {data_path}: no assistant turn")
+                    logger.warning(f"Warning: skipping line {i} in {data_path}: no assistant turn")
                     continue
                 self.data.append({"messages": msgs})
-            print(f"Loaded {len(self.data)} multi-turn SFT samples from {data_path}")
+            logger.info(f"Loaded {len(self.data)} multi-turn SFT samples from {data_path}")
         else:
             self.multiturn = False
             for i, item in enumerate(raw_lines):
@@ -104,10 +107,10 @@ class SFTDataset(Dataset):
                 if "instruction" in item and "output" in item:
                     self.data.append({"instruction": item["instruction"], "output": item["output"]})
                 else:
-                    print(f"Warning: skipping line {i} in {data_path}: unknown format")
+                    logger.warning(f"Warning: skipping line {i} in {data_path}: unknown format")
             single_count = sum(1 for d in self.data if "instruction" in d)
             multi_count = sum(1 for d in self.data if "messages" in d)
-            print(
+            logger.info(
                 f"Loaded {len(self.data)} SFT samples from {data_path} "
                 f"({single_count} single-turn, {multi_count} multi-turn)"
             )

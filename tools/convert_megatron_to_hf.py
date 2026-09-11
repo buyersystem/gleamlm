@@ -249,4 +249,7 @@ def _verify(args, cfg: dict, hf_sd: dict):
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     main()

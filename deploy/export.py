@@ -144,6 +144,9 @@ class VLLMEngine:
 # ── CLI ──
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     import argparse
 
     p = argparse.ArgumentParser(description="GleamLM HF format export")

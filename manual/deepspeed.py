@@ -124,6 +124,9 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     args = parse_args()
     model_cfg = ModelConfig.from_yaml(args.model)
     print(f"Model: {args.model}")

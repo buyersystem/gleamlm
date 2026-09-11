@@ -7,6 +7,9 @@ from gleamlm.data.dataset import tokenize_and_group
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config
+from gleamlm.utils.logging_utils import setup_cli_logging
+
+setup_cli_logging()
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)

@@ -146,7 +146,8 @@ def main():
 
         ok = run(
             f"python manual/pretrain.py --model manual/configs/{v}.yaml "
-            f"--data {TEST_DATA_DIR}/train.txt --output_dir ./{TEST_CKPT_DIR} "
+            f"--data {TEST_DATA_DIR}/train.txt --val_data {TEST_DATA_DIR}/valid.txt "
+            f"--output_dir ./{TEST_CKPT_DIR} "
             f"--epochs 2 --batch_size 8 --accumulate 4 --no-pbar",
             "训练 2 epochs (预计 ~30s)",
             conda_env=args.conda_env,
@@ -157,7 +158,7 @@ def main():
 
         run(
             f"python -m tools.eval_runner --model {TEST_CKPT_DIR}/final.pt "
-            f"--data_dir {TEST_DATA_DIR} "
+            f"--data_dir {TEST_DATA_DIR} --dataset valid "
             f"--benchmarks ppl --max_batches 30 --batch_size 4",
             "PPL 评估",
             conda_env=args.conda_env,
@@ -184,7 +185,8 @@ def main():
 
         ok = run(
             f"python manual/pretrain.py --model manual/configs/{v}.yaml "
-            f"--data {TEST_DATA_DIR}/train.txt --output_dir ./{TEST_CKPT_DIR} "
+            f"--data {TEST_DATA_DIR}/train.txt --val_data {TEST_DATA_DIR}/valid.txt "
+            f"--output_dir ./{TEST_CKPT_DIR} "
             f"--epochs 5 --batch_size 8 --accumulate 8 --no-pbar",
             "训练 5 epochs (预计 ~5min)",
             conda_env=args.conda_env,
@@ -196,7 +198,7 @@ def main():
         print("\n>>> 开始完整验证...")
         run(
             f"python -m tools.eval_runner --model {TEST_CKPT_DIR}/final.pt "
-            f"--data_dir {TEST_DATA_DIR} "
+            f"--data_dir {TEST_DATA_DIR} --dataset valid "
             f"--benchmarks ppl --max_batches 100 --batch_size 4",
             "PPL 评估 (100 batches)",
             conda_env=args.conda_env,

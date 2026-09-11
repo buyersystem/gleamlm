@@ -29,6 +29,7 @@ from gleamlm.utils.config import (
     extract_checkpoint_config,
     load_config,
 )
+from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -165,6 +166,14 @@ def train(args):
                     f"{global_step}/{total_steps} [loss={loss.item():.4f}, lr={args.lr:.2e}]",
                     flush=True,
                 )
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                emit_metric(
+                    split="train",
+                    step=global_step,
+                    total=total_steps,
+                    loss=loss.item(),
+                    lr=args.lr,
+                )
 
     save_path = os.path.join(args.output_dir, "lora.pt")
     lora_state = {k: v for k, v in model.state_dict().items() if "lora_" in k}
@@ -247,5 +256,8 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     args = parse_args()
     train(args)

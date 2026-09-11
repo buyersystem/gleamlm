@@ -27,13 +27,23 @@ from webui.main import app  # noqa: E402
 _PROBE_SCRIPT_REL = "webui/logs/_probe.py"
 _PROBE_SRC = """\
 import os, sys, time
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from gleamlm.utils.metrics import emit_metric
 mode = os.environ.get("WEBUI_PROBE_MODE", "ok")
 print(f"probe start mode={mode}", flush=True)
 if mode == "ok":
-    # 日志式指标行, 与 manual/pretrain.py --no-pbar 逐字节同构 (_PT_RE):
+    # 回退路径: 手抄旧格式行, 验证正则兜底仍工作（哨兵行之前的老日志重放）
     # step N/M (pct%)  loss=.4f  两空格  lr=.6f  两空格  X.Xk tok/s  GPU:u/tG
     print("step 1/10 (10.0%)  loss=1.5000  lr=0.000100  12.3k tok/s  GPU:1.2/24.0G", flush=True)
     print("step 2/10 (20.0%)  loss=1.4100  lr=0.000095  12.5k tok/s  GPU:1.3/24.0G", flush=True)
+    # 哨兵通道: 经真实 emit_metric 发射（非手抄）, 验证结构化解析路径
+    emit_metric(split="train", step=3, total=10, loss=1.30, lr=0.000090, tok_per_s=12600.0, gpu_mem=1.35)
+    emit_metric(split="val", step=3, loss=1.20, ppl=3.32)
+    emit_metric(split="train", step=4, total=10, loss=1.29, lr=0.000085)
+    # 同 step 双写过渡期: 旧格式行(低精度) 在前、哨兵行(全精度) 在后 ——
+    # flush 批内去重后 DB 只留一条（值刻意一致, 消除同批/跨批时序差异）
+    print("step 5/10 (50.0%)  loss=1.2800  lr=0.000080  12.8k tok/s  GPU:1.4/24.0G", flush=True)
+    emit_metric(split="train", step=5, total=10, loss=1.28, lr=0.00008)
     print("probe done", flush=True)
 elif mode == "fail":
     print("probe boom", flush=True)
@@ -318,7 +328,7 @@ def test_train_lifecycle_ok(api, monkeypatch):
     st = api.get("/api/train/status").json()
     assert st["running"] is False and st["status"] == "finished"
     assert st["exit_code"] == 0 and st["total_steps"] == 10
-    assert abs(st["last_metric"]["loss"] - 1.41) < 1e-6
+    assert st["last_metric"]["loss"] == 1.28  # 尾步 = step5 双写（去重后单条）
 
     runs = {x["id"]: x for x in api.get("/api/train/runs").json()}
     run = runs[run_id]
@@ -328,10 +338,17 @@ def test_train_lifecycle_ok(api, monkeypatch):
     assert any(c.endswith("_probe.py") for c in run["config"]["cmd"])
 
     series = api.get("/api/train/metrics", params={"run_id": run_id}).json()["series"]
-    assert series["loss"] == [[1, 1.5], [2, 1.41]]
-    assert series["lr"] == [[1, 0.0001], [2, 0.000095]]
-    assert series["tok_per_sec"] == [[1, 12300.0], [2, 12500.0]]
-    assert series["gpu_mem"] == [[1, 1.2], [2, 1.3]]
+    # 1-2 步走旧格式正则回退; 3-4 步走哨兵行（含 val 与缺省字段）;
+    # 5 步同 step 双写（旧格式行 + 哨兵行）: 批内去重后每 step 仅一条
+    assert [s for s, _ in series["loss"]] == [1, 2, 3, 4, 5]
+    assert series["loss"][:4] == [[1, 1.5], [2, 1.41], [3, 1.3], [4, 1.29]]
+    assert series["loss"][4] == [5, 1.28]
+    assert series["lr"][:4] == [[1, 0.0001], [2, 0.000095], [3, 0.00009], [4, 0.000085]]
+    assert series["lr"][4] == [5, 0.00008]
+    assert series["tok_per_sec"] == [[1, 12300.0], [2, 12500.0], [3, 12600.0], [5, 12800.0]]
+    assert series["gpu_mem"] == [[1, 1.2], [2, 1.3], [3, 1.35], [5, 1.4]]
+    assert series["val_loss"] == [[3, 1.2]]
+    assert series["val_ppl"] == [[3, 3.32]]
 
 
 def test_train_fail_run(api, monkeypatch):
@@ -419,6 +436,19 @@ def test_train_delete_running_conflict(api, monkeypatch):
     ids = [x["id"] for x in api.get("/api/train/runs").json()]
     assert "ft_del_run" not in ids
     assert not os.path.exists(os.path.join(T.LOGS_DIR, "run_ft_del_run.log"))
+
+
+# ── 指标批内去重（同 step 双写过渡期契约）───────────────────────────
+def test_dedup_points_same_batch_keeps_last():
+    """同批同 (key, step): 留最后一条 —— 哨兵行在后, 全精度覆盖旧格式行低精度。"""
+    pts = [("loss", 5, 1.28), ("loss", 5, 1.2786666), ("lr", 5, 0.00008)]
+    assert T._dedup_points(pts, {}) == [("loss", 5, 1.2786666), ("lr", 5, 0.00008)]
+
+
+def test_dedup_points_filters_flushed_steps():
+    """跨批保护: 已写过的 step 一律丢弃（重复 tqdm 帧/重放行不再入库）。"""
+    pts = [("loss", 3, 1.0), ("loss", 4, 1.1)]
+    assert T._dedup_points(pts, {"loss": 3}) == [("loss", 4, 1.1)]
 
 
 # ── 推理 ─────────────────────────────────────────────────────────────

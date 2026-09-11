@@ -15,6 +15,7 @@ Functions are grouped by concern:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import random
@@ -30,6 +31,8 @@ from torch.utils.data import DataLoader
 from gleamlm.inference.generate import generate_response
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+
+logger = logging.getLogger(__name__)
 
 # Reproducibility
 
@@ -276,16 +279,16 @@ def evaluate_generations(
 ) -> list[tuple[str, str]]:
     """用一组 prompt 做推理评估，打印结果并返回 (prompt, response) 对。"""
     model.eval()
-    print("\n" + "=" * 60)
-    print(title)
-    print("=" * 60)
+    logger.info("\n" + "=" * 60)
+    logger.info(title)
+    logger.info("=" * 60)
     results: list[tuple[str, str]] = []
     for prompt in prompts:
         response = generate_response(model, tokenizer, prompt)
         results.append((prompt, response))
-        print(f"\n[User] {prompt}")
-        print(f"[Assistant] {response}")
-        print("-" * 40)
+        logger.info(f"\n[User] {prompt}")
+        logger.info(f"[Assistant] {response}")
+        logger.info("-" * 40)
     return results
 
 

@@ -168,6 +168,9 @@ def _infer_ffn(sd: dict) -> int:
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     p = argparse.ArgumentParser(description="Megatron GPTModel → Qwen3 HF (vLLM)")
     p.add_argument("--input", required=True, help="megatron_final.pt")
     p.add_argument("--output", required=True, help="输出目录")

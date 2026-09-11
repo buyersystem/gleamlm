@@ -94,6 +94,7 @@ from gleamlm.utils.config import (
     extract_checkpoint_config,
     load_config,
 )
+from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -509,6 +510,14 @@ def train(args):
                     f"log_pi_T={log_pi_T.mean().item():+.2f}",
                     flush=True,
                 )
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                emit_metric(
+                    split="train",
+                    step=global_step,
+                    total=len(loader) * args.epochs,
+                    loss=loss.item(),
+                    lr=args.lr,
+                )
             global_step += 1
 
             # 周期保存: 中途崩溃可 resume (含完整训练状态 + 数据位置 + 随机状态)
@@ -651,5 +660,8 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     args = parse_args()
     train(args)

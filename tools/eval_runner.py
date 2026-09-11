@@ -31,6 +31,12 @@ def main() -> None:
     parser.add_argument(
         "--data_dir", type=str, required=True, help="数据目录（如 data/lite/pretrain）"
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="test",
+        help="PPL 评估的数据切片名（默认 test；冒烟数据仅含 train/valid）",
+    )
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--max_seq_len", type=int, default=0, help="0=从模型配置检测")
     parser.add_argument("--max_batches", type=int, default=None, help="PPL 最大批次数")
@@ -81,6 +87,7 @@ def main() -> None:
             max_seq_len=max_seq_len,
             batch_size=args.batch_size,
             device=args.device,
+            dataset=args.dataset,
             max_batches=args.max_batches,
         )
         all_results["ppl"] = result.to_dict()
@@ -141,4 +148,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     main()

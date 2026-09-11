@@ -40,6 +40,7 @@ from pydantic import BaseModel, ValidationError
 
 from gleamlm.types import ConfigValidationError
 from gleamlm.utils.config import load_config
+from gleamlm.utils.metrics import parse_metric_line
 from tools.tracker import ExperimentTracker
 
 _WEBUI_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -727,8 +728,12 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
 
 
 # 指标解析: 面板是 tracker SQLite 唯一写入方（复用 tools/tracker.py schema）
+#  - 哨兵行（首选, 结构化零正则）: @@GLEAM_METRIC {"split":"train","step":N,...}
+#    emit/parse 契约见 gleamlm/utils/metrics.py —— 训练脚本与解析侧共用同一契约,
+#    人类可读行的格式变化不再静默断曲线
 #  - 预训练 --no-pbar 日志式:  step N/M (pct%)  loss=.. lr=.. Xk tok/s  GPU:u/tG
 #  - SFT/DPO tqdm 帧(\r 行):   N/M [..it/s, loss=.., lr=..]   （管道下每帧完整一行）
+#    上述两条为回退路径: 哨兵行之前的老日志重放不受影响。
 _PT_RE = re.compile(
     r"step (\d+)/(\d+) \([\d.]+%\)  loss=([\d.eE+-]+)  lr=([\d.eE+-]+)  "
     r"([\d.]+)k tok/s(?:  GPU:([\d.]+)/[\d.]+G)?"
@@ -750,6 +755,29 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
     fallback_step = run._last_step
     for line in lines:
         try:
+            rec = parse_metric_line(line)
+            if rec is not None:
+                # 哨兵行: 结构化直接入列, 不走正则
+                step = int(rec["step"])
+                if rec.get("split") == "val":
+                    out += [
+                        ("val_loss", step, float(rec["loss"])),
+                        ("val_ppl", step, float(rec["ppl"])),
+                    ]
+                else:
+                    out += [
+                        ("loss", step, float(rec["loss"])),
+                        ("lr", step, float(rec["lr"])),
+                    ]
+                    if rec.get("tok_per_s") is not None:
+                        out.append(("tok_per_sec", step, float(rec["tok_per_s"])))
+                    if rec.get("gpu_mem") is not None:
+                        out.append(("gpu_mem", step, float(rec["gpu_mem"])))
+                total = int(rec.get("total") or 0)
+                if total > 0:
+                    run.total_steps = total
+                fallback_step = step
+                continue
             m = _PT_RE.search(line)
             if m:
                 step, total, loss, lr, tok, gpu = m.groups()
@@ -780,12 +808,28 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
                 step = int(s.group(1)) if s else fallback_step + 1
                 fallback_step = step
                 out += [("loss", step, float(loss)), ("lr", step, float(lr))]
-        except (ValueError, TypeError):
-            # 单行解析失败（脏行/畸形帧）只丢弃该行, 不杀解析线程 ——
+        except (ValueError, TypeError, KeyError):
+            # 单行解析失败（脏行/畸形帧/哨兵行缺字段）只丢弃该行, 不杀解析线程 ——
             # 否则面板指标管线会在长跑中途整体死掉。
             continue
     run._last_step = fallback_step
     return out
+
+
+def _dedup_points(
+    pending: list[tuple[str, int, float]], flushed: dict[str, int]
+) -> list[tuple[str, int, float]]:
+    """批内同 (key, step) 只留最后一条, 并滤掉已写过的 step。
+
+    双写过渡期同一 step 先出旧格式行（低精度）、后出哨兵行（全精度）——
+    两者几乎同时到达同一批, 留后者才能保证入库值来自哨兵；跨批重复
+    （tqdm 帧/重放行）由 flushed（每 key 已写最大 step）承担。
+    """
+    latest: dict[tuple[str, int], float] = {}
+    for k, s, v in pending:
+        if s > flushed.get(k, -1):
+            latest[(k, s)] = v
+    return [(k, s, v) for (k, s), v in latest.items()]
 
 
 def _parse_loop(run: TrainRun) -> None:
@@ -828,7 +872,7 @@ def _parse_loop(run: TrainRun) -> None:
     def flush() -> None:
         """同 step 去重后写 tracker（pending 空则空转，无 sqlite 调用）。"""
         nonlocal pending
-        fresh = [(k, s, v) for k, s, v in pending if s > flushed.get(k, -1)]
+        fresh = _dedup_points(pending, flushed)
         pending = []
         if not fresh:
             return

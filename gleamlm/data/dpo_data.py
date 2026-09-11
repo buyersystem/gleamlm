@@ -6,6 +6,7 @@ Supports both single-turn and multi-turn preference data.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import torch
@@ -13,6 +14,8 @@ from torch.utils.data import Dataset
 
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.utils.chatml import format_chatml
+
+logger = logging.getLogger(__name__)
 
 
 def dpad_collate(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
@@ -74,7 +77,7 @@ class DPODataset(Dataset):
                 try:
                     raw_samples.append(json.loads(line))
                 except json.JSONDecodeError as e:
-                    print(f"Warning: skipping line {i} in {data_path}: {e}")
+                    logger.warning(f"Warning: skipping line {i} in {data_path}: {e}")
 
         if not raw_samples:
             raise ValueError(f"No valid samples in {data_path}")
@@ -88,17 +91,21 @@ class DPODataset(Dataset):
             has_pair = "chosen" in s and "rejected" in s
 
             if not has_pair:
-                print(f"Warning: skipping line {i} in {data_path}: missing chosen/rejected")
+                logger.warning(
+                    f"Warning: skipping line {i} in {data_path}: missing chosen/rejected"
+                )
                 continue
             if not (has_messages or has_single):
-                print(f"Warning: skipping line {i} in {data_path}: missing messages or instruction")
+                logger.warning(
+                    f"Warning: skipping line {i} in {data_path}: missing messages or instruction"
+                )
                 continue
 
             self.samples.append(s)
 
         single_count = sum(1 for s in self.samples if "instruction" in s)
         multi_count = sum(1 for s in self.samples if "messages" in s)
-        print(
+        logger.info(
             f"Loaded {len(self.samples)} DPO samples from {data_path} "
             f"({single_count} single-turn, {multi_count} multi-turn)"
         )

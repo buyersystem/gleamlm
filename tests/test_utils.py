@@ -1,4 +1,4 @@
-"""纯函数单元测试 — get_lr_cosine/wsd, dpo_loss, compute_log_probs, format_chatml, assert_same_architecture"""
+"""纯函数单元测试 — get_lr_cosine/wsd, dpo_loss, compute_log_probs, format_chatml, assert_same_architecture, metrics 哨兵行"""
 
 import math
 
@@ -7,6 +7,7 @@ import torch
 from gleamlm.trainer.dpo_loss import compute_log_probs, dpo_loss
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.chatml import format_chatml
+from gleamlm.utils.metrics import SENTINEL, emit_metric, format_metric_line, parse_metric_line
 
 
 def assert_same_architecture(
@@ -193,3 +194,36 @@ def test_assert_same_architecture_mismatch():
 def test_assert_same_architecture_partial():
     # 一方缺 key 时不报错
     assert_same_architecture({"d_model": 512}, {"vocab_size": 12002, "d_model": 512})
+
+
+# ---- metrics 哨兵行（训练指标通道契约） ----
+
+
+def test_metric_roundtrip():
+    line = format_metric_line(split="train", step=7, total=100, loss=1.234, lr=3e-4)
+    assert line.startswith(SENTINEL)
+    assert parse_metric_line(line) == {
+        "split": "train",
+        "step": 7,
+        "total": 100,
+        "loss": 1.234,
+        "lr": 3e-4,
+    }
+
+
+def test_metric_emit_and_parse(capsys):
+    emit_metric(split="val", step=3, loss=1.2, ppl=3.32)
+    out = capsys.readouterr().out.strip()
+    assert parse_metric_line(out) == {"split": "val", "step": 3, "loss": 1.2, "ppl": 3.32}
+
+
+def test_metric_parse_tolerates_whitespace():
+    # 日志行拼接可能带回车/空白；两端空白应被容忍
+    line = "  " + format_metric_line(step=1, loss=0.5, lr=1e-3) + "\r\n"
+    assert parse_metric_line(line) == {"step": 1, "loss": 0.5, "lr": 1e-3}
+
+
+def test_metric_parse_rejects_non_sentinel_and_malformed():
+    assert parse_metric_line("step 1/10 (10.0%)  loss=1.5000  lr=0.000100") is None
+    assert parse_metric_line(SENTINEL + "{broken json") is None
+    assert parse_metric_line(SENTINEL + "[1, 2]") is None  # 非 dict

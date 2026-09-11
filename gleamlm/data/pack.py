@@ -25,11 +25,14 @@
 
 import argparse
 import importlib
+import logging
 import os
 import struct
 from typing import Protocol, cast
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 # ── Megatron .idx header 魔数（indexed_dataset.py: _INDEX_HEADER）─────────────
 _INDEX_HEADER = b"MMIDIDX\x00\x00"
@@ -151,8 +154,8 @@ def write_indexed_dataset(prefix: str, docs_tokens: list[list[int]], vocab_size:
     lengths = np.array([len(t) for t in docs_tokens], dtype=np.int32)
     total_tokens = int(lengths.sum())
     _write_idx(prefix, lengths)
-    print(f"  {prefix}.bin: {total_tokens:,} tokens ({total_tokens * 2 / 1e6:.1f} MB)")
-    print(f"  {prefix}.idx: {len(docs_tokens):,} documents")
+    logger.info(f"  {prefix}.bin: {total_tokens:,} tokens ({total_tokens * 2 / 1e6:.1f} MB)")
+    logger.info(f"  {prefix}.idx: {len(docs_tokens):,} documents")
     return prefix + ".bin"
 
 
@@ -211,14 +214,13 @@ def build_indexed_dataset(
                 lengths.append(len(toks))
             total_tokens += sum(len(x) for x in batch)
             if print_progress and (i // chunk_size) % 25 == 0:
-                print(
+                logger.info(
                     f"    tokenized {min(i + chunk_size, n_docs):,}/{n_docs:,} docs"
-                    f" (written {total_tokens * 2 / 1e6:.0f} MB)",
-                    flush=True,
+                    f" (written {total_tokens * 2 / 1e6:.0f} MB)"
                 )
     written = _write_idx(prefix, np.array(lengths, dtype=np.int32))
-    print(f"  {prefix}.bin: {written:,} tokens ({written * 2 / 1e6:.1f} MB)")
-    print(f"  {prefix}.idx: {n_docs:,} documents")
+    logger.info(f"  {prefix}.bin: {written:,} tokens ({written * 2 / 1e6:.1f} MB)")
+    logger.info(f"  {prefix}.idx: {n_docs:,} documents")
     if not skip_verify:
         verify_indexed_dataset(
             prefix, n_docs, sample=sample_verify, tokenizer=tokenizer, source=docs, workers=workers
@@ -242,7 +244,7 @@ def verify_indexed_dataset(
 
         ds = IndexedDataset(prefix)
         assert len(ds) == n_docs, f"文档数不符: {len(ds)} vs {n_docs}"
-        print(f"  [OK] megatron IndexedDataset 验证通过 ({len(ds)} docs)")
+        logger.info(f"  [OK] megatron IndexedDataset 验证通过 ({len(ds)} docs)")
         if tokenizer is not None and source is not None and len(source) > 0:
             import random
 
@@ -253,7 +255,7 @@ def verify_indexed_dataset(
                 ]
                 got = ds[idx].tolist()
                 assert got == expect, f"文档 {idx} 内容不符"
-            print(f"  [OK] 抽取 {min(sample, len(source))} 篇重新 tokenize 内容比对通过")
+            logger.info(f"  [OK] 抽取 {min(sample, len(source))} 篇重新 tokenize 内容比对通过")
     except ImportError:
         import mmap
         import struct
@@ -268,7 +270,7 @@ def verify_indexed_dataset(
         toks0 = np.frombuffer(mm, dtype=np.uint16, count=seq_count, offset=0)
         del toks0
         mm.close()
-        print("  [OK] 裸 mmap 验证通过（megatron 未安装，用标准库验证）")
+        logger.info("  [OK] 裸 mmap 验证通过（megatron 未安装，用标准库验证）")
 
 
 def verify(prefix: str, docs_tokens: list[list[int]]) -> None:
@@ -281,7 +283,7 @@ def verify(prefix: str, docs_tokens: list[list[int]]) -> None:
         for i in (0, len(docs_tokens) // 2, len(docs_tokens) - 1):
             got = ds[i].tolist()
             assert got == docs_tokens[i], f"文档 {i} 内容不符"
-        print(f"  [OK] megatron IndexedDataset 验证通过 ({len(ds)} docs)")
+        logger.info(f"  [OK] megatron IndexedDataset 验证通过 ({len(ds)} docs)")
     except ImportError:
         # megatron 未安装时用裸 mmap 验证格式（新 header: 9 magic + 8 version
         # + 1 dtype + 8 seq_count + 8 doc_count = 34B，然后 int32 lengths(N)
@@ -305,7 +307,7 @@ def verify(prefix: str, docs_tokens: list[list[int]]) -> None:
         assert toks0.tolist() == docs_tokens[0]
         del toks0  # np.frombuffer 持有 mmap 缓冲引用，不释放则 close 报 BufferError
         mm.close()
-        print("  [OK] 裸 mmap 验证通过（megatron 未安装，用标准库验证）")
+        logger.info("  [OK] 裸 mmap 验证通过（megatron 未安装，用标准库验证）")
 
 
 # ──── CLI（独立使用: python -m gleamlm.data.pack） ────────────────────
@@ -328,16 +330,16 @@ def main() -> None:
     args = parse_args()
     os.makedirs(os.path.dirname(args.output_prefix) or ".", exist_ok=True)
 
-    print(f"[1/3] 读取数据: {args.input}")
+    logger.info(f"[1/3] 读取数据: {args.input}")
     docs = load_text(args.input)
     if not docs:
-        print("  (空输入) 跳过")
+        logger.info("  (空输入) 跳过")
         return
 
-    print(f"[2/3] tokenize ({len(docs)} docs, workers={args.workers})")
+    logger.info(f"[2/3] tokenize ({len(docs)} docs, workers={args.workers})")
     tokenizer = get_tokenizer(args.tokenizer, args.tokenizer_path)
 
-    print("[3/3] 流式写入 .bin/.idx")
+    logger.info("[3/3] 流式写入 .bin/.idx")
     build_indexed_dataset(
         args.output_prefix,
         docs,
@@ -349,4 +351,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     main()

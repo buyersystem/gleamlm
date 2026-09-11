@@ -23,12 +23,15 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import random
 import re
 import unicodedata
 from collections import OrderedDict
 from typing import TextIO
+
+logger = logging.getLogger(__name__)
 
 try:
     import zhconv
@@ -154,7 +157,7 @@ def clean_file(
     total = 0
     kept = 0
 
-    print(f"Cleaning: {input_path}")
+    logger.info(f"Cleaning: {input_path}")
 
     with (
         open(input_path, encoding="utf-8") as fin,
@@ -170,13 +173,12 @@ def clean_file(
                 kept += 1
 
             if total % 100000 == 0:
-                print(
-                    f"  Processed {total} lines, kept {kept} ({100 * kept / max(1, total):.1f}%)",
-                    flush=True,
+                logger.info(
+                    f"  Processed {total} lines, kept {kept} ({100 * kept / max(1, total):.1f}%)"
                 )
 
-    print(f"Done: {total} lines processed, {kept} kept ({100 * kept / max(1, total):.1f}%)")
-    print(f"Output: {output_path}")
+    logger.info(f"Done: {total} lines processed, {kept} kept ({100 * kept / max(1, total):.1f}%)")
+    logger.info(f"Output: {output_path}")
 
 
 # ============================================================================
@@ -227,7 +229,7 @@ def convert_zh_file(input_path: str, output_path: str) -> None:
 
     total = 0
     converted = 0
-    print(f"繁→简转换: {input_path}")
+    logger.info(f"繁→简转换: {input_path}")
     with (
         open(input_path, encoding="utf-8") as fin,
         open(output_path, "w", encoding="utf-8") as fout,
@@ -241,9 +243,9 @@ def convert_zh_file(input_path: str, output_path: str) -> None:
             fout.write(zhconv.convert(text, "zh-cn") + "\n")
             converted += 1
             if total % 200000 == 0:
-                print(f"  Processed {total:,} lines", flush=True)
-    print(f"Done: {total:,} lines, {converted:,} written")
-    print(f"Output: {output_path}")
+                logger.info(f"  Processed {total:,} lines")
+    logger.info(f"Done: {total:,} lines, {converted:,} written")
+    logger.info(f"Output: {output_path}")
 
 
 # ============================================================================
@@ -423,9 +425,9 @@ def dedup_file(
         if fingerprints:
             index.add_all(fingerprints)
 
-    print(f"Dedup: {input_path}")
+    logger.info(f"Dedup: {input_path}")
     if mode == "simhash":
-        print(
+        logger.info(
             f"  mode=simhash, threshold={simhash_threshold}, "
             f"initial fingerprints={len(fingerprints)}"
         )
@@ -471,17 +473,16 @@ def dedup_file(
                 kept += 1
 
             if total % 100000 == 0:
-                print(
+                logger.info(
                     f"  Processed {total:,} lines, kept {kept:,}, "
-                    f"dedup {deduped:,} ({100 * deduped / total:.1f}%)",
-                    flush=True,
+                    f"dedup {deduped:,} ({100 * deduped / total:.1f}%)"
                 )
 
     pct = 100 * kept / max(1, total)
     dedup_pct = 100 * deduped / max(1, total)
-    print(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
-    print(f"  Deduplicated: {deduped:,} ({dedup_pct:.1f}%)")
-    print(f"Output: {output_path}")
+    logger.info(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
+    logger.info(f"  Deduplicated: {deduped:,} ({dedup_pct:.1f}%)")
+    logger.info(f"Output: {output_path}")
     return fingerprints
 
 
@@ -499,8 +500,10 @@ def minhash_dedup_file(
     kept = 0
     deduped = 0
 
-    print(f"Dedup: {input_path}")
-    print(f"  mode=minhash, jaccard_threshold={threshold}, num_perm={num_perm}, bands={bands}")
+    logger.info(f"Dedup: {input_path}")
+    logger.info(
+        f"  mode=minhash, jaccard_threshold={threshold}, num_perm={num_perm}, bands={bands}"
+    )
 
     with (
         open(input_path, encoding="utf-8") as fin,
@@ -523,17 +526,16 @@ def minhash_dedup_file(
             kept += 1
 
             if total % 100000 == 0:
-                print(
+                logger.info(
                     f"  Processed {total:,} lines, kept {kept:,}, "
-                    f"dedup {deduped:,} ({100 * deduped / total:.1f}%)",
-                    flush=True,
+                    f"dedup {deduped:,} ({100 * deduped / total:.1f}%)"
                 )
 
     pct = 100 * kept / max(1, total)
     dedup_pct = 100 * deduped / max(1, total)
-    print(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
-    print(f"  Deduplicated: {deduped:,} ({dedup_pct:.1f}%)")
-    print(f"Output: {output_path}")
+    logger.info(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
+    logger.info(f"  Deduplicated: {deduped:,} ({dedup_pct:.1f}%)")
+    logger.info(f"Output: {output_path}")
 
 
 # ============================================================================
@@ -588,8 +590,8 @@ def filter_qa(
 
     url_re = re.compile(r"https?://\S+|www\.\S+")
 
-    print(f"Filtering QA data: {input_path}")
-    print(f"  min_answer_len={min_answer_len}, dedup={dedup}")
+    logger.info(f"Filtering QA data: {input_path}")
+    logger.info(f"  min_answer_len={min_answer_len}, dedup={dedup}")
 
     with (
         open(input_path, encoding="utf-8") as fin,
@@ -620,18 +622,17 @@ def filter_qa(
             kept += 1
 
             if total % 100000 == 0:
-                print(
+                logger.info(
                     f"  Processed {total:,} lines, kept {kept:,} "
-                    f"(short={skipped_short:,} url={skipped_url:,} dup={skipped_dup:,})",
-                    flush=True,
+                    f"(short={skipped_short:,} url={skipped_url:,} dup={skipped_dup:,})"
                 )
 
     pct = 100 * kept / max(1, total)
-    print(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
-    print(f"  Short answers (<{min_answer_len} chars): {skipped_short:,}")
-    print(f"  URL-containing: {skipped_url:,}")
-    print(f"  Duplicates: {skipped_dup:,}")
-    print(f"Output: {output_path}")
+    logger.info(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
+    logger.info(f"  Short answers (<{min_answer_len} chars): {skipped_short:,}")
+    logger.info(f"  URL-containing: {skipped_url:,}")
+    logger.info(f"  Duplicates: {skipped_dup:,}")
+    logger.info(f"Output: {output_path}")
 
 
 # ============================================================================
@@ -676,8 +677,8 @@ def score_quality_file(input_path: str, output_path: str, min_score: float = 0.3
     total = 0
     kept = 0
 
-    print(f"Quality filter: {input_path}")
-    print(f"  min_score={min_score}")
+    logger.info(f"Quality filter: {input_path}")
+    logger.info(f"  min_score={min_score}")
 
     with (
         open(input_path, encoding="utf-8") as fin,
@@ -693,15 +694,14 @@ def score_quality_file(input_path: str, output_path: str, min_score: float = 0.3
                 kept += 1
 
             if total % 100000 == 0:
-                print(
+                logger.info(
                     f"  Processed {total:,} lines, kept {kept:,} "
-                    f"({100 * kept / max(1, total):.1f}%)",
-                    flush=True,
+                    f"({100 * kept / max(1, total):.1f}%)"
                 )
 
     pct = 100 * kept / max(1, total)
-    print(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
-    print(f"Output: {output_path}")
+    logger.info(f"\nDone: {total:,} lines -> {kept:,} kept ({pct:.1f}%)")
+    logger.info(f"Output: {output_path}")
 
 
 # ============================================================================
@@ -762,13 +762,13 @@ def stream_split(
         max_chars = int(min(candidates)) if candidates else 0
     budgets = [max_chars * r for r in ratios]
 
-    print(f"Streaming build {len(input_paths)} sources -> {output_dir}")
+    logger.info(f"Streaming build {len(input_paths)} sources -> {output_dir}")
     for st, r in zip(stats, ratios, strict=True):
-        print(
+        logger.info(
             f"  {os.path.basename(st['path'])}: {r * 100:.0f}%  "
             f"({st['rows']:,} rows, {st['total_chars']:,} chars)"
         )
-    print(f"  char budget: max_chars={max_chars:,}")
+    logger.info(f"  char budget: max_chars={max_chars:,}")
 
     random.seed(seed)
 
@@ -846,7 +846,7 @@ def stream_split(
                         counts["test"] += 1
 
             if total % (buf_size * 5) < buf_size:
-                print(f"\r  Processed {total:,} lines", end="", flush=True)
+                logger.info(f"  Processed {total:,} lines")
     finally:
         for reader in readers:
             if reader is not None:
@@ -855,14 +855,20 @@ def stream_split(
         valid_f.close()
         test_f.close()
 
-    print(f"\r  Processed {total:,} lines total")
+    logger.info(f"  Processed {total:,} lines total")
     for i, (st, cnt) in enumerate(zip(stats, source_out, strict=True)):
-        print(f"  {os.path.basename(st['path'])}: {cnt:,} lines ({ratios[i] * 100:.0f}% target)")
+        logger.info(
+            f"  {os.path.basename(st['path'])}: {cnt:,} lines ({ratios[i] * 100:.0f}% target)"
+        )
 
-    print("\nDataset built:")
-    print(f"  Train: {counts['train']:,} lines ({100 * counts['train'] / max(1, total):.1f}%)")
-    print(f"  Valid: {counts['valid']:,} lines ({100 * counts['valid'] / max(1, total):.1f}%)")
-    print(f"  Test:  {counts['test']:,} lines ({100 * counts['test'] / max(1, total):.1f}%)")
+    logger.info("\nDataset built:")
+    logger.info(
+        f"  Train: {counts['train']:,} lines ({100 * counts['train'] / max(1, total):.1f}%)"
+    )
+    logger.info(
+        f"  Valid: {counts['valid']:,} lines ({100 * counts['valid'] / max(1, total):.1f}%)"
+    )
+    logger.info(f"  Test:  {counts['test']:,} lines ({100 * counts['test'] / max(1, total):.1f}%)")
 
     return [{"source": st["path"], "rows": cnt} for st, cnt in zip(stats, source_out, strict=True)]
 

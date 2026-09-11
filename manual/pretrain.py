@@ -83,6 +83,7 @@ from gleamlm.trainer.base_trainer import (
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, ModelConfig, load_config
+from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import safe_autocast
 
 # 变体注册表: CLI string → class
@@ -452,6 +453,18 @@ def train(args, model_cfg: ModelConfig):
                         print(
                             f"step {step}/{total_steps} ({progress_pct:.1f}%)  loss={loss.item():.4f}  lr={lr:.6f}  {tok_per_sec / 1e3:.1f}k tok/s  GPU:{gpu_mem:.1f}/{gpu_mem_total:.1f}G"
                         )
+                    # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板解析侧优先
+                    # 消费结构化行, 人类可读行的格式变化不再静默断曲线;
+                    # --pbar 分支同样按 log_interval 发射（tqdm 帧只作回退）
+                    emit_metric(
+                        split="train",
+                        step=step,
+                        total=total_steps,
+                        loss=loss.item(),
+                        lr=lr,
+                        tok_per_s=tok_per_sec,
+                        gpu_mem=gpu_mem,
+                    )
                     if wandb is not None:
                         wandb.log(
                             {
@@ -530,6 +543,7 @@ def train(args, model_cfg: ModelConfig):
                 )
                 raw_model.train()
                 print(f"  Val step {step}: loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+                emit_metric(split="val", step=step, loss=val_loss, ppl=val_ppl)
                 if writer is not None:
                     writer.add_scalar("Eval/Loss", val_loss, step)
                     writer.add_scalar("Eval/Perplexity", val_ppl, step)
@@ -814,4 +828,7 @@ def main():
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     main()

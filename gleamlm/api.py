@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import torch
@@ -11,6 +12,8 @@ from gleamlm.inference.generate import generate_response
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.types import ConfigValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class GleamLM:
@@ -55,7 +58,7 @@ class GleamLM:
         tokenizer = BBPETokenizer.load(tk_path)
 
         total, _ = model.get_num_params()
-        print(f"Model: {total / 1e6:.2f}M params, device: {dev}")
+        logger.info("Model: %.2fM params, device: %s", total / 1e6, dev)
 
         return cls(model, tokenizer, config, dev)
 

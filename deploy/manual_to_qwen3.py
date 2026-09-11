@@ -122,6 +122,9 @@ def convert(gleamlm_ckpt: str, output_dir: str, tokenizer_dir: str | None) -> st
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     p = argparse.ArgumentParser(description="手工轨 checkpoint → Qwen3 HF (vLLM)")
     p.add_argument(
         "--input", required=True, help="手工轨 checkpoint .pt (sft_best.pt / dpo_best.pt)"

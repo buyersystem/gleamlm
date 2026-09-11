@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from dataclasses import dataclass, field
@@ -14,6 +15,8 @@ from tqdm import tqdm
 
 from gleamlm.data.dataset import tokenize_and_group
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -176,7 +179,7 @@ def evaluate_multiple(
     for ds_name in datasets:
         txt_path = os.path.join(data_dir, f"{ds_name}.txt")
         if not os.path.exists(txt_path):
-            print(f"  Skip {ds_name}: no data file")
+            logger.warning(f"  Skip {ds_name}: no data file")
             continue
         result = evaluate_ppl(model, tokenizer, data_dir, dataset=ds_name, **kwargs)
         results[ds_name] = result

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 from importlib.metadata import PackageNotFoundError, version
 
 import torch
 
 from .models.model import GleamLMModel
 from .utils.config import extract_checkpoint_config
+
+# 库默认静默（pip 使用方未配置日志时不产生输出）; 入口脚本可调
+# gleamlm.utils.logging_utils.setup_cli_logging() 显式启用库日志。
+logging.getLogger(__name__).addHandler(logging.NullHandler())
+logger = logging.getLogger(__name__)
 
 try:
     __version__ = version("gleamlm")
@@ -62,9 +68,9 @@ def load_model_for_inference(
         state_dict = clean_state_dict(state_dict)
         missing, unexpected = model.load_state_dict(state_dict, strict=False)
         if missing:
-            print(f"Warning: missing keys in checkpoint: {missing}")
+            logger.warning("Warning: missing keys in checkpoint: %s", missing)
         if unexpected:
-            print(f"Warning: unexpected keys in checkpoint: {unexpected}")
+            logger.warning("Warning: unexpected keys in checkpoint: %s", unexpected)
 
     model.eval()
 

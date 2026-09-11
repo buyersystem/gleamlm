@@ -27,6 +27,7 @@ from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.trainer.rl_trainer import ValueHead, compute_reward, ppo_loss
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
+from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
 
@@ -141,6 +142,14 @@ def train(args):
                     f"{global_step}/{len(loader) * args.epochs} [loss={loss.item():.4f}, lr={args.lr:.2e}]",
                     flush=True,
                 )
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                emit_metric(
+                    split="train",
+                    step=global_step,
+                    total=len(loader) * args.epochs,
+                    loss=loss.item(),
+                    lr=args.lr,
+                )
             global_step += 1
 
     if rank == 0:
@@ -174,5 +183,8 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     args = parse_args()
     train(args)

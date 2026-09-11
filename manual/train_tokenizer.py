@@ -141,6 +141,9 @@ def train_from_variant(
 
 
 if __name__ == "__main__":
+    from gleamlm.utils.logging_utils import setup_cli_logging
+
+    setup_cli_logging()
     p = argparse.ArgumentParser()
     p.add_argument(
         "--variant",

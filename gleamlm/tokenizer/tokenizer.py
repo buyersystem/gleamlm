@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import heapq
 import json
+import logging
 import os
 import re
 import time
 from collections import defaultdict
+
+logger = logging.getLogger(__name__)
 
 # 预分词: 直接在字节上做 BPE 没有天然分隔符，合并不可控且词表膨胀。
 # 本方案 CJK 单字独立 + 非 CJK 连续片段——中文每字 ≈ 一个 token 的信息密度，
@@ -100,22 +103,24 @@ class BBPETokenizer:
         if ratios is None:
             ratios = [1.0 / len(text_files)] * len(text_files)
 
-        print(f"Training BBPE tokenizer (vocab_size={vocab_size})...")
-        print(f"  Input files: {len(text_files)}, max_chars={max_train_chars / 1e6:.0f}M")
+        logger.info(f"Training BBPE tokenizer (vocab_size={vocab_size})...")
+        logger.info(f"  Input files: {len(text_files)}, max_chars={max_train_chars / 1e6:.0f}M")
         for fp, r in zip(text_files, ratios, strict=False):
-            print(f"    [{r * 100:.0f}%] {os.path.basename(fp)}")
+            logger.info(f"    [{r * 100:.0f}%] {os.path.basename(fp)}")
 
-        print("  Step 1/3: Pre-tokenizing and counting word frequencies...")
+        logger.info("  Step 1/3: Pre-tokenizing and counting word frequencies...")
         byte_sequences, word_counts = tokenizer._pre_tokenize_files(
             text_files, max_chars=max_train_chars, ratios=ratios
         )
         total_pairs = sum(len(seq) - 1 for seq in byte_sequences if len(seq) > 1)
-        print(f"  Collected {len(byte_sequences):,} unique words, {total_pairs:,} initial pairs")
+        logger.info(
+            f"  Collected {len(byte_sequences):,} unique words, {total_pairs:,} initial pairs"
+        )
 
         n_merges = vocab_size - tokenizer._next_id
-        print(f"  Step 2/3: Training {n_merges} BPE merges...")
+        logger.info(f"  Step 2/3: Training {n_merges} BPE merges...")
 
-        print("    Building pair index...", end=" ", flush=True)
+        logger.info("    Building pair index...")
         t_idx = time.time()
         # 倒排索引: pair → {(word_idx, pos)}；word 已唯一化，
         # 实际出现频次 = 位置集合 × word_counts[word_idx]（加权）
@@ -124,9 +129,9 @@ class BBPETokenizer:
             for i in range(len(seq) - 1):
                 pair = (seq[i], seq[i + 1])
                 pair_to_positions[pair].add((wid, i))  # 记录pair出现的位置
-        print(f"{len(pair_to_positions):,} unique pairs ({time.time() - t_idx:.1f}s)")
+        logger.info(f"      {len(pair_to_positions):,} unique pairs ({time.time() - t_idx:.1f}s)")
 
-        print("    Building max-heap...", end=" ", flush=True)
+        logger.info("    Building max-heap...")
         t_heap = time.time()
 
         def pair_freq(positions: set[tuple[int, int]]) -> int:
@@ -137,15 +142,15 @@ class BBPETokenizer:
         heap: list[tuple[int, tuple[int, int]]] = []
         for pair, positions in pair_to_positions.items():
             heapq.heappush(heap, (-pair_freq(positions), pair))  # 负号实现最大堆
-        print(f"done ({time.time() - t_heap:.1f}s)")
+        logger.info(f"      done ({time.time() - t_heap:.1f}s)")
 
         t_start = time.time()
         pbar_interval = max(1, n_merges // 200)
-        print(f"    Merging (pbar every {pbar_interval} steps)...", flush=True)
+        logger.info(f"    Merging (pbar every {pbar_interval} steps)...")
 
         for merge_step in range(n_merges):
             if not pair_to_positions:
-                print(f"\n  No more pairs to merge at step {merge_step}")
+                logger.info(f"\n  No more pairs to merge at step {merge_step}")
                 break
 
             # 惰性校验: pop 后检查 pair 是否仍在索引中、count 是否匹配，否则重入堆
@@ -159,13 +164,13 @@ class BBPETokenizer:
                     continue
                 break  # 有效pair，退出循环
             else:
-                print(f"\n  Heap empty at step {merge_step}")
+                logger.info(f"\n  Heap empty at step {merge_step}")
                 break
 
             best_count = pair_freq(pair_to_positions[best_pair])
 
             if best_count < 2:
-                print(f"\n  All pairs have count=1 at step {merge_step}, stopping")
+                logger.info(f"\n  All pairs have count=1 at step {merge_step}, stopping")
                 break
 
             # merges 供编码查表；merge_pairs/id_to_byte 让解码直接拼接字节，无需还原 merge 树
@@ -235,18 +240,13 @@ class BBPETokenizer:
                 eta_str = (
                     f"{eta / 60:.0f}m{eta % 60:02.0f}s" if eta < 3600 else f"{eta / 3600:.1f}h"
                 )
-                print(
-                    f"\r  [{bar}] {pct:5.1f}% ({step}/{n_merges}) | "
+                logger.info(
+                    f"  [{bar}] {pct:5.1f}% ({step}/{n_merges}) | "
                     f"pair=({best_pair[0]},{best_pair[1]}) cnt={best_count} | "
-                    f"ETA {eta_str}",
-                    end="",
-                    flush=True,
+                    f"ETA {eta_str}"
                 )
 
-            if step % 1000 == 0:
-                print()
-
-        print(f"\n  Trained {len(tokenizer.merges)} merges, vocab_size={tokenizer._next_id}")
+        logger.info(f"\n  Trained {len(tokenizer.merges)} merges, vocab_size={tokenizer._next_id}")
 
         if save_dir:
             tokenizer.save(save_dir)
@@ -273,19 +273,19 @@ class BBPETokenizer:
 
         for i, fpath in enumerate(text_files):
             if not os.path.exists(fpath):
-                print(f"    Skip: {fpath} (not found)")
+                logger.warning(f"    Skip: {fpath} (not found)")
                 continue
             if quotas[i] <= 0:
                 continue
 
             quota_mb = quotas[i] / 1e6
-            print(
+            logger.info(
                 f"    [{ratios[i] * 100:.0f}%] {os.path.basename(fpath)}: "
-                f"quota={quota_mb:.1f}M chars",
-                flush=True,
+                f"quota={quota_mb:.1f}M chars"
             )
 
             file_words = 0
+            next_pct = 10  # 日志降频: \r 覆盖在日志中不可表达, 每 10% 记一条
             with open(fpath, encoding="utf-8") as f:
                 text_remaining = quotas[i]
                 while text_remaining > 0:
@@ -302,15 +302,17 @@ class BBPETokenizer:
                             file_words += 1
 
                     pct = 100 * (quotas[i] - text_remaining) / quotas[i]
-                    print(f"\r      {pct:.0f}% ({file_words:,} words)", end="", flush=True)
+                    if pct >= next_pct:
+                        logger.info(f"      {pct:.0f}% ({file_words:,} words)")
+                        next_pct += 10
 
             total_words += file_words
-            print(f" → {file_words:,} words")
+            logger.info(f"    → {file_words:,} words")
 
         # 展开为 (唯一字节序列, 频次) 列表，供 train_from_files 使用
         sequences = [list(seq) for seq in word_counts]
         counts = [word_counts[tuple(seq)] for seq in sequences]
-        print(
+        logger.info(
             f"    Total: {total_words:,} words → {len(sequences):,} unique "
             f"({sum(quotas) / 1e6:.1f}M chars from {len(text_files)} files)"
         )
@@ -466,7 +468,7 @@ class BBPETokenizer:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-        print(f"BBPE tokenizer saved: {path} (vocab_size={self._next_id})")
+        logger.info(f"BBPE tokenizer saved: {path} (vocab_size={self._next_id})")
 
     @classmethod
     def load(cls, save_dir: str) -> BBPETokenizer:
@@ -500,7 +502,7 @@ class BBPETokenizer:
         tokenizer._set_aliases()
         tokenizer._build_special_regex()
 
-        print(f"BBPE tokenizer loaded: {path} (vocab_size={tokenizer._next_id})")
+        logger.info(f"BBPE tokenizer loaded: {path} (vocab_size={tokenizer._next_id})")
         return tokenizer
 
     # HF 导出: vLLM/transformers 通过 tokenizer.json 加载。
@@ -614,7 +616,7 @@ class BBPETokenizer:
         with open(os.path.join(save_dir, "tokenizer_config.json"), "w", encoding="utf-8") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
 
-        print(
+        logger.info(
             f"HF tokenizer exported: {os.path.join(save_dir, 'tokenizer.json')} (vocab={self._next_id})"
         )
         return save_dir
