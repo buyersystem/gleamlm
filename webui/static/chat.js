@@ -50,7 +50,7 @@ async function loadModels() {
   // P5：模型状态条 —— 当前模型 / 设备 / 参数量集中一处（原来是只有 basename 的裸文字）
   const nameEl = $("#chat-cur");
   if (nameEl) {
-    nameEl.textContent = st.loaded ? cur : "未加载";
+    nameEl.textContent = st.loaded ? stPath.split("/").pop() : "未加载";
     nameEl.title = stPath;
   }
   const devEl = $("#chat-dev");
