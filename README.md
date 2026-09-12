@@ -143,10 +143,11 @@ GleamLM/
 │   ├── deepspeed.py / fsdp.py     #   分布式训练
 │   ├── infer.py                   #   交互式推理（命令行入口）
 │   ├── train_tokenizer.py         #   BBPE 分词器训练（--variant 读配比 / --data_dir / 扩展 / 验证）
-│   └── configs/                   #   手动轨专用 YAML（仅 manual 轨脚本消费）
-│       ├── base.yaml              #   公共默认 / 新配置模板（复制改名即可新建）
-│       ├── nano.yaml / lite.yaml / pro.yaml  #   各变体独立完整配置（不依赖继承）
-│       └── deepspeed_config.json / deepspeed_zero2.json  #   DeepSpeed 引擎参数
+│   ├── configs/                   #   手动轨专用 YAML（manual 脚本 + WebUI 表单消费，内置只读）
+│   │   ├── base.yaml              #   公共默认 / 新配置模板（复制改名即可新建）
+│   │   ├── nano.yaml / lite.yaml / pro.yaml  #   各变体独立完整配置（不依赖继承）
+│   │   └── deepspeed_config.json / deepspeed_zero2.json  #   DeepSpeed 引擎参数
+│   └── my_configs/                #   WebUI「另存为」的用户配置副本（git 忽略，可选）
 │
 ├── industrial/                    # 工业训练脚本（对接 Megatron / TRL / PEFT / DeepSpeed）
 │   ├── pretrain.py                #   Megatron 轨预训练（GPTDataset / BlendedMegatronDatasetBuilder）

@@ -380,6 +380,28 @@ def test_train_defaults(api):
         os.remove(tpl_path)
 
 
+def test_artifact_conventions_match_manual():
+    """守护：webui 产物路径约定与 manual 脚本落盘约定一致（消除第三份默认值）。
+
+    webui 的回落路径（目录名 / 最佳产物名 / 预训练 final→best 链）与 manual
+    脚本各存一份，任一侧改名都会静默断掉面板预填。本测试把 webui 集中声明的
+    常量（training.py `_*_DIR` / `_*_BEST` / `_PRETRAIN_CKPT_CHAIN`）与 manual
+    源码对表——改动任一侧命名即失败。仅 pin 命名约定，非行为等价。
+    """
+    pins = {
+        "manual/sft.py": (T._SFT_DIR, T._SFT_BEST, *T._PRETRAIN_CKPT_CHAIN),
+        "manual/sft_lora.py": (T._LORA_DIR,),
+        "manual/dpo.py": (T._SFT_DIR, T._SFT_BEST, T._DPO_DIR, T._DPO_BEST),
+        "manual/opd.py": (T._DPO_BEST, T._OPD_DIR),
+        "data_tools/dpo/run_generate.py": (T._SFT_DIR, T._SFT_BEST),
+    }
+    for rel, names in pins.items():
+        with open(os.path.join(T.ROOT_DIR, rel), encoding="utf-8") as fh:
+            src = fh.read()
+        for name in names:
+            assert name in src, f"{rel} 未包含 webui 约定 {name!r}（命名已漂移）"
+
+
 # ── 训练生命周期 ─────────────────────────────────────────────────────
 def test_train_start_validation(api):
     assert api.post("/api/train/start", json={"task": "nope"}).status_code == 400

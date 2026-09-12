@@ -1369,13 +1369,26 @@ def _entry(path: str, kind: str = "", cand_dir: str = "") -> dict:
     return item
 
 
+# 产物路径约定（单一来源）——面板展示的回落路径必须与 manual 脚本的落盘约定
+# 一致。此前同一约定在本文件多处散写（"sft"/"sft_best.pt"/final.pt→best_model.pt
+# 链），与 manual/*.py 各存一份，任一侧改名都会静默断掉面板预填。此处集中声明
+# 一次，由 tests/test_webui_api.py::test_artifact_conventions_match_manual 守护。
+_PRETRAIN_CKPT_CHAIN = ("final.pt", "best_model.pt")  # sft.py / sft_lora.py 回落链
+_SFT_DIR = "sft"
+_SFT_BEST = "sft_best.pt"
+_DPO_DIR = "dpo"
+_DPO_BEST = "dpo_best.pt"
+_OPD_DIR = "opd"
+_LORA_DIR = "lora"
+
+
 def _pretrain_prod(abs_ck: str) -> str:
     """预训练产物回落链：final.pt → best_model.pt → 兜底 final.pt（sft.py 同链）。"""
-    for name in ("final.pt", "best_model.pt"):
+    for name in _PRETRAIN_CKPT_CHAIN:
         cand = os.path.join(abs_ck, name)
         if os.path.exists(cand):
             return cand
-    return os.path.join(abs_ck, "final.pt")
+    return os.path.join(abs_ck, _PRETRAIN_CKPT_CHAIN[0])
 
 
 def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
@@ -1400,15 +1413,15 @@ def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
         except Exception:
             return {}, ""
         ck = cfg.data.checkpoint_dir
-        sft_dir = os.path.join(ck, "sft")
-        out["model"] = _entry(os.path.join(sft_dir, "sft_best.pt"), "file", sft_dir)
+        sft_dir = os.path.join(ck, _SFT_DIR)
+        out["model"] = _entry(os.path.join(sft_dir, _SFT_BEST), "file", sft_dir)
         out["output_dir"] = _entry(os.path.join(ck, task))
         return out, (_rel(ck) if ck else "")
     if task == "dpo_data":
         # run_generate.py 硬拼 checkpoints/<variant>/sft/sft_best.pt（不读 YAML）；
         # 候选 = sft 阶段目录内全部文件
-        sft_dir = os.path.join(ROOT_DIR, "checkpoints", variant, "sft")
-        out["model_path"] = _entry(os.path.join(sft_dir, "sft_best.pt"), "file", sft_dir)
+        sft_dir = os.path.join(ROOT_DIR, "checkpoints", variant, _SFT_DIR)
+        out["model_path"] = _entry(os.path.join(sft_dir, _SFT_BEST), "file", sft_dir)
         return out, ""
     if task == "pretrain":
         # 配置模板（表单「配置模板」下拉，路径经前端转模板名传入）：数据目录（YAML
@@ -1437,18 +1450,18 @@ def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
         if cfg.sft.data_path:
             data_file = str(cfg.sft.data_path)
             out["data_path"] = _entry(data_file, "file", os.path.dirname(data_file))
-        out["save_dir"] = _entry(os.path.join(ck, "sft"))
+        out["save_dir"] = _entry(os.path.join(ck, _SFT_DIR))
     elif task == "dpo":
-        sft_dir = os.path.join(ck, "sft")
-        out["model_path"] = _entry(os.path.join(sft_dir, "sft_best.pt"), "file", sft_dir)
+        sft_dir = os.path.join(ck, _SFT_DIR)
+        out["model_path"] = _entry(os.path.join(sft_dir, _SFT_BEST), "file", sft_dir)
         if cfg.dpo.data_path:
             data_file = str(cfg.dpo.data_path)
             out["data_path"] = _entry(data_file, "file", os.path.dirname(data_file))
-        out["output_dir"] = _entry(os.path.join(ck, "dpo"))
+        out["output_dir"] = _entry(os.path.join(ck, _DPO_DIR))
     elif task == "opd":
         # 学生模型 = 上游 DPO 产物（dpo.py 落盘 dpo_best.pt）
-        dpo_dir = os.path.join(ck, "dpo")
-        out["model"] = _entry(os.path.join(dpo_dir, "dpo_best.pt"), "file", dpo_dir)
+        dpo_dir = os.path.join(ck, _DPO_DIR)
+        out["model"] = _entry(os.path.join(dpo_dir, _DPO_BEST), "file", dpo_dir)
         if cfg.opd.data_path:
             data_file = str(cfg.opd.data_path)
             out["data"] = _entry(data_file, "file", os.path.dirname(data_file))
@@ -1456,14 +1469,14 @@ def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
             teacher = str(cfg.opd.teacher_model_path).rstrip("\\/")
             # 候选 = 教师目录的父目录内全部子目录（同级目录均可选）
             out["teacher_model_path"] = _entry(teacher, "dir", os.path.dirname(teacher))
-        out["output_dir"] = _entry(os.path.join(ck, "opd"))
+        out["output_dir"] = _entry(os.path.join(ck, _OPD_DIR))
     elif task == "sft_lora":
         # 基座模型 = 预训练产物（与 sft 同链：final.pt → best_model.pt）
         out["model"] = _entry(_pretrain_prod(ck), "file", ck)
         if cfg.lora.data_path:
             data_file = str(cfg.lora.data_path)
             out["data"] = _entry(data_file, "file", os.path.dirname(data_file))
-        out["output_dir"] = _entry(os.path.join(ck, "lora"))
+        out["output_dir"] = _entry(os.path.join(ck, _LORA_DIR))
     return out, (_rel(ck) if ck else "")
 
 

@@ -56,6 +56,9 @@
 - **Recipe test**: Copy a variant script to a fresh directory, change a few parameters, and it should run. If imports break or the reader can't trace what each step does, the script fails the test.
 - **Orchestration-visible principle**: `main()` must be readable without jumping to other files. Steps are listed explicitly; implementation details are delegated to `gleamlm/` imports.
 - **Deletion test**: If removing a function from `gleamlm/` would break variant scripts, it belongs in `gleamlm/`. If it would only affect one variant, it belongs in that variant's directory.
+- **GUI training console (`webui/`)**: Browser console (pretrain / posttrain / inference tabs) that launches `manual/` scripts as subprocesses and streams logs + metrics. It is a tool layer (like `serve/`), may import `gleamlm/` + `hf/`, and must **not** be a default-value authority — its `/api/train/defaults` fallbacks mirror the manual scripts' naming conventions, guarded by `tests/test_webui_api.py::test_artifact_conventions_match_manual`.
+- **User config copies (`manual/my_configs/`)**: WebUI-writable per-user config snapshots (gitignored); built-in `manual/configs/*.yaml` stay read-only. "Save as" copies a built-in template here.
+- **Sentinel metrics contract (`gleamlm/utils/metrics.py`)**: Training scripts emit an extra machine-readable line `@@GLEAM_METRIC {json}` (via `emit_metric`) alongside human-readable logs; WebUI parses it with zero regex as the primary channel; logs without sentinel lines fall back to the regex chain (`--no-pbar` pretrain lines → val lines → tqdm frames). The key allow-list is the single source of truth — human-readable lines no longer carry machine-interface duty.
 
 See `adr/0011-library-vs-recipe-architecture.md` for the full design rationale (ADR archive lives at repo root `adr/`, local-only like the design doc).
 
