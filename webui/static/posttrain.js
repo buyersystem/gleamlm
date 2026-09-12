@@ -671,8 +671,10 @@ function renderStatusLine() {
   const tokTxt = fmtTok(lm.tok_per_sec);
   const tok = tokTxt ? ` · ${tokTxt} tok/s` : "";
   const state = st.status === "stopping" ? "停止中" : st.running ? "运行中" : "已结束";
+  // 接管标记: 该 run 由上一代面板启动, 本代面板重启后认领（进程仍在跑）
+  const adopted = st.adopted && st.running ? " · 重启前启动" : "";
   el.title = st.cmd || st.run_id;
-  el.innerHTML = `<b>${state} ${esc(shortPt2Id(st.run_id))}</b>${step}${loss}${lr}${tok}`;
+  el.innerHTML = `<b>${state}${adopted} ${esc(shortPt2Id(st.run_id))}</b>${step}${loss}${lr}${tok}`;
 }
 
 /* ── boot ── */

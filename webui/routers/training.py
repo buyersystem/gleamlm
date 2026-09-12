@@ -687,6 +687,7 @@ class TrainRun:
         self._last_step = 0  # tqdm 行缺 step 时的帧计数器
         self._sentinel_seen = False  # 已解析到哨兵行 → 关闭 tqdm 帧回退（H19）
         self.total_steps: int | None = None  # 日志式行 step N/M 的 M（lr 图 WSD 阶段线坐标）
+        self.adopted = False  # 面板重启后接管的遗留 run（进程在重启前启动）
 
     def summary(self) -> dict:
         return {
@@ -702,6 +703,7 @@ class TrainRun:
             "exit_code": self.exit_code,
             "last_metric": self.last_metric,
             "total_steps": self.total_steps,
+            "adopted": self.adopted,
         }
 
 
@@ -928,6 +930,14 @@ def _parse_loop(run: TrainRun) -> None:
     flushed: dict[str, int] = {}
     pending: list[tuple[str, int, float]] = []
     seen_lines = 0  # 已解析的完整行数（文件全量读，按行号增量推进）
+    if run.adopted:
+        # 接管遗留 run: 历史行已由上一代面板解析入库（metrics 无唯一约束，
+        # 重放会写重复点），从当前文件末尾起只解析新行。
+        with (
+            contextlib.suppress(OSError),
+            open(run.log_path, encoding="utf-8", errors="replace") as f,
+        ):
+            seen_lines = max(len(f.read().replace("\r", "\n").split("\n")) - 1, 0)
 
     def pump() -> bool:
         """全量读文件 → 把新出现的完整行并入待写指标；返回是否有新行。"""
@@ -987,6 +997,125 @@ def _parse_loop(run: TrainRun) -> None:
             tracker.close()
             break
         time.sleep(0.5)
+
+
+# ── 遗留进程接管: 面板被强杀/崩溃后, 训练子进程在 Windows 下仍存活 ──────
+# 面板启动时查 DB 最新 status='running' 且带 pid 的条目 → 三重校验（pid
+# 有效 + 进程存活 + 命令行含本 run 的脚本路径）→ 抬高为"接管 run", 状态/
+# 日志流/停止全链路复用现有机制; 校验不过的由 _mark_orphan_runs_interrupted
+# 归档。保守策略: 任一环失败都拒绝接管 —— 宁可显示中断, 不可错杀他进程。
+
+
+class _OrphanProc:
+    """接管 run 的壳进程: 只实现 poll/pid 等 _parse_loop/stop 用到的接口。
+
+    poll() 每 2s 才真查一次进程表（_parse_loop 每 0.5s 轮询, 直接转发会
+    每秒两次 tasklist）。遗留进程的退出码不可知（console 通知机制随上一
+    代面板消失）—— 统一落 1: parse_loop 收尾为 failed, note 记 exit=1。
+    """
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode: int | None = None
+        self._last_check = 0.0
+
+    def poll(self) -> int | None:
+        if self.returncode is not None:
+            return self.returncode
+        now = time.monotonic()
+        if now - self._last_check < 2.0:
+            return None
+        self._last_check = now
+        if not _pid_alive(self.pid):
+            self.returncode = 1
+        return self.returncode
+
+
+def _pid_alive(pid: int) -> bool:
+    """pid 是否存活（Windows tasklist CSV / POSIX os.kill 探测）。"""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            out = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            ).stdout
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return f'","{pid}","' in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # 进程存在但属他人
+    return True
+
+
+def _pid_cmdline(pid: int) -> str | None:
+    """进程完整命令行（查不到返回 None; Windows 走 PowerShell CIM）。"""
+    if pid <= 0:
+        return None
+    try:
+        if os.name == "nt":
+            script = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            line = r.stdout.strip()
+        else:
+            with open(f"/proc/{pid}/cmdline", encoding="utf-8", errors="replace") as f:
+                line = f.read().replace("\0", " ")
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return line or None
+
+
+def _pid_matches(pid: int, cmd: list[str]) -> bool:
+    """命令行签名校验: 进程命令行须含该 run 记录的脚本路径（.py token）,
+    防 pid 复用后误杀无关进程; 旧条目缺 cmd 时保守拒绝接管。"""
+    line = _pid_cmdline(pid)
+    if not line:
+        return False
+    norm = line.replace("\\", "/")
+    scripts = [c.replace("\\", "/") for c in cmd if c.endswith(".py")]
+    return any(s in norm for s in scripts)
+
+
+def _latest_running_row() -> dict[str, Any] | None:
+    """DB 最新一条 status='running' 且 config 带 pid 的 run（无则 None）。
+
+    run 结束后 finish_run 无条件把 status 写成 'finished', 因此 running
+    必然是"进程还活着但面板已死"的遗留条目 —— 正是接管目标。
+    """
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, config FROM runs WHERE status='running' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+    if row is None:
+        return None
+    try:
+        cfg = json.loads(row["config"] or "{}")
+    except ValueError:
+        return None
+    pid = cfg.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    return {"run_id": row["id"], "config": cfg, "pid": pid}
 
 
 class TrainManager:
@@ -1061,6 +1190,8 @@ class TrainManager:
                 "launcher": req.launcher,
                 "fields": dict(run.fields),
                 "cmd": list(cmd),
+                # 遗留恢复用: 面板重启后据此认领仍在跑的进程（_pid_matches 校验）
+                "pid": run.proc.pid,
             }
             if model_rel:
                 cfg["yaml_summary"] = _read_yaml_summary(model_rel)
@@ -1096,25 +1227,79 @@ class TrainManager:
                     os.killpg(os.getpgid(run.proc.pid), 15)  # SIGTERM
             return run
 
+    def adopt_orphan(self) -> TrainRun | None:
+        """认领遗留训练进程（上一代面板被强杀/崩溃, 子进程仍在跑）。
+
+        校验三环（最新 running 条目 + 进程存活 + 命令行含该 run 的脚本
+        路径）通过则构造壳 run 接手；接管后 status/stream/stop/删除路由
+        与前端恢复全自动（trainer.js 见 running=true 即重新 bindRun）。
+        失败返回 None —— 调用方随后走 _mark_orphan_runs_interrupted 归档。
+        """
+        with self._lock:
+            cur = self._run
+            if cur is not None and cur.proc is not None and cur.proc.poll() is None:
+                return None  # 本代已有存活 run（start 的冲突判定同源）
+        row = _latest_running_row()
+        if row is None or not _pid_alive(row["pid"]):
+            return None
+        if not _pid_matches(row["pid"], row["config"].get("cmd", [])):
+            return None
+        cfg = row["config"]
+        req = TrainStartRequest(
+            task=cfg.get("task", ""),
+            variant=cfg.get("variant", ""),
+            launcher=cfg.get("launcher", "python"),
+            fields=cfg.get("fields", {}),
+        )
+        run = TrainRun(req, [str(c) for c in cfg.get("cmd", [])], row["run_id"])
+        run.proc = _OrphanProc(row["pid"])
+        run.adopted = True
+        run.status = "running"
+        with self._lock:
+            self._run = run
+        threading.Thread(target=_parse_loop, args=(run,), daemon=True).start()
+        return run
+
 
 manager = TrainManager()
 
 
-def _mark_orphan_runs_interrupted() -> None:
+def _mark_orphan_runs_interrupted(exclude: str = "") -> None:
     """DB 孤儿清扫: 所有 status='running' 的 run → 'interrupted'（服务重启后
-    旧 parse_loop 已死, 无人会收尾; 保留日志文件供重放, note 记录孤儿标记）。"""
+    旧 parse_loop 已死, 无人会收尾; 保留日志文件供重放, note 记录孤儿标记）。
+
+    exclude: 刚被 adopt_orphan 接管的 run_id —— 已有新 parse_loop 接手, 不归档。
+    """
     try:
         con = sqlite3.connect(DB_PATH)
         try:
             con.execute(
                 "UPDATE runs SET status='interrupted', note=note || '; orphaned by restart' "
-                "WHERE status='running'"
+                "WHERE status='running' AND id != ?",
+                (exclude,),
             )
             con.commit()
         finally:
             con.close()
     except sqlite3.Error:
         pass  # DB 不存在/损坏时静默（首次运行等）
+
+
+def startup_recovery() -> None:
+    """面板启动时恢复遗留状态: 先认领活着的训练进程（adopt）, 再把认领不了/
+    已死的 running 条目归档 interrupted。
+
+    旧实现只在"新 run 启动"时清扫 —— 服务重启后 DB 长期挂幽灵 running
+    （前端列表靠 live 判定显示"中断", 但状态行/停止链路悬空）。提前到启动
+    时执行, 且 adopt 成功者排除在外（其 status 由新 parse_loop 收尾落定）。
+    """
+    adopted = ""
+    with contextlib.suppress(Exception):
+        # 接管失败不挡启动（保守: 落到下方 interrupted 归档）
+        run = manager.adopt_orphan()
+        if run is not None:
+            adopted = run.run_id
+    _mark_orphan_runs_interrupted(exclude=adopted)
 
 
 @router.get("/train/tasks")

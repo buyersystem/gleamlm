@@ -13,6 +13,8 @@ tracker 数据库与日志目录重定向到 tmp_path，不污染 webui/logs/exp
 
 import json
 import os
+import subprocess
+import sys
 import time
 
 import pytest
@@ -533,6 +535,93 @@ def test_train_stop_and_conflict(api, monkeypatch):
     assert api.get("/api/train/metrics", params={"run_id": "ft_sleep"}).status_code == 200
 
 
+def test_train_orphan_adopt_and_stop(api):
+    """遗留接管: DB running + 进程真存活 → startup_recovery 认领为可停止任务。
+
+    模拟"面板被强杀"：训练进程仍在跑（真 Python 子进程），DB 里留下带 pid
+    的 running 条目; 新面板启动时 adopt 成接管 run → status 可查、stop 可杀。
+    """
+    script_rel = "webui/logs/_ft_orphan.py"
+    script_abs = os.path.join(T.ROOT_DIR, script_rel)
+    with open(script_abs, "w", encoding="utf-8") as f:
+        f.write("import time\ntime.sleep(120)\n")
+    proc = subprocess.Popen([sys.executable, script_abs])
+    log_path = os.path.join(T.LOGS_DIR, "run_ft_orphan.log")
+    try:
+        # 历史行（上一代面板已解析入库）—— 接管后不得重放（metrics 无唯一约束）
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write('@@GLEAM_METRIC {"split":"train","step":1,"loss":1.5}\n')
+        tracker = T.ExperimentTracker("webui", T.DB_PATH)
+        try:
+            tracker.create_run(
+                config={
+                    "task": "probe",
+                    "variant": "",
+                    "launcher": "python",
+                    "fields": {},
+                    "cmd": [sys.executable, script_rel],
+                    "pid": proc.pid,
+                },
+                tags=["probe"],
+                run_name="ft_orphan",
+            )
+        finally:
+            tracker.close()
+        T.startup_recovery()
+        run = T.manager.current()
+        assert run is not None and run.run_id == "ft_orphan" and run.adopted is True
+        st = api.get("/api/train/status").json()
+        assert st["running"] is True and st["adopted"] is True
+        assert st["run_id"] == "ft_orphan" and st["task"] == "probe"
+        # 停止全链路复用: taskkill /T /F 杀接管进程 → parse_loop 收尾 stopped
+        r = api.post("/api/train/stop")
+        assert r.status_code == 200 and r.json()["status"] == "stopping"
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
+            st = api.get("/api/train/status").json()
+            if st["status"] == "stopped":
+                break
+            time.sleep(0.4)
+        assert st["status"] == "stopped" and st["exit_code"] == 1
+        runs = {x["id"]: x for x in api.get("/api/train/runs").json()}
+        assert runs["ft_orphan"]["note"] == "exit=1"
+        # 历史行被跳过: 接管不清重放（metrics 里不应出现预写的 step 1 点）
+        series = api.get("/api/train/metrics", params={"run_id": "ft_orphan"}).json()
+        assert series["series"] == {}
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        T.manager._run = None  # 不把接管 run 泄漏给后续测试
+        os.remove(script_abs)
+        if os.path.exists(log_path):
+            os.remove(log_path)
+
+
+def test_train_orphan_dead_marked_interrupted(api):
+    """遗留死进程: DB running 但 pid 已亡 → 不接管, 归档 interrupted + note。"""
+    tracker = T.ExperimentTracker("webui", T.DB_PATH)
+    try:
+        tracker.create_run(
+            config={
+                "task": "probe",
+                "variant": "",
+                "launcher": "python",
+                "fields": {},
+                "cmd": [sys.executable, "manual/sft_lora.py"],
+                "pid": 999999,
+            },
+            tags=["probe"],
+            run_name="ft_orphan_dead",
+        )
+    finally:
+        tracker.close()
+    T.startup_recovery()
+    assert T.manager.current() is None  # 未接管
+    runs = {x["id"]: x for x in api.get("/api/train/runs").json()}
+    dead = runs["ft_orphan_dead"]
+    assert dead["status"] == "interrupted" and "orphaned" in dead["note"]
+
+
 # ── run 删除 ──────────────────────────────────────────────────────────
 def test_train_delete_run_after_finish(api, monkeypatch):
     """删除已完成 run：DB 记录 + 指标 + 日志文件全清；非法/不存在 id 被拒。"""
@@ -683,7 +772,7 @@ def test_inference_load_and_chat(api):
         # 卸载恢复空态（server 模块级单例，跨测试残留会破坏 unloaded 用例）
         from webui.routers import inference as INF
 
-        INF.server.model = None
+        INF.server.unload()
 
 
 def _load_and_chat(api):
@@ -711,3 +800,30 @@ def _load_and_chat(api):
     )
     assert events[-1] == "[DONE]"
     assert streamed == text  # 流式拼接 == 非流式（T=0 无采样随机）
+
+
+def test_inference_unload_releases(api):
+    """load → unload：身份校验（409 防误卸）+ 空态/503 复归 + 幂等。"""
+    pt = os.path.join(T.ROOT_DIR, _MODEL_PT)
+    if not os.path.isfile(pt):
+        pytest.skip(f"缺少推理样本 {_MODEL_PT}")
+    try:
+        assert api.post("/v1/models/load", json={"model_path": _MODEL_PT}).status_code == 200
+        # 身份不符 → 409，且不误卸当前模型
+        r = api.post("/v1/models/unload", json={"model_path": "checkpoints/nope.pt"})
+        assert r.status_code == 409 and "不一致" in r.json()["detail"]
+        assert api.get("/v1/models/status").json()["loaded"] is True
+        # 正确身份 → 卸载成功；再卸幂等
+        r = api.post("/v1/models/unload", json={"model_path": _MODEL_PT})
+        assert r.status_code == 200 and r.json()["unloaded"] is True
+        assert api.get("/v1/models/status").json()["loaded"] is False
+        assert (
+            api.post("/v1/models/unload", json={"model_path": _MODEL_PT}).json()["unloaded"]
+            is False
+        )
+        msg = {"messages": [{"role": "user", "content": "hi"}]}
+        assert api.post("/v1/chat/completions", json=msg).status_code == 503
+    finally:
+        from webui.routers import inference as INF
+
+        INF.server.unload()

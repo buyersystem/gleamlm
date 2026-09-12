@@ -9,6 +9,7 @@ GleamLM WebUI — 推理 router（serve/api.py 逻辑 router 化）。
 """
 
 import asyncio
+import gc
 import json
 import os
 import sys
@@ -64,6 +65,17 @@ class ModelLoadRequest(BaseModel):
     tokenizer_path: str = ""
 
 
+class ModelUnloadRequest(BaseModel):
+    model_path: str  # 要卸载的模型 — 须与当前加载的一致（防误卸）
+
+
+def _normalize_model_path(model_path: str) -> str:
+    """相对路径基于仓库根归一为绝对路径（load / unload 共用，保证身份同口径）。"""
+    if not os.path.isabs(model_path):
+        model_path = os.path.join(ROOT_DIR, model_path)
+    return os.path.abspath(model_path)
+
+
 class ModelServer:
     def __init__(self):
         self.model = None
@@ -87,6 +99,17 @@ class ModelServer:
 
         total = sum(p.numel() for p in self.model.parameters())
         print(f"Server loaded: {total / 1e6:.2f}M on {self.device} <- {model_path}")
+
+    def unload(self):
+        """卸载模型并释放显存（训练启动前腾出 GPU）。"""
+        self.model = None
+        self.tokenizer = None
+        self.device = None
+        self.loaded_path = ""
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        print("Server unloaded: model released")
 
 
 server = ModelServer()
@@ -119,10 +142,7 @@ def _require_model() -> None:
 @router.post("/models/load")
 async def load_model(req: ModelLoadRequest):
     """加载/切换推理模型（webui 进程内热切换，新训练完成的模型即时可用）。"""
-    model_path = req.model_path
-    if not os.path.isabs(model_path):
-        model_path = os.path.join(ROOT_DIR, model_path)
-    model_path = os.path.abspath(model_path)
+    model_path = _normalize_model_path(req.model_path)
     if not os.path.isfile(model_path):
         raise HTTPException(status_code=404, detail=f"checkpoint 不存在: {req.model_path}")
 
@@ -131,6 +151,26 @@ async def load_model(req: ModelLoadRequest):
             return {"ok": True, "model": req.model_path, "cached": True}
         await asyncio.to_thread(server.load, model_path, req.tokenizer_path)
     return {"ok": True, "model": req.model_path, "cached": False}
+
+
+@router.post("/models/unload")
+async def unload_model(req: ModelUnloadRequest):
+    """卸载推理模型并释放显存（训练启动前腾出 GPU）。
+
+    model_path 必须与当前加载的模型一致（与加载同一身份口径），
+    否则 409 — 防止列表/警告条状态过期时误卸别的模型。未加载时幂等。
+    """
+    want = _normalize_model_path(req.model_path)
+    async with _load_lock:
+        if server.model is None:
+            return {"ok": True, "unloaded": False}
+        if server.loaded_path != want:
+            raise HTTPException(
+                status_code=409,
+                detail=f"当前加载的是 {server.loaded_path}，与要卸载的 {want} 不一致",
+            )
+        await asyncio.to_thread(server.unload)
+    return {"ok": True, "unloaded": True, "model": req.model_path}
 
 
 @router.get("/models/status")

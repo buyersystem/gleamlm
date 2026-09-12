@@ -623,6 +623,8 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 }
 .warnbar.err { color: var(--err); background: rgba(224, 82, 82, 0.08); border-color: rgba(224, 82, 82, 0.35); }
 .warnbar.ok { color: var(--ok); background: rgba(46, 204, 113, 0.07); border-color: rgba(46, 204, 113, 0.3); }
+/* 警告条内置操作按钮（如「卸载推理模型」）靠右 — 文案占满剩余宽度 */
+.warnbar > .btn { margin-left: auto; flex: none; }
 
 /* ── modal（配置编辑器 / 启动表单）── */
 .modal-mask {

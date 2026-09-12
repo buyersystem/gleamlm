@@ -652,6 +652,16 @@ function initShell() {
   const initialTab = location.hash.slice(1);
   if (initialTab) switchTab(initialTab, false);
 
+  // 警告条内的操作按钮（如「卸载」）走事件委托：warn-line 的 innerHTML 按需重建，
+  // 直接绑按钮会随重建丢失。按钮的 data-unload 携带模型身份 —— 卸载的就是
+  // 警告里点名的那个模型。unloadModel 定义在 chat.js（defer 顺序在 util.js 之后，
+  // 但点击发生在脚本全部加载后），typeof 守卫兼容裁掉 chat.js 的部署。
+  $("#warn-line").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-unload]");
+    if (!b) return;
+    if (typeof unloadModel === "function") unloadModel(b.dataset.unload);
+  });
+
   // header 状态：GPU 显存 / 推理模型 / tab 能力列表
   async function pollHeader() {
     if (document.hidden) return; // F4：后台标签页不再每 3s 打请求
@@ -668,17 +678,20 @@ function initShell() {
       if (inf && inf.loaded) {
         $("#inf-text").textContent = inf.model_path.split("/").slice(-2).join("/");
         $("#inf-dot").className = "dot " + (inf.device.startsWith("cuda") ? "gpu" : "idle");
-        const gpuFree = info.gpu && info.gpu.some((g) => g.used_gb < g.total_gb * 0.95);
-        // 推理模型占显存时给训练 tab 互斥提示（A10 显存紧张防 OOM）
-        const warn = $("#warn-line");
-        const w = info.train && inf.device.startsWith("cuda") && gpuFree === false
-          ? `<div class="warnbar err">⚠ 推理模型已加载并占满显存 — 启动训练前请先卸载推理模型或切换到 CPU 推理</div>`
-          : "";
-        if (warn && warn.innerHTML !== w) warn.innerHTML = w;
       } else {
         $("#inf-text").textContent = "未加载";
         $("#inf-dot").className = "dot idle";
       }
+      // GPU 互斥警告条统一收敛：加载且占满 → 提示；卸载/切 CPU/显存够 → 清空。
+      // 原先警告只在 loaded 分支里更新，卸载后旧警告会残留（A10 显存紧张防 OOM）。
+      const gpuFree = info.gpu && info.gpu.some((g) => g.used_gb < g.total_gb * 0.95);
+      const warn = $("#warn-line");
+      // 警告点名模型 + 卸载按钮携带同一身份（卸载的就是这里显示的模型）
+      const infName = inf && inf.model_path ? inf.model_path.replace(/\\/g, "/").split("/").pop() : "";
+      const w = inf && inf.loaded && info.train && inf.device.startsWith("cuda") && gpuFree === false
+        ? `<div class="warnbar err">⚠ 推理模型 ${esc(infName)} 已加载并占满显存 — 启动训练前请先卸载 <button class="btn sm" type="button" data-unload="${esc(inf.model_path)}" title="卸载 ${esc(infName)}，释放显存（可随时重新加载）">卸载</button></div>`
+        : "";
+      if (warn && warn.innerHTML !== w) warn.innerHTML = w;
       // 能力列表控制 tab 显隐（--no-train 部署只留推理）
       const tabSet = new Set(info.tabs || []);
       $$("#tabs .tab").forEach((t) => {

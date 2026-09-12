@@ -29,13 +29,16 @@ OPD (On-Policy Distillation) — 教师打分 + 序列级 Reverse KL。
   实现上 (THUNLP 的 token_reward_direct 精神):
     - 学生采样时记录 log π_S(y)          (detach，作为 reward 一部分)
     - 教师返回 log π_T(y)                (教师 token 空间，求和)
-    - 优势 A = log π_T(y) − log π_S(y)    (per-token 长度归一化，固定开启)
+    - 优势 A = log π_T(y) − log π_S(y)    (per-token 平均: 师生各除以己方 token 数)
     - 损失 L = −(A − baseline) · log π_θ(y)   (policy 项重新前向，带梯度)
 
   符号核对 (对齐 THUNLP verl 参考实现): 其 rm_scores = −kl_val = −(logπ_S − logπ_T)
   = logπ_T − logπ_S，loss = −A·logπ 最小化 → 梯度提升教师更信的 token、压低学生
   过度自信的 token = 最小化 reverse KL。若误用 A = logπ_S − logπ_T 会反转为最大化
   reverse KL (数值单步验证: KL 1.32→1.66 而非下降)。
+
+  归一化口径: 学生项除学生 token 数、教师项除教师 token 数。曾统一除学生长度
+  (BBPE/Qwen 切分比 ≈0.6)，教师信号被压缩 ~40%，组内优势比较失真。
 
 设计取舍:
   - OPD vs RL:  RL 一条轨迹一个 reward，OPD 每个 token 都有监督 → 样本效率高
@@ -65,7 +68,7 @@ OPD (On-Policy Distillation) — 教师打分 + 序列级 Reverse KL。
 工程可靠性 (v2):
   - 采样用 model.eval() (关 dropout)，更新前 model.train()：
     避免采样 logits 与更新前向的 dropout mask 不一致，破坏 on-policy 性
-  - 教师打分失败整组作废，保证 LOO baseline 组结构 (同一 prompt 恰 n_samples 条)
+  - 采样组不完整则整组舍弃，保证 LOO baseline 组结构 (同一 prompt 恰 n_samples 条)
   - 温度 T<1e-6 走真正贪心分支 (1e-6 缩放会让 softmax 溢出成 nan)
   - 过短样本过滤 + 长度归一化下限 + loss 非有限值跳过
   - 打分缓存 (同轨迹不重复打分) + 周期 checkpoint (opd_checkpoint.pt) 断点续训
@@ -240,16 +243,18 @@ class LocalTeacher:
         log_probs = logp.gather(-1, shift_ids.unsqueeze(-1)).squeeze(-1)
         return log_probs.sum().item()
 
-    def score(self, prompt: str, completion: str) -> float:
-        """返回 log π_T(completion | prompt)。
+    def score(self, prompt: str, completion: str) -> tuple[float, int]:
+        """返回 (log π_T(completion | prompt), completion 的教师 token 数)。
 
         用两次前向相减: log p(prompt+completion) - log p(prompt)。
         数学精确、无 BPE 边界对齐问题；与 API 模式(只对 assistant 消息打分)
-        和学生的 log_pi_S(只计生成部分) 语义一致。
+        和学生的 log_pi_S(只计生成部分) 语义一致。token 数取同一分解的两次
+        编码差，供 Stage 3 按教师侧长度归一 (师生 tokenizer 切分不同)。
         """
         full_ids = self.tok(prompt + completion, return_tensors="pt").input_ids.to(self.device)
         prompt_ids = self.tok(prompt, return_tensors="pt").input_ids.to(self.device)
-        return self._seq_logprob(full_ids) - self._seq_logprob(prompt_ids)
+        n_tok = max(full_ids.size(1) - prompt_ids.size(1), 1)
+        return self._seq_logprob(full_ids) - self._seq_logprob(prompt_ids), n_tok
 
     def close(self) -> None:
         del self.model
@@ -290,7 +295,8 @@ def train(args):
         raise ValueError("--teacher_model_path 必填 (如 checkpoints/Qwen3-0.6B)")
     local_teacher = LocalTeacher(args.teacher_model_path, device=str(device))
     print(f"本地教师已加载: {args.teacher_model_path}")
-    score_cache: dict[str, float] = {}  # key = prompt+completion → log π_T (同轨迹不重复打分)
+    # key = prompt+completion → (log π_T, 教师 token 数)
+    score_cache: dict[str, tuple[float, int]] = {}
 
     total = sum(p.numel() for p in model.parameters())
     print(
@@ -395,22 +401,20 @@ def train(args):
             # (保证 LOO baseline 的组结构：组内恰 n_samples 条、同一 prompt)
             scored_groups: dict[
                 str, list
-            ] = {}  # prompt -> [(gen_text, log_pi_S, gen_len, gen_ids, prompt_len, lp_t)]
+            ] = {}  # prompt -> [(gen_text, log_pi_S, gen_len, gen_ids, prompt_len, lp_t, n_t)]
             for prompt, group in group_samples.items():
                 scored: list = []
                 for gen_text, log_pi_S, gen_len, gen_ids, prompt_len in group:
                     cache_key = prompt + "\x00" + gen_text
                     if args.api_cache and cache_key in score_cache:
-                        lp_t = score_cache[cache_key]  # 同轨迹重新打分结果一致 (教师 temperature=0)
+                        # 同轨迹重新打分结果一致 (教师 temperature=0)
+                        lp_t, n_t = score_cache[cache_key]
                     else:
-                        # 本地教师: log π_T(completion | prompt)
-                        lp_t = local_teacher.score(prompt, gen_text)
-                        if lp_t is not None and args.api_cache:
-                            score_cache[cache_key] = lp_t
-                    if lp_t is None:
-                        print(f"[warn] prompt={_display_prompt(prompt)}... 打分失败，整组作废")
-                        break
-                    scored.append((gen_text, log_pi_S, gen_len, gen_ids, prompt_len, lp_t))
+                        # 本地教师: log π_T(completion | prompt) + completion 的教师 token 数
+                        lp_t, n_t = local_teacher.score(prompt, gen_text)
+                        if args.api_cache:
+                            score_cache[cache_key] = (lp_t, n_t)
+                    scored.append((gen_text, log_pi_S, gen_len, gen_ids, prompt_len, lp_t, n_t))
                 if len(scored) == args.n_samples:
                     scored_groups[prompt] = scored
 
@@ -421,19 +425,23 @@ def train(args):
             # ── Stage 3: 展平为样本级张量 + per-token 归一化 ──
             valid: list = []  # (prompt, gen_text, log_pi_S, gen_len, gen_ids, prompt_len)
             teacher_lp: list[float] = []
+            teacher_len: list[int] = []
             for prompt, scored in scored_groups.items():
-                for gen_text, log_pi_S, gen_len, gen_ids, prompt_len, lp_t in scored:
+                for gen_text, log_pi_S, gen_len, gen_ids, prompt_len, lp_t, n_t in scored:
                     valid.append((prompt, gen_text, log_pi_S, gen_len, gen_ids, prompt_len))
                     teacher_lp.append(lp_t)
+                    teacher_len.append(n_t)
             log_pi_S = torch.tensor([v[2] for v in valid], device=device, dtype=torch.float)
             log_pi_T = torch.tensor(teacher_lp, device=device, dtype=torch.float)
-            # A 是序列级总量。policy loss 用 per-token 平均
-            # logprob（.mean()），为使梯度尺度一致（不被生成长度隐式缩放），
-            # 优势一律归一化为 per-token 平均（除以生成长度）。
+            # A 是序列级总量。policy loss 用 per-token 平均 logprob（.mean()），
+            # 为使梯度尺度一致（不被生成长度隐式缩放），优势归一化为 per-token
+            # 平均；师生 tokenizer 切分不同（BBPE vs Qwen），各除己方 token 数。
             lengths = torch.tensor([v[3] for v in valid], device=device, dtype=torch.float)
+            lengths_T = torch.tensor(teacher_len, device=device, dtype=torch.float)
             lengths = lengths.clamp(min=4.0)  # 长度下限: 极短序列的 logprob 噪声被放大
+            lengths_T = lengths_T.clamp(min=4.0)
             log_pi_S = log_pi_S / lengths
-            log_pi_T = log_pi_T / lengths
+            log_pi_T = log_pi_T / lengths_T
             # 优势符号 (对齐 THUNLP verl 实现): 参考代码 rm_scores = -kl_val = -(S-T) = T-S，
             # 再以 loss = -advantage·logπ 最小化 → 梯度提升"教师比学生更信"的 token 概率、
             # 压低"学生过度自信"的 token。若用 A=S-T 配合 -A·logπ 会让方向反转 → 最大化

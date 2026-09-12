@@ -545,6 +545,8 @@ function renderStatusLine() {
     el.textContent = "";
     return;
   }
+  // 接管标记: 该 run 由上一代面板启动, 本代面板重启后认领（进程仍在跑）
+  if (st.adopted && st.running) head += " · 重启前启动";
   el.title = st.run_id;
   let detail = "";
   if (st.task === "pretrain") {

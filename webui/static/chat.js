@@ -47,7 +47,6 @@ async function loadModels() {
   const st = stRes.status === "fulfilled" ? stRes.value : { loaded: false, model_path: "" };
   const stPath = String(st.model_path || "").replace(/\\/g, "/");
   if (!chat.model && st.loaded) chat.model = stPath.split("/").pop(); // 刷新后只认 basename
-  const cur = st.loaded ? stPath.split("/").pop() : "";
   // P5：模型状态条 —— 当前模型 / 设备 / 参数量集中一处（原来是只有 basename 的裸文字）
   const nameEl = $("#chat-cur");
   if (nameEl) {
@@ -88,10 +87,14 @@ async function loadModels() {
       const rows = groups[v]
         .map((f) => {
           const name = f.stage ? `${f.stage}/${f.name}` : f.name;
-          const on = st.loaded && cur === f.name;
+          // 动作按钮与加载同一身份：已加载行显示「卸载」，卸载的就是本行 path
+          const on = st.loaded && stPath.endsWith(f.path);
           const badge = isNewModel(f.mtime)
             ? '<span class="badge-new" title="24 小时内产出">新训练</span>'
             : "";
+          const act = on
+            ? `<button class="btn sm ghost" type="button" data-unload="${esc(f.path)}" title="卸载该模型，释放显存（可随时重新加载）">卸载</button>`
+            : `<button class="btn sm" type="button" data-load="${esc(f.path)}" title="加载该模型进行推理">加载</button>`;
           return `<div class="list-item ckpt ${on ? "on" : ""}" title="${esc(f.path)} · ${esc(f.mtime)}"
      data-path="${esc(f.path)}">
     <div class="ck-name">
@@ -99,7 +102,7 @@ async function loadModels() {
       ${badge}
     </div>
     <span class="sub">${f.size_mb}MB · ${shortDate(f.mtime)}</span>
-    <button class="btn sm ${on ? "ghost" : ""}" type="button" data-load="${esc(f.path)}">${on ? "已加载" : "加载"}</button>
+    ${act}
   </div>`;
         })
         .join("");
@@ -109,17 +112,24 @@ async function loadModels() {
   </div>`;
     })
     .join("");
-  // 点击行主体 = 加载该模型；按钮也是（事件委托一次绑定）
+  // 行内动作按钮：加载 / 卸载（各自带本行 path，事件委托一次绑定）
   box.querySelectorAll("[data-load]").forEach((b) => {
     b.addEventListener("click", (e) => {
       e.stopPropagation();
       loadModel(b.dataset.load, b);
     });
   });
+  box.querySelectorAll("[data-unload]").forEach((b) => {
+    b.addEventListener("click", (e) => {
+      e.stopPropagation();
+      unloadModel(b.dataset.unload, b);
+    });
+  });
   box.querySelectorAll(".list-item").forEach((li) => {
     li.addEventListener("click", () => {
-      const b = li.querySelector("[data-load]");
-      if (b && b.disabled === false) loadModel(b.dataset.load, b);
+      // 行点击 = 「加载」快捷方式；卸载只走行内按钮（防误触）
+      const lb = li.querySelector("[data-load]");
+      if (lb && lb.disabled === false) loadModel(lb.dataset.load, lb);
     });
   });
 }
@@ -143,6 +153,39 @@ async function loadModel(path, btn) {
     btn.disabled = false;
     btn.textContent = old;
     toast(`加载失败：${err.message}`, "err", 7000);
+  }
+}
+
+/* 卸载推理模型并释放显存 —— 与加载同一身份口径：调用方必须给出 model_path
+   （行内按钮 = 本行 path；警告条 = 当前加载的模型），后端与当前加载比对，
+   不一致 409 —— 界面状态过期时不会误卸别的模型。 */
+async function unloadModel(path, btn) {
+  if (!path) return;
+  const b = btn || null;
+  if (b && b.disabled) return;
+  if (chat.busy) {
+    toast("生成中，请先停止再卸载", "err");
+    return;
+  }
+  if (b) {
+    b.disabled = true;
+    b.textContent = "卸载中…";
+  }
+  try {
+    await api("/v1/models/unload", {
+      method: "POST",
+      body: JSON.stringify({ model_path: path }),
+    });
+    chat.model = "";
+    await loadModels(); // 状态条与列表回空态（行内按钮随列表重建恢复）
+    toast(`推理模型已卸载：${path}`, "ok", 5200);
+  } catch (err) {
+    if (b) {
+      b.disabled = false;
+      b.textContent = "卸载";
+    }
+    toast(`卸载失败：${err.message}`, "err", 7000);
+    loadModels().catch(() => {}); // 409 等说明界面状态已过期，刷新对齐
   }
 }
 

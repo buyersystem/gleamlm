@@ -70,6 +70,10 @@ def _api_info() -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 训练遗留恢复: 认领上一代面板被强杀后的遗留训练进程（活着的接管为可停止
+    # 任务, 死掉的归档 interrupted）—— 先于推理模型加载, 训练状态尽早可见
+    if not _args.no_train:
+        await asyncio.to_thread(training_router_mod.startup_recovery)
     # 启动即加载推理模型（--model 显式给出时）；未给则推理 tab 内手动加载
     if _args.model:
         await asyncio.to_thread(inference_router_mod.server.load, _args.model, _args.tokenizer_path)

@@ -250,6 +250,8 @@ python webui/main.py
 
 浏览器打开 <http://127.0.0.1:8080>。常用参数：`--port` 改端口、`--model <checkpoint>` 启动即加载推理模型、`--no-train` 仅保留推理（部署场景）。训练任务需按下方流程先备好数据与 checkpoint；已有后训练产物（如 `checkpoints/nano/sft/sft_best.pt`）可直接在推理 tab 加载对话。
 
+> **关闭面板不会停止训练**：面板与训练进程分离（面板是遥控器，训练在独立子进程中运行）——关闭或强杀 WebUI 后训练仍在后台继续；重新启动面板时会自动接管仍在运行的训练，状态行标注「重启前启动」，日志回放、实时曲线与停止按钮照常可用。
+
 ### 0. 数据准备
 
 - **预处理数据已上传 ModelScope**：[LLM-Pretrain-Data](https://www.modelscope.cn/datasets/philexohf/LLM-Pretrain-Data)。
