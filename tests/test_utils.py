@@ -223,6 +223,21 @@ def test_metric_parse_tolerates_whitespace():
     assert parse_metric_line(line) == {"step": 1, "loss": 0.5, "lr": 1e-3}
 
 
+def test_metric_parse_glued_to_tqdm_frame():
+    # tqdm 帧以 \r 分帧（无换行）: 哨兵 print 会直接粘在帧尾（真实 DPO 日志 18/18 如此）
+    line = (
+        "DPO Epoch 0:  4%| | 38/881 [00:08<02:25, 5.80it/s, loss=0.5977, lr=9.96e-07]"
+        + SENTINEL
+        + '{"split":"train","step":25,"loss":0.59767115,"lr":9.96e-07}'
+    )
+    assert parse_metric_line(line) == {
+        "split": "train",
+        "step": 25,
+        "loss": 0.59767115,
+        "lr": 9.96e-07,
+    }
+
+
 def test_metric_parse_rejects_non_sentinel_and_malformed():
     assert parse_metric_line("step 1/10 (10.0%)  loss=1.5000  lr=0.000100") is None
     assert parse_metric_line(SENTINEL + "{broken json") is None

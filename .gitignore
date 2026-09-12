@@ -89,7 +89,7 @@ logs/
 eval_results/
 
 # 用户自定义配置副本（面板「另存为我的配置」的目标目录，个人实验不入库）
-my_configs/
+manual/my_configs/
 
 # Stale test data patterns
 data/test_splits/

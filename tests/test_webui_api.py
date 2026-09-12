@@ -180,7 +180,7 @@ def test_config_listing_and_permissions(api):
     by_path = {e["path"]: e for e in entries}
     nano = by_path["manual/configs/nano.yaml"]
     assert nano["builtin"] is True and nano["writable"] is False
-    # user_model 模板已移除: base 即模板, 用户经「另存为」在 my_configs/ 建配置
+    # user_model 模板已移除: base 即模板, 用户经「另存为」在 manual/my_configs/ 建配置
     assert "manual/configs/user_model.yaml" not in by_path
     assert all(e["builtin"] is False or e["writable"] is False for e in entries)
 
@@ -206,7 +206,7 @@ def test_builtin_write_forbidden(api):
 
 
 def test_config_copy_save_roundtrip(api):
-    dest = "my_configs/_ft_probe_nano.yaml"
+    dest = "manual/my_configs/_ft_probe_nano.yaml"
     # 预清理：本测试首步 copy 依赖 dest「不存在」。
     # 若上一次运行被中断（Ctrl-C / 进程被杀 / 沙箱拦截），finally 不会执行，
     # 遗留的 dest 会让首步误判重名返回 409，表现为与本改动无关的假失败。
@@ -270,9 +270,21 @@ def test_task_registry(api):
     assert builtin.issubset(body["tasks"].keys())
     assert body["tasks"]["probe"]["script"] == _PROBE_SCRIPT_REL  # 探针注入可见
     pre = body["tasks"]["pretrain"]
+    assert pre["short"] == "预训练" and pre["fields"][0]["label"] == "配置模板"
     assert pre["fields"][0]["name"] == "model" and pre["fields"][0]["required"] is True
+    assert pre["fields"][3]["label"] == "续训模型"  # resume（核心区第 4 项）
+    # sft_lora：数据字段标签「数据」；grpo/ppo 挂配置模板（同 DPO 链），模型 = 上游
+    # SFT 产物推导下拉，variant_cli=False 时模板不落 CLI
+    assert body["tasks"]["sft_lora"]["fields"][1]["label"] == "数据"
+    assert body["tasks"]["grpo"]["variant_flag"] is True
+    assert body["tasks"]["ppo"]["variant_flag"] is True
+    assert T._TASKS["grpo"].get("variant_cli") is False
+    assert T._TASKS["ppo"].get("variant_cli") is False
+    assert body["tasks"]["grpo"]["fields"][0]["suggest"] == "ckpt"
     assert body["tasks"]["sft"]["variant_flag"] is True
-    assert body["variants"] == ["nano", "lite", "pro"]
+    # 变体 = 配置模板名：动态扫描 manual/configs + manual/my_configs（base.yaml 即模板）
+    variants = body["variants"]
+    assert {"base", "nano", "lite", "pro"} <= set(variants) and variants == sorted(variants)
     assert body["launchers"] == ["python", "torchrun", "deepspeed"]
     assert any(e["path"] == "manual/configs/nano.yaml" for e in body["configs"])
     # dpo_data 生成任务：仅 python launcher，字段全空即可启动（模型自动探测）
@@ -280,6 +292,90 @@ def test_task_registry(api):
     assert dd["script"] == "data_tools/dpo/run_generate.py"
     assert dd["launchers"] == ["python"] and dd["variant_flag"] is True
     assert all(not f.get("required") for f in dd["fields"])
+    # upstream_stage: 模型下拉默认聚焦的 checkpoints/<variant>/ 子目录
+    assert body["tasks"]["sft"]["upstream_stage"] == ""
+    assert body["tasks"]["dpo"]["upstream_stage"] == "sft"
+    assert body["tasks"]["opd"]["upstream_stage"] == "dpo"
+
+
+def test_train_defaults(api):
+    """留空回落值端点：与脚本 CLI 缺省裁决对齐（模型/数据/保存目录/教师）。"""
+    # 参数守卫：未知任务 / variant_flag 任务的非法变体
+    assert api.get("/api/train/defaults", params={"task": "nope"}).status_code == 400
+    assert (
+        api.get("/api/train/defaults", params={"task": "sft", "variant": "zzz"}).status_code == 400
+    )
+    assert api.get("/api/train/defaults", params={"task": "sft"}).status_code == 400
+    # sft: final.pt→best_model.pt 链 + 数据 + 保存目录（目录不带 exists 检测）
+    body = api.get("/api/train/defaults", params={"task": "sft", "variant": "nano"}).json()
+    assert body["checkpoint_dir"] == "checkpoints/nano"  # 模板 ckpt 目录下发（候选过滤）
+    f = body["fields"]
+    assert f["save_dir"]["path"] == "checkpoints/nano/sft" and "exists" not in f["save_dir"]
+    assert f["model_path"]["path"].startswith("checkpoints/nano/")
+    assert isinstance(f["model_path"]["exists"], bool)
+    assert f["data_path"]["path"] == "data/nano/sft/sft_mix.jsonl"
+    # 推导目录 + 目录内同类条目候选（前端渲染为「目录固定 + 文件可选」下拉）
+    assert f["model_path"]["dir"] == "checkpoints/nano"
+    assert f["data_path"]["dir"] == "data/nano/sft"
+    assert isinstance(f["model_path"]["cands"], list)
+    assert all("\\" not in d["path"] for d in f.values())  # 展示路径统一正斜杠
+    # dpo: 硬拼 sft_best.pt（dpo.py 同链）+ 输出目录
+    f = api.get("/api/train/defaults", params={"task": "dpo", "variant": "nano"}).json()["fields"]
+    assert f["model_path"]["path"] == "checkpoints/nano/sft/sft_best.pt"
+    assert f["model_path"]["dir"] == "checkpoints/nano/sft"
+    assert f["output_dir"]["path"] == "checkpoints/nano/dpo"
+    # opd: 学生模型 = 上游 DPO 产物 + 数据 + 教师目录 + 输出
+    f = api.get("/api/train/defaults", params={"task": "opd", "variant": "nano"}).json()["fields"]
+    assert f["model"]["path"] == "checkpoints/nano/dpo/dpo_best.pt"
+    assert f["model"]["dir"] == "checkpoints/nano/dpo"
+    assert f["teacher_model_path"]["path"] == "checkpoints/Qwen3-0.6B"
+    assert f["teacher_model_path"]["dir"] == "checkpoints"  # 候选=同级目录
+    assert f["output_dir"]["path"] == "checkpoints/nano/opd"
+    # sft_lora: 基座模型 = 预训练产物链（与 sft 同源）+ 数据 + 输出目录
+    f = api.get("/api/train/defaults", params={"task": "sft_lora", "variant": "nano"}).json()[
+        "fields"
+    ]
+    assert f["model"]["path"].startswith("checkpoints/nano/")
+    assert f["model"]["dir"] == "checkpoints/nano"
+    # dpo_data: run_generate.py 硬拼的 SFT 产物
+    f = api.get("/api/train/defaults", params={"task": "dpo_data", "variant": "nano"}).json()
+    assert f["fields"]["model_path"]["path"] == "checkpoints/nano/sft/sft_best.pt"
+    assert f["fields"]["model_path"]["dir"] == "checkpoints/nano/sft"
+    # grpo/ppo: 模型 = 上游 SFT 产物（同 DPO 链）+ 保存目录随模板 + 无模板 400
+    assert api.get("/api/train/defaults", params={"task": "grpo"}).status_code == 400
+    body = api.get("/api/train/defaults", params={"task": "grpo", "variant": "nano"}).json()
+    assert body["checkpoint_dir"] == "checkpoints/nano"
+    f = body["fields"]
+    assert f["model"]["path"] == "checkpoints/nano/sft/sft_best.pt"
+    assert f["model"]["dir"] == "checkpoints/nano/sft"
+    assert f["output_dir"]["path"] == "checkpoints/nano/grpo"
+    f = api.get("/api/train/defaults", params={"task": "ppo", "variant": "nano"}).json()["fields"]
+    assert f["model"]["path"] == "checkpoints/nano/sft/sft_best.pt"
+    assert f["output_dir"]["path"] == "checkpoints/nano/ppo"
+    # pretrain: 未选配置模板不预填；选定后数据/保存目录随模板推导 + ckpt 前缀下发
+    assert api.get("/api/train/defaults", params={"task": "pretrain"}).json()["fields"] == {}
+    body = api.get("/api/train/defaults", params={"task": "pretrain", "variant": "nano"}).json()
+    assert body["checkpoint_dir"] == "checkpoints/nano"  # 续训模型候选过滤前缀
+    assert body["fields"]["data"]["path"] == "data/nano/pretrain/train"
+    assert body["fields"]["output_dir"]["path"] == "checkpoints/nano"
+    # 自定义配置模板（变体=配置模板名）: manual/my_configs/ 副本可解析，回落链按
+    # 模板 checkpoint_dir 计算（nano 副本改 checkpoint_dir 后路径整体跟随）
+    tpl_path = os.path.join(T.MY_CFG_DIR, "_ft_probe_tpl.yaml")
+    with open(os.path.join(T.CONFIG_DIR, "nano.yaml"), encoding="utf-8") as fh:
+        tpl_src = fh.read().replace(
+            "checkpoint_dir: checkpoints/nano", "checkpoint_dir: checkpoints/_ft_probe_ck"
+        )
+    with open(tpl_path, "w", encoding="utf-8") as fh:
+        fh.write(tpl_src)
+    try:
+        body = api.get(
+            "/api/train/defaults", params={"task": "sft", "variant": "_ft_probe_tpl"}
+        ).json()
+        assert body["checkpoint_dir"] == "checkpoints/_ft_probe_ck"
+        assert body["fields"]["save_dir"]["path"] == "checkpoints/_ft_probe_ck/sft"
+        assert body["fields"]["model_path"]["path"].startswith("checkpoints/_ft_probe_ck/")
+    finally:
+        os.remove(tpl_path)
 
 
 # ── 训练生命周期 ─────────────────────────────────────────────────────
@@ -289,6 +385,8 @@ def test_train_start_validation(api):
         api.post("/api/train/start", json={"task": "probe", "launcher": "bad"}).status_code == 400
     )
     assert api.post("/api/train/start", json={"task": "sft", "variant": "zzz"}).status_code == 400
+    # grpo 挂配置模板后：缺模板 400
+    assert api.post("/api/train/start", json={"task": "grpo", "fields": {}}).status_code == 400
     r = api.post("/api/train/start", json={"task": "pretrain", "fields": {}})
     assert r.status_code == 400 and "model" in r.json()["detail"]  # 必填缺失
     r = api.post(
@@ -296,6 +394,45 @@ def test_train_start_validation(api):
         json={"task": "pretrain", "fields": {"model": "manual/configs/nope.yaml"}},
     )
     assert r.status_code == 400 and "不存在" in r.json()["detail"]
+
+
+def test_train_start_custom_template_cmd(api):
+    """变体=配置模板名：启动命令带 --variant + --config_dir（按副本所在目录）。"""
+    tpl_path = os.path.join(T.MY_CFG_DIR, "_ft_probe_tpl.yaml")
+    with open(os.path.join(T.CONFIG_DIR, "nano.yaml"), encoding="utf-8") as fh:
+        src = fh.read()
+    with open(tpl_path, "w", encoding="utf-8") as fh:
+        fh.write(src)
+    try:
+        cmd, _meta = T._build_command(T.TrainStartRequest(task="sft", variant="_ft_probe_tpl"))
+        assert cmd[-2:] == ["--config_dir", "manual/my_configs"] and "--variant" in cmd
+        # 内置模板：--config_dir 指向 manual/configs（显式传，不靠脚本缺省）
+        cmd, _meta = T._build_command(T.TrainStartRequest(task="sft", variant="nano"))
+        assert cmd[-2:] == ["--config_dir", "manual/configs"]
+        # dpo_data 脚本无 --config_dir 参数：不注入（仅 --variant，目录按名称约定）
+        cmd, _meta = T._build_command(T.TrainStartRequest(task="dpo_data", variant="nano"))
+        assert "--config_dir" not in cmd
+        # 字段名→脚本旗标覆写：run_generate 用连字符 --model-path（默认拼写会是 --model_path）
+        cmd, _meta = T._build_command(
+            T.TrainStartRequest(
+                task="dpo_data",
+                variant="nano",
+                fields={"model_path": "checkpoints/nano/sft/sft_best.pt"},
+            )
+        )
+        assert "--model-path" in cmd and "--model_path" not in cmd
+        # grpo/ppo：脚本无 --variant 参数，模板仅供推导，不落 CLI
+        cmd, _meta = T._build_command(
+            T.TrainStartRequest(
+                task="grpo",
+                variant="nano",
+                fields={"model": "checkpoints/nano/sft/sft_best.pt", "data": "data/x.jsonl"},
+            )
+        )
+        assert "--variant" not in cmd and "--config_dir" not in cmd
+        assert "--model" in cmd and "--data" in cmd
+    finally:
+        os.remove(tpl_path)
 
 
 def test_train_stop_when_idle(api):
@@ -474,6 +611,29 @@ def test_sentinel_closes_tqdm_fallback():
     pts = T._parse_metric_lines(run, lines)
     assert {s for k, s, _ in pts if k == "loss"} == {4, 1}
     assert ("reward", 1, 0.25) in pts  # 契约字段直接入列（grpo 的 reward 走这里）
+
+
+def test_glued_sentinel_line_parsed_and_gates_frames():
+    """回归: 哨兵粘连在 tqdm 帧尾时仍须识别（行首匹配曾致哨兵全灭）。
+
+    真实日志: tqdm 帧以 \r 分帧无换行, 哨兵 print 直接接帧尾 —— 未识别时
+    H19 门控不生效, 曲线退化为帧回退（x=分片位置、postfix 值重复采样 = 阶梯）。
+    """
+    run = T.TrainRun(T.TrainStartRequest(task="probe"), ["echo"], "t_glue")
+    lines = [
+        "4/100 [00:01<00:25, 3.9it/s, loss=1.5000, lr=5.00e-07]",
+        "4/100 [00:01<00:25, 3.9it/s, loss=1.5000, lr=5.00e-07]"
+        '@@GLEAM_METRIC {"split":"train","step":1,"total":50,'
+        '"loss":1.4999256,"lr":5e-07,"margin":0.1,"acc":1.0}',
+        "8/100 [00:02<00:24, 3.9it/s, loss=1.4000, lr=5.00e-07]",
+    ]
+    pts = T._parse_metric_lines(run, lines)
+    losses = [p for p in pts if p[0] == "loss"]
+    assert ("loss", 4, 1.5) in losses  # 哨兵之前的帧照常（兼容窗口）
+    assert ("loss", 1, 1.4999256) in losses  # 粘连哨兵: step=global_step, 全精度
+    assert ("margin", 1, 0.1) in pts and ("acc", 1, 1.0) in pts
+    assert not [p for p in pts if p[0] == "loss" and p[1] == 8]  # 哨兵后帧退场
+    assert run.total_steps == 50
 
 
 def test_tqdm_fallback_kept_for_legacy_logs():

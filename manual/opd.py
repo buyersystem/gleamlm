@@ -564,9 +564,8 @@ def parse_args():
     p.add_argument(
         "--variant",
         type=str,
-        choices=["nano", "lite", "pro"],
         required=True,
-        help="模型变体 (读 manual/configs/{variant}.yaml 的 opd 段默认值)",
+        help="配置模板名 (读 {config_dir}/{variant}.yaml 的 opd 段默认值)",
     )
     p.add_argument(
         "--config_dir",
@@ -630,7 +629,12 @@ def parse_args():
     args = p.parse_args()
 
     # ── 单轨裁决: YAML opd 段为默认权威; CLI 显式传才覆写 ──
-    cfg = load_config(os.path.join(args.config_dir, f"{args.variant}.yaml"), _ROOT_DIR, scope="opd")
+    config_path = os.path.join(args.config_dir, f"{args.variant}.yaml")
+    if not os.path.isfile(config_path):
+        raise SystemExit(
+            f"配置不存在: {config_path} (--variant 指定配置模板名, --config_dir 指定目录)"
+        )
+    cfg = load_config(config_path, _ROOT_DIR, scope="opd")
     # 保存目录对齐 sft/dpo: 默认落变体根目录内 (checkpoints/<variant>/opd)
     args.output_dir = args.output_dir or os.path.join(cfg.data.checkpoint_dir, "opd")
     for _cli, _key in (("data", "data_path"), ("seq_len", "max_seq_len"), ("clip", "clip_grad")):

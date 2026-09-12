@@ -24,6 +24,7 @@
 
 WebUI 解析侧（webui/routers/training.py::_parse_metric_lines）优先消费哨兵行
 （结构化、零正则），未命中时回退旧格式正则 —— 哨兵行之前的老日志重放不受影响。
+哨兵行常粘连在 tqdm 帧尾（帧以 \r 分帧、无换行），解析按行内标记定位而非行首。
 从此人类可读行的格式不再承担机器接口职责，改格式不会静默断掉面板曲线。
 """
 
@@ -44,12 +45,18 @@ def emit_metric(**fields: Any) -> None:
 
 
 def parse_metric_line(line: str) -> dict[str, Any] | None:
-    """解析哨兵指标行 → dict；非哨兵行或畸形 JSON 返回 None（调用方走正则回退）。"""
+    """解析哨兵指标行 → dict；无标记或畸形 JSON 返回 None（调用方走正则回退）。
+
+    标记按「行内任意位置」定位而非行首：tqdm 帧以 \r 分帧（无换行），哨兵 print
+    会直接粘在帧尾 —— 行首匹配会让全部哨兵解析失败（DPO 实测 18/18 粘连），
+    派生 H19 门控失效、曲线退化为帧回退（坐标错位 + 阶梯形态）。
+    """
     stripped = line.strip()
-    if not stripped.startswith(SENTINEL):
+    idx = stripped.find(SENTINEL)
+    if idx < 0:
         return None
     try:
-        rec = json.loads(stripped[len(SENTINEL) :])
+        rec = json.loads(stripped[idx + len(SENTINEL) :])
     except json.JSONDecodeError:
         return None
     return rec if isinstance(rec, dict) else None

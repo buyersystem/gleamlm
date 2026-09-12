@@ -49,24 +49,49 @@ LOGS_DIR = os.path.join(_WEBUI_DIR, "logs")
 DB_PATH = os.path.join(LOGS_DIR, "experiments.db")
 os.makedirs(LOGS_DIR, exist_ok=True)  # 训练日志 + tracker SQLite 落盘目录
 CONFIG_DIR = os.path.join(ROOT_DIR, "manual", "configs")
-MY_CFG_DIR = os.path.join(ROOT_DIR, "my_configs")
+MY_CFG_DIR = os.path.join(ROOT_DIR, "manual", "my_configs")
 
-# 内置配置 = manual/configs/ 下全部 yaml（目录即白名单：IDE 直接新建的实验
-# 配置也能被面板读到/启动；写权限仍只开放 my_configs/，见 _resolve_config_path）
-_VARIANTS = ("nano", "lite", "pro")
+# 变体 = 配置模板名：两配置目录（内置 + 用户副本）下全部 *.yaml 的 stem 即
+# 变体清单（目录即白名单：IDE 直接新建的实验配置也能被面板读到/启动；同名时
+# manual/my_configs 副本覆盖内置；写权限仍只开放 manual/my_configs/，见 _resolve_config_path）
 _LAUNCHERS = ("python", "torchrun", "deepspeed")
+
+
+def _variants() -> list[str]:
+    """变体清单 = 两配置目录下全部 *.yaml 的 stem（去重、排序）。"""
+    names: set[str] = set()
+    for d in (CONFIG_DIR, MY_CFG_DIR):
+        if os.path.isdir(d):
+            for fn in os.listdir(d):
+                if fn.endswith(".yaml"):
+                    names.add(fn[: -len(".yaml")])
+    return sorted(names)
+
+
+def _config_path(variant: str) -> str:
+    """变体名 → 配置绝对路径（manual/my_configs 同名副本优先）；不存在返回空串。"""
+    if variant and variant in _variants():
+        for d in (MY_CFG_DIR, CONFIG_DIR):
+            p = os.path.join(d, f"{variant}.yaml")
+            if os.path.isfile(p):
+                return p
+    return ""
+
 
 router = APIRouter()
 
 # ── 任务注册表: 面板的字段清单与脚本 argparse 对齐, 空值不传 CLI ─────────
 # fields 元素: {name: flag 名(去 --), type: str/path/int/float/bool/choice,
 #              label: 表单标签, help: 说明, required?: 必填(仅真必填),
-#              choices?: choice 候选项}
+#              choices?: choice 候选项, flag?: 脚本旗标拼写覆写（默认 = name）}
+# upstream_stage?: 上游阶段（模型下拉默认聚焦 checkpoints/<variant>/<stage>/；
+#                  "" = 变体根）。与 _task_defaults 的回落链同源、逐条对齐
+#                  manual/*.py 的 CLI 缺省裁决
 _TASKS: dict[str, dict[str, Any]] = {
     "pretrain": {
         "script": "manual/pretrain.py",
         "label": "预训练",
-        "short": "Pretrain",
+        "short": "预训练",
         "variant_flag": False,
         # 面板自动附加: --no-pbar 日志式每 log_interval 步一行(管道下 tqdm 帧不可靠);
         # --tensorboard 已有 flag, 零侵入, tfevents 落 output_dir/runs/ 供指标增强
@@ -75,8 +100,8 @@ _TASKS: dict[str, dict[str, Any]] = {
             {
                 "name": "model",
                 "type": "path",
-                "label": "配置 YAML",
-                "suggest": "configs",  # 候选只取配置清单（manual/configs + my_configs）
+                "label": "配置模板",
+                "suggest": "configs",  # 候选 = 配置清单（manual/configs + manual/my_configs），选项只显文件名
                 "required": True,
             },
             {
@@ -92,7 +117,7 @@ _TASKS: dict[str, dict[str, Any]] = {
             {
                 "name": "resume",
                 "type": "path",
-                "label": "续训 checkpoint",
+                "label": "续训模型",
             },
             {"name": "epochs", "type": "int", "label": "epochs"},
             {"name": "batch_size", "type": "int", "label": "batch_size"},
@@ -111,6 +136,8 @@ _TASKS: dict[str, dict[str, Any]] = {
         "label": "SFT 指令微调",
         "short": "SFT",
         "variant_flag": True,
+        "config_dir_flag": True,
+        "upstream_stage": "",
         "auto": [],
         "fields": [
             {
@@ -126,9 +153,8 @@ _TASKS: dict[str, dict[str, Any]] = {
             {
                 "name": "data_path",
                 "type": "path",
-                "label": "数据文件",
+                "label": "数据",
             },
-            {"name": "resume", "type": "path", "label": "续训 checkpoint"},
             {"name": "epochs", "type": "int", "label": "epochs"},
             {"name": "lr", "type": "float", "label": "lr"},
             {"name": "batch_size", "type": "int", "label": "batch_size"},
@@ -152,6 +178,8 @@ _TASKS: dict[str, dict[str, Any]] = {
         "label": "DPO 偏好对齐",
         "short": "DPO",
         "variant_flag": True,
+        "config_dir_flag": True,
+        "upstream_stage": "sft",
         "auto": [],
         "fields": [
             {
@@ -192,6 +220,8 @@ _TASKS: dict[str, dict[str, Any]] = {
         "label": "OPD 在线策略蒸馏",
         "short": "OPD",
         "variant_flag": True,
+        "config_dir_flag": True,
+        "upstream_stage": "dpo",
         "auto": [],
         "fields": [
             {
@@ -229,6 +259,8 @@ _TASKS: dict[str, dict[str, Any]] = {
         "label": "LoRA 微调（可选旁路）",
         "short": "LoRA",
         "variant_flag": True,
+        "config_dir_flag": True,
+        "upstream_stage": "",
         "auto": [],
         "fields": [
             {
@@ -240,7 +272,7 @@ _TASKS: dict[str, dict[str, Any]] = {
             {
                 "name": "data",
                 "type": "path",
-                "label": "数据文件",
+                "label": "数据",
             },
             {"name": "output_dir", "type": "path", "label": "保存目录"},
             {"name": "epochs", "type": "int", "label": "epochs"},
@@ -258,7 +290,10 @@ _TASKS: dict[str, dict[str, Any]] = {
         "script": "manual/grpo.py",
         "label": "GRPO 强化对齐（与 DPO 并列）",
         "short": "GRPO",
-        "variant_flag": False,
+        "variant_flag": True,
+        # 配置模板仅用于面板推导与 run 归属，不落 CLI（grpo.py 无 --variant）
+        "variant_cli": False,
+        "upstream_stage": "sft",
         "auto": [],
         "fields": [
             {
@@ -291,7 +326,10 @@ _TASKS: dict[str, dict[str, Any]] = {
         "script": "manual/ppo.py",
         "label": "PPO 强化对齐（与 DPO 并列）",
         "short": "PPO",
-        "variant_flag": False,
+        "variant_flag": True,
+        # 配置模板仅用于面板推导与 run 归属，不落 CLI（ppo.py 无 --variant）
+        "variant_cli": False,
+        "upstream_stage": "sft",
         "auto": [],
         "fields": [
             {
@@ -326,6 +364,7 @@ _TASKS: dict[str, dict[str, Any]] = {
         "label": "DPO 数据生成",
         "short": "DPO数据",
         "variant_flag": True,
+        "upstream_stage": "sft",
         "launchers": ["python"],
         "auto": [],
         "fields": [
@@ -333,6 +372,8 @@ _TASKS: dict[str, dict[str, Any]] = {
                 "name": "model_path",
                 "type": "path",
                 "label": "SFT 模型",
+                # 面板字段名 model_path → 脚本旗标 --model-path（run_generate 连字符拼写）
+                "flag": "model-path",
                 "help": "留空自动探测 checkpoints/<variant>/sft/sft_best.pt（需先完成 SFT）",
             },
             {
@@ -387,15 +428,15 @@ def _abs(rel: str) -> str:
     return p
 
 
-# ── 配置文件权限分级（§4.1: 内置只读 / my_configs 可写）──────
-# user_model 模板已移除 (2026-09): base 即模板, 新建配置 = 复制内置另存为 my_configs/
+# ── 配置文件权限分级（§4.1: 内置只读 / manual/my_configs 可写）──────
+# user_model 模板已移除 (2026-09): base 即模板, 新建配置 = 复制内置另存为 manual/my_configs/
 def _in_builtin_configs(rel: str) -> bool:
     # manual/configs/ 下所有 yaml 均为内置只读配置（读取/启动可见，写回 403）
     return rel.startswith("manual/configs/") and rel.endswith(".yaml")
 
 
 def _config_entries() -> list[dict]:
-    """manual/configs/ 全部 yaml + my_configs/ 用户副本清单（读全部、写仅用户侧）。"""
+    """manual/configs/ 全部 yaml + manual/my_configs/ 用户副本清单（读全部、写仅用户侧）。"""
     entries = []
     if os.path.isdir(CONFIG_DIR):
         for fn in sorted(os.listdir(CONFIG_DIR)):
@@ -406,7 +447,7 @@ def _config_entries() -> list[dict]:
     if os.path.isdir(my_dir):
         for fn in sorted(os.listdir(my_dir)):
             if fn.endswith(".yaml"):
-                rel = f"my_configs/{fn}"
+                rel = f"manual/my_configs/{fn}"
                 entries.append({"path": rel, "name": fn, "builtin": False, "writable": True})
     return entries
 
@@ -420,7 +461,7 @@ def _resolve_config_path(rel: str) -> tuple[str, bool]:
         raise HTTPException(status_code=404, detail=f"配置文件不存在: {rel}")
     if _in_builtin_configs(rel):
         return p, False
-    if rel.startswith("my_configs/") and rel.endswith(".yaml"):
+    if rel.startswith("manual/my_configs/") and rel.endswith(".yaml"):
         return p, True
     raise HTTPException(status_code=403, detail=f"路径不在配置白名单: {rel}")
 
@@ -498,7 +539,7 @@ class ConfigCopyRequest(BaseModel):
 
 @router.post("/config/copy")
 def copy_config(req: ConfigCopyRequest) -> dict:
-    """内置配置「另存为我的配置」→ my_configs/（git 忽略的用户副本目录）。"""
+    """内置配置「另存为我的配置」→ manual/my_configs/（git 忽略的用户副本目录）。"""
     p, _ = _resolve_config_path(req.source)
     name = req.dest_name.strip() or os.path.basename(req.source)
     if not name.endswith(".yaml"):
@@ -506,7 +547,7 @@ def copy_config(req: ConfigCopyRequest) -> dict:
     os.makedirs(MY_CFG_DIR, exist_ok=True)
     dest = os.path.join(MY_CFG_DIR, name)
     if os.path.exists(dest):
-        raise HTTPException(status_code=409, detail=f"已存在同名配置: my_configs/{name}")
+        raise HTTPException(status_code=409, detail=f"已存在同名配置: manual/my_configs/{name}")
     with open(p, encoding="utf-8") as f:
         content = f.read()
     with open(dest, "w", encoding="utf-8", newline="\n") as f:
@@ -677,8 +718,11 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
             status_code=400,
             detail=f"任务 {req.task} 不支持 launcher: {req.launcher} (可选: {allowed})",
         )
-    if spec["variant_flag"] and req.variant not in _VARIANTS:
-        raise HTTPException(status_code=400, detail=f"--variant 需为 {_VARIANTS} 之一")
+    if spec["variant_flag"] and not _config_path(req.variant):
+        raise HTTPException(
+            status_code=400,
+            detail=f"配置模板不存在: {req.variant!r} (可选: {_variants()})",
+        )
 
     if req.launcher == "python":
         cmd = [sys.executable]
@@ -689,7 +733,12 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
     cmd.append(spec["script"])
     cmd.extend(spec.get("auto", []))
     if spec["variant_flag"]:
-        cmd += ["--variant", req.variant]
+        # 面板侧模板（grpo/ppo）脚本无 --variant 参数，不落 CLI
+        if spec.get("variant_cli", True):
+            cmd += ["--variant", req.variant]
+        if spec.get("config_dir_flag"):
+            # 显式传 --config_dir：同名副本在 manual/my_configs 时脚本缺省目录会读错文件
+            cmd += ["--config_dir", _rel(os.path.dirname(_config_path(req.variant)))]
 
     if req.launcher == "python":
         script_abs = os.path.join(ROOT_DIR, spec["script"])
@@ -706,10 +755,11 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
                 )
             continue
         ftype = field["type"]
+        fname = field.get("flag", field["name"])  # 脚本旗标拼写（默认 = 字段名）
         try:
             if ftype == "bool":
                 if str(raw).strip().lower() in ("true", "1", "yes", "on"):
-                    cmd.append(f"--{field['name']}")
+                    cmd.append(f"--{fname}")
                 continue
             if ftype in ("int", "float"):
                 conv: Any = int if ftype == "int" else float
@@ -718,7 +768,7 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
                 raise ValueError(f"需为 {field.get('choices')} 之一")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=f"参数 {field['name']} 非法: {e}") from None
-        cmd += [f"--{field['name']}", str(raw)]
+        cmd += [f"--{fname}", str(raw)]
 
     # 前置文件检查（数据目录等由脚本校验，只查明确存在的入口文件）
     if req.task in ("pretrain",):
@@ -732,6 +782,9 @@ def _build_command(req: TrainStartRequest) -> tuple[list[str], dict[str, Any]]:
 #  - 哨兵行（首选, 结构化零正则）: @@GLEAM_METRIC {"split":"train","step":N,...}
 #    emit/parse 契约见 gleamlm/utils/metrics.py —— 训练脚本与解析侧共用同一契约,
 #    人类可读行的格式变化不再静默断曲线
+#    注意: tqdm 帧以 \r 分帧（无换行）, 哨兵行常粘连在帧尾 —— parse_metric_line
+#    按行内标记定位; 行首匹配曾使全部哨兵解析失败（H19 随之失效, DPO 曲线退化
+#    为帧回退: x=分片位置 + postfix 值重复采样 = 阶梯形态）。
 #  - 预训练 --no-pbar 日志式:  step N/M (pct%)  loss=.. lr=.. Xk tok/s  GPU:u/tG
 #  - SFT/DPO tqdm 帧(\r 行):   N/M [..it/s, loss=.., lr=..]   （管道下每帧完整一行）
 #    上述两条为回退路径: 哨兵行之前的老日志重放不受影响。
@@ -774,7 +827,7 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
         try:
             rec = parse_metric_line(line)
             if rec is not None:
-                # 哨兵行: 结构化直接入列, 不走正则
+                # 哨兵行: 结构化直接入列, 不走正则（粘连帧尾形态由行内标记定位）
                 run._sentinel_seen = True  # H19: 帧回退从此对该 run 关闭（见 _TQDM_RE 分支）
                 step = int(rec["step"])
                 if rec.get("split") == "val":
@@ -961,9 +1014,10 @@ class TrainManager:
                 # 非 variant 任务 (pretrain): 忽略误传变体, run 名不带变体段
                 variant = ""
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            run_id = req.run_name or (
-                f"{req.task}_{variant}_{ts}" if variant else f"{req.task}_{ts}"
-            )
+            # 变体名来自配置文件名（可含中文/空格等）→ run_id 段仅保留标识符
+            # 字符（对齐删除路由 _RUN_ID_RE 契约）；原变体名仍进展示/DB config
+            slug = re.sub(r"[^A-Za-z0-9_.-]", "-", variant)
+            run_id = req.run_name or (f"{req.task}_{slug}_{ts}" if slug else f"{req.task}_{ts}")
             run = TrainRun(req, cmd, run_id)
             # 孤儿清扫: 新 run 开跑前, 把 DB 里仍标记 running 的旧条目归档为
             # interrupted（内存态随服务重启丢失, 服务重启后旧 run 不可能再被
@@ -1073,15 +1127,166 @@ def train_tasks() -> dict:
                 "label": v["label"],
                 "short": v.get("short", v["label"]),
                 "variant_flag": v["variant_flag"],
+                "upstream_stage": v.get("upstream_stage", ""),
                 "fields": v["fields"],
                 "launchers": v.get("launchers"),
             }
             for k, v in _TASKS.items()
         },
-        "variants": list(_VARIANTS),
+        "variants": _variants(),
         "launchers": list(_LAUNCHERS),
         "configs": _config_entries(),
     }
+
+
+# ── path 字段的留空回落值（启动表单旁显/预填）────────────────────────
+# 面板把"留空会用什么"显式摆在字段旁, 消除隐性默认 —— 与各脚本的 CLI 缺省
+# 裁决逐条对齐（manual/sft.py / dpo.py / opd.py / sft_lora.py、
+# data_tools/dpo/run_generate.py、grpo/ppo 的 argparse default）。
+_DEFAULT_SPEC_SCOPE = {"sft": "sft", "dpo": "dpo", "opd": "opd", "sft_lora": "lora"}
+
+
+def _cands_abs(abs_dir: str, kind: str) -> list[dict]:
+    """目录内与目标同类的条目：file=全部常规文件 / dir=全部子目录（点开头跳过）。
+
+    按修改时间倒序（并列按名字），展示路径统一正斜杠；目录不可读返回空列表。
+    """
+    try:
+        names = os.listdir(abs_dir)
+    except OSError:
+        return []
+    rows: list[tuple[float, str]] = []
+    for name in names:
+        if name.startswith("."):
+            continue
+        p = os.path.join(abs_dir, name)
+        if not (os.path.isfile(p) if kind == "file" else os.path.isdir(p)):
+            continue
+        try:
+            rows.append((os.path.getmtime(p), name))
+        except OSError:
+            rows.append((0.0, name))
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    return [{"path": _rel(os.path.join(abs_dir, name)), "name": name} for _, name in rows]
+
+
+def _entry(path: str, kind: str = "", cand_dir: str = "") -> dict:
+    """回落项：kind=file/dir 附存在性；cand_dir 附「推导目录 + 目录内同类条目候选」
+    （推导字段 = 目录随模板固定，目录内文件全部列出可选）。保存目录不检测。"""
+    item: dict[str, Any] = {"path": _rel(path)}
+    if kind == "file":
+        item["exists"] = os.path.isfile(path)
+    elif kind == "dir":
+        item["exists"] = os.path.isdir(path)
+    if cand_dir:
+        item["dir"] = _rel(cand_dir)
+        item["cands"] = _cands_abs(cand_dir, kind or "file")
+    return item
+
+
+def _pretrain_prod(abs_ck: str) -> str:
+    """预训练产物回落链：final.pt → best_model.pt → 兜底 final.pt（sft.py 同链）。"""
+    for name in ("final.pt", "best_model.pt"):
+        cand = os.path.join(abs_ck, name)
+        if os.path.exists(cand):
+            return cand
+    return os.path.join(abs_ck, "final.pt")
+
+
+def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
+    """任务 × 变体 → (path 字段留空回落值, 变体配置的 checkpoint_dir 相对路径)。
+
+    第二项供前端按配置目录前缀过滤 ckpt 候选 —— 变体 = 配置模板名, 产物归属
+    以模板的 checkpoint_dir 为准; 非 YAML 链任务/不可解析时为空串。
+    """
+    spec = _TASKS.get(task)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"未知任务类型: {task}")
+    if spec["variant_flag"] and not _config_path(variant):
+        raise HTTPException(
+            status_code=400,
+            detail=f"配置模板不存在: {variant!r} (可选: {_variants()})",
+        )
+    out: dict[str, dict] = {}
+    if task in ("grpo", "ppo"):
+        # 模型 = 上游 SFT 产物（与 DPO 同链），保存目录随模板；不可解析时静默降级
+        try:
+            cfg = load_config(_config_path(variant), ROOT_DIR, scope="full")
+        except Exception:
+            return {}, ""
+        ck = cfg.data.checkpoint_dir
+        sft_dir = os.path.join(ck, "sft")
+        out["model"] = _entry(os.path.join(sft_dir, "sft_best.pt"), "file", sft_dir)
+        out["output_dir"] = _entry(os.path.join(ck, task))
+        return out, (_rel(ck) if ck else "")
+    if task == "dpo_data":
+        # run_generate.py 硬拼 checkpoints/<variant>/sft/sft_best.pt（不读 YAML）；
+        # 候选 = sft 阶段目录内全部文件
+        sft_dir = os.path.join(ROOT_DIR, "checkpoints", variant, "sft")
+        out["model_path"] = _entry(os.path.join(sft_dir, "sft_best.pt"), "file", sft_dir)
+        return out, ""
+    if task == "pretrain":
+        # 配置模板（表单「配置模板」下拉，路径经前端转模板名传入）：数据目录（YAML
+        # data_dir 前缀）与保存目录（checkpoint_dir）随模板推导预填；未选模板不预填
+        if not variant:
+            return out, ""
+        try:
+            cfg = load_config(_config_path(variant), ROOT_DIR, scope="full")
+        except Exception:
+            return {}, ""
+        ck = cfg.data.checkpoint_dir
+        if cfg.data.data_dir:
+            out["data"] = _entry(str(cfg.data.data_dir))
+        out["output_dir"] = _entry(str(ck))
+        return out, (_rel(ck) if ck else "")
+    scope = _DEFAULT_SPEC_SCOPE.get(task, "")
+    if not scope:
+        return out, ""  # 无 YAML 回落链的任务（含测试探针等扩展任务）
+    try:
+        cfg = load_config(_config_path(variant), ROOT_DIR, scope=scope)
+    except Exception:
+        return {}, ""  # YAML 不可读/缺键: 静默降级（启动时进程侧暴露真实错误）
+    ck = cfg.data.checkpoint_dir
+    if task == "sft":
+        out["model_path"] = _entry(_pretrain_prod(ck), "file", ck)  # 候选 = ckpt 根目录内全部文件
+        if cfg.sft.data_path:
+            data_file = str(cfg.sft.data_path)
+            out["data_path"] = _entry(data_file, "file", os.path.dirname(data_file))
+        out["save_dir"] = _entry(os.path.join(ck, "sft"))
+    elif task == "dpo":
+        sft_dir = os.path.join(ck, "sft")
+        out["model_path"] = _entry(os.path.join(sft_dir, "sft_best.pt"), "file", sft_dir)
+        if cfg.dpo.data_path:
+            data_file = str(cfg.dpo.data_path)
+            out["data_path"] = _entry(data_file, "file", os.path.dirname(data_file))
+        out["output_dir"] = _entry(os.path.join(ck, "dpo"))
+    elif task == "opd":
+        # 学生模型 = 上游 DPO 产物（dpo.py 落盘 dpo_best.pt）
+        dpo_dir = os.path.join(ck, "dpo")
+        out["model"] = _entry(os.path.join(dpo_dir, "dpo_best.pt"), "file", dpo_dir)
+        if cfg.opd.data_path:
+            data_file = str(cfg.opd.data_path)
+            out["data"] = _entry(data_file, "file", os.path.dirname(data_file))
+        if cfg.opd.teacher_model_path:
+            teacher = str(cfg.opd.teacher_model_path).rstrip("\\/")
+            # 候选 = 教师目录的父目录内全部子目录（同级目录均可选）
+            out["teacher_model_path"] = _entry(teacher, "dir", os.path.dirname(teacher))
+        out["output_dir"] = _entry(os.path.join(ck, "opd"))
+    elif task == "sft_lora":
+        # 基座模型 = 预训练产物（与 sft 同链：final.pt → best_model.pt）
+        out["model"] = _entry(_pretrain_prod(ck), "file", ck)
+        if cfg.lora.data_path:
+            data_file = str(cfg.lora.data_path)
+            out["data"] = _entry(data_file, "file", os.path.dirname(data_file))
+        out["output_dir"] = _entry(os.path.join(ck, "lora"))
+    return out, (_rel(ck) if ck else "")
+
+
+@router.get("/train/defaults")
+def train_defaults(task: str, variant: str = "") -> dict:
+    """path 字段留空时的回落值（前端弹窗旁显 / 保存目录预填）。"""
+    fields, ck_dir = _task_defaults(task, variant)
+    return {"task": task, "variant": variant, "fields": fields, "checkpoint_dir": ck_dir}
 
 
 class TrainStopRequest(BaseModel):

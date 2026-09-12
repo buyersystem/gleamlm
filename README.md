@@ -595,7 +595,7 @@ Nano 与 Lite 同为四源（含 [Chinese FineWeb Edu](https://huggingface.co/da
 > **训练与验证口径说明**：
 > - train loss 含 label_smoothing 项（口径同 Nano 段），不可直接取 exp 当 PPL；周期验证走裸 CrossEntropyLoss，可直接取 exp。
 > - 周期验证为训练内嵌快测（`max_val_batches: 200` 采样上限 ≈0.8M token）；与 Nano 段 2.5044（全量 248.3M token）测量协议不同，不可直接并列。
-> - 实际训练配置为 `my_configs/lite_model.yaml`：仓库版 `manual/configs/lite.yaml` 微批为 4 × 16，本次为省显存调整为 2 × 32，有效 batch 64 不变。
+> - 实际训练配置为 `manual/my_configs/lite_model.yaml`：仓库版 `manual/configs/lite.yaml` 微批为 4 × 16，本次为省显存调整为 2 × 32，有效 batch 64 不变。
 > - 训练曲线图与 Lite 全量验证（与 Nano 同口径）待补。
 
 ---

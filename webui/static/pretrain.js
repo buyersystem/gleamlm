@@ -574,7 +574,7 @@ function renderStatusLine() {
   el.innerHTML = `<b>${esc(head)} ${esc(sid)}</b>${detail}`;
 }
 
-/* ── YAML 配置编辑器（内置只读 / my_configs 可写；保存前复用后端 Pydantic 校验）── */
+/* ── YAML 配置编辑器（内置只读 / manual/my_configs 可写；保存前复用后端 Pydantic 校验）── */
 let cfgCur = null; // {path, writable}
 
 async function openCfgModal() {
@@ -595,7 +595,7 @@ async function openCfgModal() {
       <textarea id="cfg-editor" spellcheck="false" placeholder="选择配置后点「打开」；改完「保存修改」即时校验"></textarea>
       <div id="cfg-msg" style="font-size:12px;min-height:16px"></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:12px;color:var(--dim)">另存为 my_configs/</span>
+        <span style="font-size:12px;color:var(--dim)">另存为 manual/my_configs/</span>
         <input id="cfg-name" type="text" style="width:230px" placeholder="my_nano_v2（.yaml 自动补全）" />
         <button id="cfg-copy" class="btn ghost sm" type="button">另存为我的配置</button>
         <span class="spacer"></span>

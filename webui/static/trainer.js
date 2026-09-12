@@ -1,13 +1,17 @@
 /* 训练共享层（单例）：后端 /train/tasks 元数据驱动的启动表单 + SSE 日志流 +
    status/metrics 轮询，向订阅者分发。pretrain.js / posttrain.js 各自注册钩子。
-   铁律 2：表单值全部留空不传 —— 面板不持有任何参数默认值，脚本/YAML 裁决。
-   （例外：仅记忆用户上次显式填过的 path 字段用于下次预填 —— 用户输入而非默认值） */
+   铁律 2 演进：留空不传的语义保留，但「留空会用什么」由 /train/defaults 显式
+   旁显（模型/数据/保存目录），模型类字段升级为按变体×阶段的下拉 ——
+   填写↔执行严格对应：显式值原样执行、隐性值显式化、错配需确认。 */
 "use strict";
 
 const trainer = {
   meta: null,       // /api/train/tasks 元数据（字段清单以脚本 argparse 为准）
   run: null,        // 当前 run（/api/train/status 轮询结果）
-  files: [],        // path 字段补全候选（checkpoint .pt + 配置 .yaml）
+  files: [],        // checkpoint .pt 候选（ckpt 字段补全 + 记忆存活校验）
+  models: [],       // checkpoint 明细（name/path/variant/stage/size_mb/mtime）
+  cfgs: [],         // 配置清单明细（path+name，供「配置模板」下拉）
+  _defGen: 0,       // /train/defaults 请求代际号（防快速切变体的竞态）
   lines: [],        // 全局日志行（cap 5000，两 tab 日志面板共用）
   seq: 0,
   _runId: null,
@@ -58,8 +62,11 @@ const trainer = {
     const [mRes, cRes] = await Promise.allSettled([api("/api/models"), api("/api/configs")]);
     const okM = mRes.status === "fulfilled";
     const okC = cRes.status === "fulfilled";
-    if (okM) this.files = (mRes.value.files || []).map((f) => f.path);
-    if (okC) this.cfgFiles = cRes.value.map((c) => c.path);
+    if (okM) {
+      this.models = mRes.value.files || []; // 明细供 ckpt 下拉（变体×阶段分组）
+      this.files = this.models.map((f) => f.path);
+    }
+    if (okC) this.cfgs = cRes.value; // 配置清单明细（path+name；「配置模板」下拉选项）
     if (okM && okC) return;
     const what = !okM && !okC
       ? "模型与配置文件列表"
@@ -83,18 +90,49 @@ const trainer = {
   async openStartModal(taskFilter) {
     if (!this.meta) await this.init();
     // 版本标记：改前端后 Ctrl+F5，console 出现此行 = 已加载新版（排查旧缓存用）
-    console.info("[trainer] fe v6: configs exempt + candidates refresh");
+    console.info("[trainer] fe v14: grpo/ppo variant select (model derived like DPO)");
+    prunePrefill(); // 记忆机制退役：仅 pretrain 保留 path 记忆，清历史遗留
     await this.refreshCandidates(); // 候选实时刷新（见 refreshCandidates）
     const ts = this.tasks(taskFilter);
     const keys = Object.keys(ts);
+    const single = keys.length === 1; // 卡片入口：标题锁定任务名、隐藏任务下拉
     const defaultTask = keys.includes("pretrain") ? "pretrain" : keys[0];
-    const box = openModal(startFormHtml(ts, this.meta, defaultTask));
-    refreshTaskUi(box, defaultTask, ts[defaultTask]);
-    box.querySelector("#start-task").addEventListener("change", (e) => {
-      refreshTaskUi(box, e.target.value, ts[e.target.value]);
+    const box = openModal(startFormHtml(ts, this.meta, defaultTask, single));
+    // 单任务入口 #start-task 隐藏（display:none 的焦点为 no-op）→ 落焦首个可见控件
+    // （启动方式/进程数已收进高级参数：pretrain 入口无可见下拉时回落首个核心字段）
+    requestAnimationFrame(() => {
+      const cand = [
+        box.querySelector("#start-variant"),
+        box.querySelector("#start-launcher"),
+        box.querySelector("#core-area [data-fname]"),
+      ];
+      const el = cand.find((x) => x && x.offsetParent !== null);
+      if (el) el.focus();
     });
-    box.querySelector("#start-launcher").addEventListener("change", (e) => {
-      box.querySelector("#nproc-row").style.display = e.target.value === "torchrun" ? "" : "none";
+    await refreshTaskUi(box, defaultTask, ts[defaultTask]);
+    box.querySelector("#start-task").addEventListener("change", async (e) => {
+      await refreshTaskUi(box, e.target.value, ts[e.target.value]);
+    });
+    box.querySelector("#start-variant").addEventListener("change", () => {
+      const k = box.querySelector("#start-task").value;
+      applyContext(box, k, ts[k]);
+    });
+    // 字段区随任务重建 → 用事件委托承接 ckpt 下拉/自定义输入的变化
+    box.addEventListener("change", (e) => {
+      const k = box.querySelector("#start-task").value;
+      if (e.target.tagName === "SELECT" && e.target.dataset.ckpt) {
+        syncCkptCustom(box, e.target.dataset.ckpt);
+        updateMismatch(box, k, ts[k]);
+      } else if (e.target.tagName === "SELECT" && e.target.dataset.configs) {
+        // 预训练「配置模板」切换 → 重推导（数据/保存目录预填 + 续训模型候选）
+        applyContext(box, k, ts[k]);
+      }
+    });
+    box.addEventListener("input", (e) => {
+      if (e.target.classList && e.target.classList.contains("ckpt-custom")) {
+        const k = box.querySelector("#start-task").value;
+        updateMismatch(box, k, ts[k]);
+      }
     });
     box.querySelector("#start-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -102,28 +140,57 @@ const trainer = {
     });
   },
 
+  /* ── 留空回落值（/api/train/defaults）：代际号保证最近一次上下文胜出 ──
+     返回整个响应体（fields + checkpoint_dir）—— 变体=配置模板，候选归属
+     按模板 checkpoint_dir 前缀过滤 */
+  async loadDefaults(task, variant) {
+    const gen = ++this._defGen;
+    try {
+      const res = await api(
+        `/api/train/defaults?task=${encodeURIComponent(task)}&variant=${encodeURIComponent(variant)}`,
+      );
+      return gen === this._defGen ? res || {} : null; // 过期响应丢弃
+    } catch (_) {
+      return gen === this._defGen ? {} : null; // 端点不可用：静默降级（不预填不旁显）
+    }
+  },
+
   async _submitStart(box, ts) {
-    const task = box.querySelector("#start-task").value;
+    const taskKey = box.querySelector("#start-task").value;
+    const task = ts[taskKey];
     const launcher = box.querySelector("#start-launcher").value;
     const nproc = parseInt(box.querySelector("#start-nproc").value, 10) || 1;
-    // variant_flag 关闭的任务（pretrain 等）无变体下拉：隐藏的 select 仍返回首项，
-    // 必须置空，否则 run 命名 / DB tag 误带第一个变体名（如 pretrain_nano_*）
-    const variant = ts[task].variant_flag ? box.querySelector("#start-variant").value : "";
+    // variant_flag 关闭的任务（pretrain / grpo / ppo）无变体语义：置空，
+    // 否则 run 命名 / DB tag 误带下拉里的第一个变体名（如 pretrain_nano_*）
+    const variant = task.variant_flag ? box.querySelector("#start-variant").value : "";
     const fields = {};
     box.querySelectorAll("[data-fname]").forEach((el) => {
       if (el.type === "checkbox") {
         if (el.checked) fields[el.dataset.fname] = "true";
+      } else if (el.tagName === "SELECT" && el.dataset.ckpt && el.value === "__custom__") {
+        /* 自定义路径占位项不是值：实际值由 -custom 输入框提供（非空才收集） */
       } else if (el.value.trim() !== "") {
         fields[el.dataset.fname] = el.value.trim();
       }
     });
-    // 必填前置检查（元数据已声明 required）
-    for (const f of ts[task].fields) {
-      if (f.required && !fields[f.name]) {
+    // 必填前置检查（元数据已声明 required；推导字段的值来自下拉默认项，不参与缺失检查）
+    for (const f of task.fields) {
+      if (f.required && !fields[f.name] && !isFixedField(task, f)) {
         // E6：字段级反馈取代 alert —— 弹窗会给不出「是哪个字段」
         showFieldError(box, f.name, `缺少必填参数：${f.label || f.name}`);
         return;
       }
+    }
+    // 错配显式确认：跨变体/跨阶段合法，但必须先让用户看见并确认
+    const mm = updateMismatch(box, taskKey, task);
+    if (mm) {
+      const ok = await confirmOverlay({
+        title: "确认按该模型启动？",
+        okText: "仍要启动",
+        body: `<p style="margin:0 0 6px">${esc(mm)}</p>
+          <p style="margin:0;color:var(--dim);font-size:13px">面板严格按你显式填写的路径启动，不做任何替换。</p>`,
+      });
+      if (!ok) return;
     }
     const btn = box.querySelector("#start-submit");
     btn.disabled = true;
@@ -131,17 +198,18 @@ const trainer = {
     try {
       const res = await api("/api/train/start", {
         method: "POST",
-        body: JSON.stringify({ task, launcher, nproc, variant, fields, run_name: "" }),
+        body: JSON.stringify({ task: taskKey, launcher, nproc, variant, fields, run_name: "" }),
       });
       closeModal();
-      savePrefill(task, fields, ts[task]); // 记住 path 字段（下次启动带出）
+      // path 记忆仅保留 pretrain（后训练字段由 defaults 预填/旁显接管）
+      if (taskKey === "pretrain") savePrefill(taskKey, fields, task);
       this.clearLog();
       this.bindRun(res.run_id, true);
-      this.emit("status", { ...(this.run || {}), run_id: res.run_id, task, variant, status: "starting", running: true });
+      this.emit("status", { ...(this.run || {}), run_id: res.run_id, task: taskKey, variant, status: "starting", running: true });
       this.emit("ended", { run_id: res.run_id, fresh: true });
     } catch (err) {
       btn.disabled = false;
-      btn.textContent = "启动";
+      btn.textContent = "启动训练";
       toast("启动失败：" + err.message, "err");
     }
   },
@@ -318,94 +386,141 @@ const trainer = {
   },
 };
 
-/* ── 启动表单 HTML（meta 驱动；字段全部空值 → 不传 CLI）── */
-function startFormHtml(tasks, meta, defaultTask) {
+/* ── 启动表单 HTML（meta 驱动；字段留空不传 CLI，留空回落值旁显）── */
+function startFormHtml(tasks, meta, defaultTask, single) {
   const t = tasks[defaultTask] || {};
   const taskOpts = Object.entries(tasks)
     .map(([k, v]) => `<option value="${k}">${esc(v.short || v.label)}</option>`)
     .join("");
+  // 单任务入口：标题直接锁定任务短名（SFT / DPO / …），任务下拉隐藏
+  const title = single ? esc(t.short || t.label || defaultTask) : "启动训练";
   return `<form id="start-form">
-    <div class="form-grid">
-      <label>任务类型</label>
-      <select id="start-task">${taskOpts}</select>
-      <span id="variant-field" style="display:contents">
-        <label>模型变体</label>
-        <select id="start-variant">
-          ${meta.variants.map((v) => `<option value="${v}">${v}</option>`).join("")}
-        </select>
-      </span>
-      <label>启动方式</label>
-      <select id="start-launcher">
-        <option value="python">python</option>
-        <option value="torchrun">torchrun</option>
-        <option value="deepspeed">deepspeed</option>
-      </select>
-      <label>进程数 nproc</label>
-      <span id="nproc-row" style="display:none">
-        <input id="start-nproc" type="number" min="1" max="8" value="2" style="width:90px" />
-      </span>
+    <div class="m-head"><b>${title}</b><span class="spacer"></span>
+      <button type="button" class="btn ghost sm" data-close="modal-mask">✕</button></div>
+    <div class="m-body">
+      <div class="form-grid">
+        <span id="task-field" style="display:${single ? "none" : "contents"}">
+          <label>任务类型</label>
+          <select id="start-task">${taskOpts}</select>
+        </span>
+        <span id="variant-field" style="display:contents">
+          <label>配置模板</label>
+          <select id="start-variant">
+            ${/* 显示完整文件名（nano.yaml）；value 仍为模板名（API/CLI 契约） */ ""}
+            ${meta.variants.map((v) => `<option value="${v}">${v}.yaml</option>`).join("")}
+          </select>
+        </span>
+      </div>
+      <div id="mismatch-bar" class="warnbar" style="display:none;margin-top:12px"></div>
+      <div class="full" style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
+        <div id="core-area"></div>
+        <details id="adv-area" style="margin-top:12px">
+          <summary style="font-size:12px;color:var(--dim);cursor:pointer;user-select:none">☰ 高级参数</summary>
+          <div class="form-grid" style="margin-top:8px">
+            <label for="start-launcher">启动方式</label>
+            <span><select id="start-launcher">
+              <option value="python">python</option>
+              <option value="torchrun">torchrun</option>
+              <option value="deepspeed">deepspeed</option>
+            </select></span>
+            <label for="start-nproc">进程数 nproc</label>
+            <span><input id="start-nproc" type="number" min="1" max="8" value="2" style="width:90px" />
+              <div class="help">仅 torchrun 启动方式生效（python / deepspeed 忽略）</div></span>
+          </div>
+          <div id="opt-area" style="margin-top:8px"></div>
+        </details>
+      </div>
     </div>
-    <div class="full" style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">
-      <div id="req-area"></div>
-      <details id="adv-area" style="margin-top:12px">
-        <summary style="font-size:12px;color:var(--dim);cursor:pointer;user-select:none">
-          ☰ 高级参数
-        </summary>
-        <div id="opt-area" style="margin-top:8px"></div>
-      </details>
-    </div>
-    <div class="full" style="margin-top:12px;display:flex;justify-content:flex-end;gap:8px">
+    <div class="m-foot">
       <button type="button" class="btn ghost" data-close="modal-mask">取消</button>
       <button type="submit" class="btn" id="start-submit">启动训练</button>
     </div>
   </form>
   <datalist id="dl-files">
     ${trainer.fileCandidates().map((p) => `<option value="${p}"></option>`).join("")}
-  </datalist>
-  <datalist id="dl-configs">
-    ${(trainer.cfgFiles || []).map((p) => `<option value="${p}"></option>`).join("")}
   </datalist>`;
 }
 
-function fieldRowsHtml(task, requiredOnly) {
-  if (!task) return "";
-  const fs = task.fields.filter((f) => (requiredOnly ? f.required : !f.required));
-  const rows = [];
-  for (const f of fs) {
-    const id = "f-" + f.name;
-    if (f.type === "bool") {
-      rows.push(`<label for="${id}">${f.label}</label>
-        <input id="${id}" data-fname="${f.name}" type="checkbox" style="width:auto" />`);
-      continue;
-    }
-    const req = f.required ? ' <span style="color:var(--err)">*必填</span>' : "";
-    const help = f.help ? `<div class="help">${esc(f.help)}</div>` : "";
-    if (f.type === "choice") {
-      rows.push(`<label for="${id}">${f.label}</label>
-        <span><select id="${id}" data-fname="${f.name}">
-          <option value="">默认</option>
-          ${f.choices.map((c) => `<option value="${c}">${c}</option>`).join("")}
-        </select>${help}</span>`);
-      continue;
-    }
-    const isNum = f.type === "int" || f.type === "float";
-    // path 候选按 suggest 归类: configs→配置清单 / ckpt→checkpoint 文件；
-    // 未标注的 path 字段（目录、数据文件等）不挂候选，不检测任何文件池
-    const listId = isNum
-      ? ""
-      : f.suggest === "configs"
-        ? "dl-configs"
-        : f.suggest === "ckpt"
-          ? "dl-files"
-          : "";
-    const listAttr = listId ? ` list="${listId}"` : "";
-    const attr = isNum
-      ? `type="number" step="${f.type === "float" ? "any" : "1"}"`
-      : `type="text"${listAttr}`;
-    rows.push(`<label for="${id}" style="font-size:12px">${esc(f.label)}${req}</label>
-      <span><input id="${id}" data-fname="${f.name}" ${attr} autocomplete="off" style="font-family:var(--mono);font-size:12px" />${help}</span>`);
+/* ── 推导字段：变体=配置模板 → 目录随所选模板推导，目录内同类条目全部可选 ──
+   选定配置文件名后，后端 defaults 下发「固定目录 + 目录内候选」（学生/基座模型、
+   数据、教师按模板落点推导）——前端渲染为下拉：目录锁定，目录内条目全部列出可选，
+   默认选中模板推导目标；提交收集所选项（脚本侧为既有覆写旗标，CLI 语义零变化），
+   未推导出时保持「空值不传 → YAML 单轨裁决」原状。 */
+const FIXED_NAMES = new Set(["model", "model_path", "data_path", "data", "teacher_model_path"]);
+
+function isFixedField(task, f) {
+  return !!task.variant_flag && FIXED_NAMES.has(f.name);
+}
+
+/* ── 单字段渲染（core / adv 两区共用）──
+   ctx: {ckpt: 是否渲染 checkpoint 下拉（任务含非推导 ckpt 类字段：pretrain 续训模型）;
+         fixed: 推导字段名集合（目录固定 + 目录内条目可选）} */
+function fieldRowHtml(f, ctx) {
+  const id = "f-" + f.name;
+  const locked = !!(ctx.fixed && ctx.fixed.has(f.name));
+  if (f.type === "bool") {
+    return `<label for="${id}">${f.label}</label>
+      <input id="${id}" data-fname="${f.name}" type="checkbox" style="width:auto" />`;
   }
-  return rows.join("");
+  const req = f.required ? ' <span class="req-star">*必填</span>' : "";
+  const help = f.help ? `<div class="help">${esc(f.help)}</div>` : "";
+  if (f.type === "choice") {
+    return `<label for="${id}">${f.label}</label>
+      <span><select id="${id}" data-fname="${f.name}">
+        <option value="">默认</option>
+        ${f.choices.map((c) => `<option value="${c}">${c}</option>`).join("")}
+      </select>${help}</span>`;
+  }
+  const isNum = f.type === "int" || f.type === "float";
+  if (!isNum && f.type === "path" && locked) {
+    // 推导字段：候选 = 模板推导目录内全部同类条目（defaults 下发 cands），
+    // 全部列出可选；提交收集所选项 → 脚本既有覆写旗标承接；
+    // 必有默认值 → 不标必填（空值仅出现在推导失败时，后端必填检查兜底）
+    return `<label for="${id}" style="font-size:12px">${esc(f.label)}</label>
+      <span>
+        <select id="${id}" data-fname="${f.name}" data-derived="1" style="font-family:var(--mono);font-size:12px"></select>
+        ${help}
+      </span>`;
+  }
+  if (!isNum && f.type === "path" && f.suggest === "configs") {
+    // 配置模板：候选 = 配置清单（选项只显文件名，value 仍为路径 → CLI --model 契约不变）。
+    // 不标必填红星（未选时由必填检查兜底反馈）
+    const opts = (trainer.cfgs || [])
+      .map((c) => `<option value="${esc(c.path)}">${esc(c.name)}</option>`)
+      .join("");
+    return `<label for="${id}">${esc(f.label)}</label>
+      <span><select id="${id}" data-fname="${f.name}" data-configs="1">
+        <option value="">（请选择）</option>
+        ${opts}
+      </select>${help}</span>`;
+  }
+  if (!isNum && f.type === "path" && f.suggest === "ckpt" && ctx.ckpt) {
+    // ckpt 下拉：空项 = 不传 CLI（脚本回落）；选项只显文件名（归属由候选过滤
+    // 或组标签承担）；末尾「自定义路径…」暴露 -custom 输入框（手填任意路径）；
+    // 不标必填红星（空选由必填检查兜底反馈）
+    return `<label for="${id}">${esc(f.label)}</label>
+      <span>
+        <select id="${id}" data-fname="${f.name}" data-ckpt="${f.name}"></select>
+        <input id="${id}-custom" data-fname="${f.name}" class="ckpt-custom" type="text"
+          autocomplete="off" placeholder="输入自定义路径…" style="display:none" />
+        ${help}
+        <div class="fnote" data-fnote="${f.name}" style="display:none"></div>
+      </span>`;
+  }
+  // path 候选按 suggest 归类: ckpt→checkpoint datalist（configs 由「配置模板」
+  // 下拉分支接管）；未标注的 path 字段（目录、数据文件等）不挂候选
+  const listId = isNum ? "" : f.suggest === "ckpt" ? "dl-files" : "";
+  const listAttr = listId ? ` list="${listId}"` : "";
+  const attr = isNum
+    ? `type="number" step="${f.type === "float" ? "any" : "1"}"`
+    : `type="text"${listAttr}`;
+  // 普通 path 字段也挂 fnote 容器（数据/教师等由 defaults 旁显回落值）
+  const note =
+    !isNum && f.type === "path"
+      ? `<div class="fnote" data-fnote="${f.name}" style="display:none"></div>`
+      : "";
+  return `<label for="${id}" style="font-size:12px">${esc(f.label)}${req}</label>
+    <span><input id="${id}" data-fname="${f.name}" ${attr} autocomplete="off" style="font-family:var(--mono);font-size:12px" />${help}${note}</span>`;
 }
 
 /* ── 启动 path 记忆：只记用户上次显式填过的路径字段（非面板默认值）── */
@@ -472,12 +587,41 @@ function applyPrefill(box, taskKey, task) {
   });
 }
 
-function refreshTaskUi(box, taskKey, task) {
-  const reqRows = fieldRowsHtml(task, true);
-  box.querySelector("#req-area").innerHTML = reqRows
-    ? `<div class="form-grid">${reqRows}</div>`
-    : '<div class="hint" style="font-size:12px">无必填参数，可直接启动</div>';
-  box.querySelector("#opt-area").innerHTML = `<div class="form-grid">${fieldRowsHtml(task, false)}</div>`;
+/* 字段分区：核心（模型/数据/保存/续训）常驻可见，其余收进高级参数 */
+const CORE_ORDER = {
+  model: 0,
+  model_path: 0,
+  teacher_model_path: 1,
+  data: 2,
+  data_path: 2,
+  save_dir: 3,
+  output_dir: 3,
+  resume: 4,
+};
+
+function splitFields(task) {
+  const core = [];
+  const adv = [];
+  for (const f of task.fields || []) {
+    (CORE_ORDER[f.name] !== undefined ? core : adv).push(f);
+  }
+  core.sort((a, b) => CORE_ORDER[a.name] - CORE_ORDER[b.name]);
+  return { core, adv };
+}
+
+async function refreshTaskUi(box, taskKey, task) {
+  const { core, adv } = splitFields(task);
+  const fixed = new Set((task.fields || []).filter((f) => isFixedField(task, f)).map((f) => f.name));
+  // ckpt 下拉：任务存在「非推导的 ckpt 类字段」（suggest=ckpt 注入）即渲染，
+  // 现仅 pretrain 续训模型（变体任务的模型字段走推导下拉）
+  const ckpt = (task.fields || []).some((f) => f.suggest === "ckpt" && !isFixedField(task, f));
+  const ctx = { ckpt, fixed };
+  box.querySelector("#core-area").innerHTML = core.length
+    ? `<div class="form-grid">${core.map((f) => fieldRowHtml(f, ctx)).join("")}</div>`
+    : '<div class="hint" style="font-size:12px">无可配置字段</div>';
+  box.querySelector("#opt-area").innerHTML = adv.length
+    ? `<div class="form-grid">${adv.map((f) => fieldRowHtml(f, ctx)).join("")}</div>`
+    : "";
   box.querySelector("#variant-field").style.display = task.variant_flag ? "contents" : "none";
   // 启动方式按任务白名单过滤（如 dpo_data 只支持 python，内部自行分片）；
   // 无条件重建选项：从受限任务切回普通任务时恢复全量下拉
@@ -488,8 +632,257 @@ function refreshTaskUi(box, taskKey, task) {
   ls.innerHTML = allowL.map((l) => `<option value="${l}">${l}</option>`).join("");
   ls.value = allowL.includes(curL) ? curL : allowL[0];
   ls.disabled = allowL.length === 1;
-  box.querySelector("#nproc-row").style.display = "none";
-  applyPrefill(box, taskKey, task);
+  // path 记忆仅 pretrain（其余任务的 path 语义由 defaults 预填/旁显接管）
+  if (taskKey === "pretrain") applyPrefill(box, taskKey, task);
+  await applyContext(box, taskKey, task);
+}
+
+/* ── 上下文联动（任务/变体切换）：defaults 预填 + 旁显 + ckpt 下拉 + 错配 ── */
+async function applyContext(box, taskKey, task) {
+  if (!task) return;
+  let variant = "";
+  if (task.variant_flag) {
+    const variantEl = box.querySelector("#start-variant");
+    variant = variantEl ? variantEl.value : "";
+  } else if (taskKey === "pretrain") {
+    // 预训练：配置模板 = 表单「配置模板」下拉（value 为路径 → 模板名供 defaults 解析）
+    const cfgEl = box.querySelector('select[data-configs="1"]');
+    variant = cfgEl && cfgEl.value ? cfgEl.value.split("/").pop().replace(/\.ya?ml$/i, "") : "";
+  }
+  const res = await trainer.loadDefaults(taskKey, variant);
+  if (res === null) return; // 过期响应：已有更新的上下文在途
+  const defs = res.fields || {};
+  // 配置模板：ckpt 候选归属 = 模板 checkpoint_dir 前缀（空 → 回退变体名约定）
+  box.dataset.ckPrefix = res.checkpoint_dir || "";
+  updateSaveDirs(box, task, defs);
+  // 预训练：数据目录同随模板推导（YAML data_dir 前缀），与保存目录同为预填可改
+  if (taskKey === "pretrain" && defs.data && defs.data.path) {
+    const dEl = box.querySelector('[data-fname="data"]');
+    if (dEl) dEl.value = defs.data.path;
+  }
+  updateDerivedFields(box, task, defs);
+  updateNotes(box, task, defs);
+  fillCkptOptions(box, task, variant);
+  updateMismatch(box, taskKey, task);
+}
+
+/* 保存目录预填：显式展示「将会保存到哪」；上下文变化即覆盖（保证对应性） */
+function updateSaveDirs(box, task, defs) {
+  for (const f of task.fields || []) {
+    if (f.name !== "save_dir" && f.name !== "output_dir") continue;
+    const el = box.querySelector(`[data-fname="${f.name}"]`);
+    const d = defs[f.name];
+    if (el && d && d.path) el.value = d.path;
+  }
+}
+
+/* 推导字段填充：下拉 = 模板推导目录内全部同类条目，
+   默认选中模板推导目标（不在候选内则保持首个）。 */
+function updateDerivedFields(box, task, defs) {
+  for (const f of task.fields || []) {
+    if (!isFixedField(task, f)) continue;
+    const sel = box.querySelector(`select[data-fname="${f.name}"]`);
+    if (!sel) continue;
+    const d = defs[f.name] || {};
+    const cands = d.cands || [];
+    let html = "";
+    if (cands.length) {
+      html = cands.map((c) => `<option value="${esc(c.path)}">${esc(c.name)}</option>`).join("");
+    } else if (d.path) {
+      html = `<option value="${esc(d.path)}">${esc(d.path.split("/").pop())}</option>`;
+    } else {
+      html = '<option value="">（未推导出可选文件）</option>';
+    }
+    sel.innerHTML = html;
+    if (d.path && [...sel.options].some((o) => o.value === d.path)) sel.value = d.path;
+  }
+}
+
+/* 旁显（模型/数据/教师等留空回落值；已直接预填的目录不重复旁显）。
+   推导字段的值在下拉内，不旁显。 */
+function updateNotes(box, task, defs) {
+  for (const f of task.fields || []) {
+    const note = box.querySelector(`[data-fnote="${f.name}"]`);
+    if (!note) continue;
+    const d = defs[f.name];
+    if (!d || !d.path || f.name === "save_dir" || f.name === "output_dir" || f.name === "data") {
+      note.style.display = "none";
+      note.textContent = "";
+      continue;
+    }
+    const mark =
+      d.exists === true
+        ? ' <span class="ok">✓ 存在</span>'
+        : d.exists === false
+          ? ' <span class="err">✗ 不存在</span>'
+          : "";
+    note.innerHTML = `留空 → 自动回落：<code>${esc(d.path)}</code>${mark}`;
+    note.style.display = "";
+  }
+}
+
+/* ckpt 下拉填充：候选按归属过滤（模板 ckpt 前缀优先，缺省按变体名），按阶段
+   分组（上游组优先、组内按时间倒序）；旧值不在新列表时插为保留项 */
+function fillCkptOptions(box, task, variant) {
+  for (const f of task.fields || []) {
+    const sel = box.querySelector(`select[data-ckpt="${f.name}"]`);
+    if (!sel) continue;
+    const emptyLabel =
+      f.name === "resume" ? "（不续训）" : f.required ? "（请选择）" : "（默认）";
+    const cur = sel.value;
+    // 归属过滤：优先模板 checkpoint_dir 前缀，defaults 未取到时按变体名兜底
+    const ckPrefix = box.dataset.ckPrefix || "";
+    const items = (trainer.models || []).filter((m) =>
+      ckPrefix ? m.path.startsWith(ckPrefix + "/") : m.variant === variant,
+    );
+    const up = task.upstream_stage || "";
+    const stages = [...new Set(items.map((m) => m.stage))];
+    stages.sort((a, b) => (a === up ? -1 : b === up ? 1 : String(a).localeCompare(String(b))));
+    let html = `<option value="">${emptyLabel}</option>`;
+    for (const st of stages) {
+      const grp = items
+        .filter((m) => m.stage === st)
+        .sort((a, b) => String(b.mtime).localeCompare(String(a.mtime)));
+      // "· 上游" 仅任务确有上游阶段(up 非空)且命中该组时标注——
+      // sft/lora 的 upstream_stage 为空(聚焦变体根), 不得误标
+      html += `<optgroup label="${esc((st || "根目录") + (up !== "" && st === up ? " · 上游" : ""))}">`;
+      html += grp
+        .map((m) => `<option value="${esc(m.path)}">${esc(m.name)}</option>`)
+        .join("");
+      html += "</optgroup>";
+    }
+    html += '<option value="__custom__">自定义路径…</option>';
+    sel.innerHTML = html;
+    if (cur && cur !== "__custom__") {
+      if (![...sel.options].some((o) => o.value === cur)) {
+        const o = document.createElement("option");
+        o.value = cur;
+        o.textContent = cur.split("/").pop();
+        sel.insertBefore(o, sel.lastElementChild);
+      }
+      sel.value = cur;
+    } else {
+      sel.value = cur === "__custom__" ? "__custom__" : "";
+    }
+    syncCkptCustom(box, f.name);
+  }
+}
+
+function syncCkptCustom(box, fname) {
+  const sel = box.querySelector(`select[data-ckpt="${fname}"]`);
+  const inp = box.querySelector(`#f-${fname}-custom`);
+  if (!sel || !inp) return;
+  inp.style.display = sel.value === "__custom__" ? "" : "none";
+}
+
+/* 错配检测：模型显式值不属于「当前变体的上游阶段」→ 黄条 + 启动前确认。
+   自定义外部路径（非 checkpoints/ 前缀）不判定（外部模型无从对应）。
+   返回提示文本或 null（_submitStart 用返回值决定是否弹确认）。 */
+function updateMismatch(box, taskKey, task) {
+  const bar = box.querySelector("#mismatch-bar");
+  if (!bar || !task) return null;
+  let text = null;
+  const mf = (task.fields || []).find((f) => f.name === "model" || f.name === "model_path");
+  if (mf && task.variant_flag) {
+    const sel = box.querySelector(`select[data-ckpt="${mf.name}"]`);
+    const inp = box.querySelector(`#f-${mf.name}-custom`);
+    let val = "";
+    if (sel) val = sel.value === "__custom__" ? (inp ? inp.value.trim() : "") : sel.value;
+    const variant = box.querySelector("#start-variant").value;
+    // 变体=配置模板：归属基准 = 模板 checkpoint_dir（defaults 下发）；
+    // 未取到时回退 checkpoints/<variant>/ 约定
+    const prefix = box.dataset.ckPrefix || `checkpoints/${variant}`;
+    const up = task.upstream_stage || "";
+    const vp = `${prefix}/`;
+    if (val && val.startsWith("checkpoints/")) {
+      if (!val.startsWith(vp)) {
+        text = `所选模型不在变体 ${variant} 的目录（${prefix}）下：${val}`;
+      } else if (up && !val.startsWith(vp + up + "/")) {
+        text = `所选模型不在 ${variant} 的 ${up} 上游目录下：${val}`;
+      }
+    }
+  }
+  bar.textContent = text || "";
+  bar.style.display = text ? "" : "none";
+  return text;
+}
+
+/* ── 启动表单内的二段确认浮层 ──
+   不能复用 confirmDialog：它复用 #modal-box，会把启动表单整个冲掉。
+   独立浮层叠在 .modal-mask 之上（#confirm-overlay 提升 z-index）。 */
+function confirmOverlay({ title = "确认", body = "", okText = "确认" } = {}) {
+  return new Promise((resolve) => {
+    const mask = document.createElement("div");
+    mask.className = "modal-mask show";
+    mask.id = "confirm-overlay";
+    mask.innerHTML = `<div class="modal" style="width:min(440px,90vw)">
+      <div class="m-head"><b>${esc(title)}</b><span class="spacer"></span>
+        <button type="button" class="btn ghost sm" data-x>✕</button></div>
+      <div class="m-body">${body}</div>
+      <div class="m-foot">
+        <button type="button" class="btn ghost" data-no>取消</button>
+        <button type="button" class="btn" data-yes>${esc(okText)}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(mask);
+    let settled = false;
+    const done = (v) => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener("keydown", onKey, true);
+      mask.remove();
+      resolve(v);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        e.preventDefault();
+        done(false);
+      } else if (e.key === "Tab") {
+        // 捕获阶段全量拦断：否则非边界的 Tab 会漏到 util.js 的焦点陷阱
+        // （openDialogRoot 认的是固定 modal-mask，会把焦点拽回启动表单）
+        e.stopPropagation();
+        const btns = [...mask.querySelectorAll("button")];
+        if (!btns.length) return;
+        const first = btns[0];
+        const last = btns[btns.length - 1];
+        const cur = document.activeElement;
+        if (!mask.contains(cur)) {
+          e.preventDefault();
+          first.focus();
+        } else if (e.shiftKey && cur === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && cur === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    mask.querySelectorAll("[data-x]").forEach((b) => b.addEventListener("click", () => done(false)));
+    mask.querySelector("[data-no]").addEventListener("click", () => done(false));
+    const yes = mask.querySelector("[data-yes]");
+    yes.addEventListener("click", () => done(true));
+    yes.focus();
+  });
+}
+
+/* 记忆机制退役：path 记忆仅服务 pretrain，打开面板时清掉 localStorage 遗留 */
+function prunePrefill() {
+  try {
+    const saved = readPrefill();
+    let changed = false;
+    for (const k of Object.keys(saved)) {
+      if (k !== "pretrain") {
+        delete saved[k];
+        changed = true;
+      }
+    }
+    if (changed) localStorage.setItem(PREFILL_KEY, JSON.stringify(saved));
+  } catch (_) {
+    /* 存储不可用时静默 */
+  }
 }
 
 /* ── 日志面板：工具条（C1~C4/C7）+ 全局行同步到所有 .log 容器 ── */

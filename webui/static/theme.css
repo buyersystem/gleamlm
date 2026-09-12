@@ -653,6 +653,24 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 #cfg-editor { font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.5;
   min-height: 380px; resize: vertical; }
 
+/* ── 启动表单（trainer.js）：三段式滚动结构 + 旁显 + ckpt 下拉 ──
+   表单作为 .modal 的唯一子项需自身撑开 flex，m-body 才能滚动而不是被
+   .modal 的 overflow:hidden 裁掉（字段多 + 高级参数展开时超 86vh）。 */
+#start-form { display: flex; flex-direction: column; min-height: 0; }
+#start-form .m-body { flex: 1; min-height: 0; }
+#start-form .m-foot { justify-content: flex-end; }
+/* 留空回落值旁显（模型/数据/教师字段下方） */
+.fnote { margin-top: 4px; font-size: var(--fs-xs); color: var(--dim); word-break: break-all; }
+.fnote code { font-family: var(--mono); color: var(--text-title); }
+.fnote .ok { color: var(--ok); }
+.fnote .err { color: var(--err); }
+.ckpt-custom { margin-top: 6px; font-family: var(--mono); font-size: 12px; }
+.req-star { color: var(--err); }
+/* 错配黄条：文本可能带长路径 → 顶对齐、允许换行 */
+#mismatch-bar { align-items: flex-start; line-height: 1.5; }
+/* 启动表单上的二段确认浮层：叠在 .modal-mask(50) 之上 */
+#confirm-overlay { z-index: 60; }
+
 /* ── H18 运行条 ──
    商业级运行控制的三个要点：
    ① 状态与动作在**同一条**上各占一端（状态在左、动作在右）—— 用户扫一眼就知道"在跑什么"；

@@ -84,7 +84,14 @@ function stageState(task, spec, latest, st) {
   const last = latest.get(task);
   if (isLive) {
     const step = (st.last_metric || {}).step;
-    return { cls: " run", tone: "run", text: step != null ? `${step} 步` : "启动中" };
+    // 生成类任务（dpo_data）不产 loss/lr 指标, step 恒 null —— 二元文案会让
+    // 卡片在 live 期永远停在「启动中」（live 判定已由 running 完成）。
+    // 生成类任务无步数概念: live 期直接显「生成中」。
+    return {
+      cls: " run",
+      tone: "run",
+      text: step != null ? `${step} 步` : spec.gen ? "生成中" : "启动中",
+    };
   }
   if (last && last.status !== "running") {
     const m = /exit=(-?\d+)/.exec(last.note || "");
@@ -230,8 +237,8 @@ function runDyn(r) {
     live,
     dyn: `${isMain}|${live}|${chip}|${cfg.variant || ""}`,
     name: `${esc(r.id)}${live ? ' <span class="chip running" style="padding:0 8px">LIVE</span>' : ""}`,
-    // 同 pretrain：主曲线只靠 .list-item.on 表达（副标题保留 variant 标记）
-    sub: `${fmtTime(r.created_at)} · ${chip}${cfg.variant ? ` · <b>${esc(cfg.variant)}</b>` : ""}`,
+    // 同 pretrain：主曲线只靠 .list-item.on 表达（副标题保留配置模板标记，显完整文件名）
+    sub: `${fmtTime(r.created_at)} · ${chip}${cfg.variant ? ` · <b>${esc(cfg.variant)}.yaml</b>` : ""}`,
     title: esc(r.id),
   };
 }

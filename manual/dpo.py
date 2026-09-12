@@ -43,7 +43,10 @@ _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
 def main() -> None:
     parser = argparse.ArgumentParser(description="GleamLM DPO 偏好对齐")
     parser.add_argument(
-        "--variant", type=str, choices=["nano", "lite", "pro"], required=True, help="模型变体"
+        "--variant",
+        type=str,
+        required=True,
+        help="配置模板名 (读 {config_dir}/{variant}.yaml)",
     )
     parser.add_argument(
         "--config_dir",
@@ -101,6 +104,10 @@ def main() -> None:
     cli_args = parser.parse_args()
 
     config_path = os.path.join(cli_args.config_dir, f"{cli_args.variant}.yaml")
+    if not os.path.isfile(config_path):
+        raise SystemExit(
+            f"配置不存在: {config_path} (--variant 指定配置模板名, --config_dir 指定目录)"
+        )
     # 单轨 Pydantic 配置: 字段校验/默认值唯一来源 (gleamlm/utils/config.py)
     cfg = load_config(config_path, _ROOT_DIR, scope="dpo")
 
