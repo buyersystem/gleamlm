@@ -84,6 +84,10 @@ def train(args):
         os.makedirs(args.output_dir, exist_ok=True)
 
     global_step = 0
+    # 记录窗口: 自上次指标行（log_interval step）以来的 loss 累计。
+    # 曲线记窗口均值而非瞬时单 step 值 —— 单 step 采样噪声大, 直接记锯齿化
+    log_loss_sum = 0.0
+    log_steps = 0
     for _ in range(args.epochs):
         for batch_items in loader:
             # batch_items: list[{"prompt", "ground_truth"}]（RLHFDataset 返回 dict）
@@ -132,24 +136,30 @@ def train(args):
             policy_optimizer.zero_grad()
             value_optimizer.step()
             value_optimizer.zero_grad()
+            log_loss_sum += loss.item()
+            log_steps += 1
 
             for p, old_p in zip(policy_model.parameters(), old_model.parameters(), strict=True):
                 old_p.data.copy_(p.data)
 
-            if rank == 0 and global_step % args.log_interval == 0:
+            if rank == 0 and (global_step + 1) % args.log_interval == 0:
+                window_loss = log_loss_sum / max(log_steps, 1)
                 # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构); flush 保证实时
                 print(
-                    f"{global_step}/{len(loader) * args.epochs} [loss={loss.item():.4f}, lr={args.lr:.2e}]",
+                    f"{global_step}/{len(loader) * args.epochs} [loss={window_loss:.4f}, lr={args.lr:.2e}]",
                     flush=True,
                 )
-                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费。
+                # loss 记窗口均值（自上次记录至今的全部 step 平均）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=len(loader) * args.epochs,
-                    loss=loss.item(),
+                    loss=window_loss,
                     lr=args.lr,
                 )
+                log_loss_sum = 0.0
+                log_steps = 0
             global_step += 1
 
     if rank == 0:

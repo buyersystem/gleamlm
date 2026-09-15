@@ -90,6 +90,10 @@ def train(args, model_cfg: ModelConfig):
     )
 
     step = 0
+    # 记录窗口: 自上次日志行（log_interval 步）以来的 loss 累计, 打印窗口均值
+    # （单批采样噪声大, 瞬时值让日志锯齿化）
+    log_loss_sum = 0.0
+    log_batches = 0
     model_engine.train()
     for epoch in range(args.epochs):
         sampler.set_epoch(epoch)
@@ -103,9 +107,14 @@ def train(args, model_cfg: ModelConfig):
 
             model_engine.backward(loss)
             model_engine.step()
+            log_loss_sum += loss.item()
+            log_batches += 1
 
-            if local_rank == 0 and step % args.log_interval == 0:
-                print(f"step {step}  loss={loss.item():.4f}")
+            if local_rank == 0 and step % args.log_interval == args.log_interval - 1:
+                window_loss = log_loss_sum / max(log_batches, 1)
+                print(f"step {step}  loss={window_loss:.4f}")
+                log_loss_sum = 0.0
+                log_batches = 0
             step += 1
 
 

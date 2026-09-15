@@ -119,6 +119,11 @@ def train(args):
     zero_replaced = 0  # 1b: 累计被替换的零方差 prompt 数
     zero_skipped = 0  # 1b: 末轮仍零方差、裁掉不进 loss 的 prompt 数
     zero_skipped_steps = 0  # 1b: 整批无学习信号而被跳过的 step 数
+    # 记录窗口: 自上次指标行（log_interval step）以来的 loss/reward 累计。
+    # 曲线记窗口均值而非瞬时单 step 值 —— 单 step 采样噪声大, 直接记锯齿化
+    log_loss_sum = 0.0
+    log_reward_sum = 0.0
+    log_steps = 0
 
     for global_step in range(total_steps):
         batch_items = [next_item() for _ in range(args.batch_size)]
@@ -236,25 +241,33 @@ def train(args):
         torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.clip)
         optimizer.step()
         optimizer.zero_grad()
+        log_loss_sum += total_loss.item()
+        log_reward_sum += rewards.mean().item()
+        log_steps += 1
 
-        if rank == 0 and global_step % args.log_interval == 0:
+        if rank == 0 and global_step % args.log_interval == args.log_interval - 1:
+            window_loss = log_loss_sum / max(log_steps, 1)
+            window_reward = log_reward_sum / max(log_steps, 1)
             # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构); flush 保证实时
             print(
-                f"{global_step}/{total_steps} [loss={total_loss.item():.4f}, "
+                f"{global_step}/{total_steps} [loss={window_loss:.4f}, "
                 f"lr={args.lr:.2e}, trunc={trunc_rows}/{gen_rows}]",
                 flush=True,
             )
             # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
             # 不再依赖手工帧格式; reward 为组内平均奖励（§7.3 的 GRPO 监控量,
-            # 与优势同源, 无额外前向开销）
+            # 与优势同源, 无额外前向开销）。loss/reward 记窗口均值
             emit_metric(
                 split="train",
                 step=global_step,
                 total=total_steps,
-                loss=total_loss.item(),
+                loss=window_loss,
                 lr=args.lr,
-                reward=rewards.mean().item(),
+                reward=window_reward,
             )
+            log_loss_sum = 0.0
+            log_reward_sum = 0.0
+            log_steps = 0
 
     if rank == 0:
         # 1a/1b 累计统计 (方案对齐: trunc=n/N 与 zero_var replaced/kept)

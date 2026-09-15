@@ -282,6 +282,11 @@ def main():
 
     log_interval = 50
     skipped_batches = 0
+    # 记录窗口: 自上次指标行以来的微批原始 loss 累计与批数。
+    # 曲线与 pbar 记窗口均值而非瞬时单批值 —— 单批采样噪声大,
+    # 直接记会让曲线锯齿化、趋势不可读
+    log_loss_sum = 0.0
+    log_batches = 0
     for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
@@ -332,10 +337,13 @@ def main():
                 )
                 global_step += 1
 
-            epoch_loss += loss.item() * denom
+            batch_loss = loss.item() * denom  # 还原 /denom 缩放, 微批原始 loss
+            epoch_loss += batch_loss
             n_batches += 1
+            log_loss_sum += batch_loss
+            log_batches += 1
 
-            if batch_idx % log_interval == 0:
+            if batch_idx % log_interval == log_interval - 1:
                 if lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
                         global_step, decay_steps, warmup_ratio, stable_ratio, min_lr_ratio
@@ -343,16 +351,36 @@ def main():
                 else:
                     lr_mult = get_lr_cosine(global_step, decay_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
-                pbar.set_postfix({"loss": f"{loss.item() * denom:.4f}", "lr": f"{cur_lr:.2e}"})
+                window_loss = log_loss_sum / log_batches
+                pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
-                # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）
+                # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）。
+                # loss 记窗口均值（自上次记录至今的全部微批平均）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=total_steps,
-                    loss=loss.item() * denom,
+                    loss=window_loss,
                     lr=cur_lr,
                 )
+                log_loss_sum = 0.0
+                log_batches = 0
+
+        if log_batches:
+            # 尾部残窗（本 epoch 末不足 log_interval 的微批）补记一点后清零,
+            # 避免记录窗口跨 epoch 混合
+            cur_lr = optimizer.param_groups[0]["lr"]
+            window_loss = log_loss_sum / log_batches
+            pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
+            emit_metric(
+                split="train",
+                step=global_step,
+                total=total_steps,
+                loss=window_loss,
+                lr=cur_lr,
+            )
+            log_loss_sum = 0.0
+            log_batches = 0
 
         epoch_loss /= max(n_batches, 1)
 

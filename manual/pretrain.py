@@ -318,6 +318,11 @@ def train(args, model_cfg: ModelConfig):
     total_steps = args.epochs * math.ceil(len(loader) / args.accumulate)
     step = start_step
     acc_steps = start_acc
+    # 记录窗口: 自上次指标行（log_interval 步）以来的微批 loss 累计。
+    # 曲线/wandb/TensorBoard 记窗口均值而非瞬时单批值 —— 单批采样噪声大,
+    # 直接记会让曲线锯齿化、趋势不可读
+    log_loss_sum = 0.0
+    log_batches = 0
     # 全局已消费样本数: 每处理一个 micro-batch += batch_size；
     # 断点续训按它定位（与 DP 规模解耦，对齐 nanotron consumed_train_samples）
     consumed_train_samples = start_consumed
@@ -424,6 +429,8 @@ def train(args, model_cfg: ModelConfig):
             # clip 必须 unscale 后 (阈值作用于 ×scale 梯度会失准)；
             # 梯度 inf/nan 时 scaler 跳过 step 并减半 scale。
             scaler.scale(loss / denom).backward()
+            log_loss_sum += loss.item()
+            log_batches += 1
             acc_steps += 1
             consumed_train_samples += args.batch_size
             dt = time.perf_counter() - step_start
@@ -449,18 +456,20 @@ def train(args, model_cfg: ModelConfig):
                     gpu_util, gpu_mem, gpu_mem_max, gpu_mem_total = _gpu_stats(device, local_rank)
                     tok_per_sec = args.batch_size * model_cfg.max_seq_len / dt
                     progress_pct = 100.0 * step / max(1, total_steps)
+                    window_loss = log_loss_sum / max(log_batches, 1)
                     if not args.pbar:
                         print(
-                            f"step {step}/{total_steps} ({progress_pct:.1f}%)  loss={loss.item():.4f}  lr={lr:.6f}  {tok_per_sec / 1e3:.1f}k tok/s  GPU:{gpu_mem:.1f}/{gpu_mem_total:.1f}G"
+                            f"step {step}/{total_steps} ({progress_pct:.1f}%)  loss={window_loss:.4f}  lr={lr:.6f}  {tok_per_sec / 1e3:.1f}k tok/s  GPU:{gpu_mem:.1f}/{gpu_mem_total:.1f}G"
                         )
                     # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板解析侧优先
                     # 消费结构化行, 人类可读行的格式变化不再静默断曲线;
-                    # --pbar 分支同样按 log_interval 发射（tqdm 帧只作回退）
+                    # --pbar 分支同样按 log_interval 发射（tqdm 帧只作回退）。
+                    # loss 记窗口均值（自上次记录至今的全部微批平均）
                     emit_metric(
                         split="train",
                         step=step,
                         total=total_steps,
-                        loss=loss.item(),
+                        loss=window_loss,
                         lr=lr,
                         tok_per_s=tok_per_sec,
                         gpu_mem=gpu_mem,
@@ -468,7 +477,7 @@ def train(args, model_cfg: ModelConfig):
                     if wandb is not None:
                         wandb.log(
                             {
-                                "loss": loss.item(),
+                                "loss": window_loss,
                                 "lr": optimizer.param_groups[0]["lr"],
                                 "step": step,
                                 "epoch": epoch,
@@ -484,9 +493,11 @@ def train(args, model_cfg: ModelConfig):
                     # TensorBoard 与 wandb 同节奏同指标（--tensorboard 时启用，
                     # 与 wandb 相互独立：未装/未开 wandb 也能本地看训练曲线）
                     if writer is not None:
-                        writer.add_scalar("Train/Loss", loss.item(), step)
+                        writer.add_scalar("Train/Loss", window_loss, step)
                         writer.add_scalar("Train/LR", optimizer.param_groups[0]["lr"], step)
                         writer.add_scalar("Train/TokPerSec", tok_per_sec, step)
+                    log_loss_sum = 0.0
+                    log_batches = 0
                 if args.pbar:
                     # 每步刷新（旧 base_trainer 组末 set_postfix 同款），
                     # 数值连续变化；重绘频率由 mininterval=5 节流

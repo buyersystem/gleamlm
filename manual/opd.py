@@ -314,6 +314,10 @@ def train(args):
     # 与 batch_size（prompt 数）无整除关系约束。打分失败导致组不完整时，
     # Stage 3 会回退到 batch mean baseline，无需在此限制合法配置。
     global_step = 0
+    # 记录窗口: 自上次指标行（log_interval step）以来的 loss 累计。
+    # 曲线记窗口均值而非瞬时单 step 值 —— 单 step 采样噪声大, 直接记锯齿化
+    log_loss_sum = 0.0
+    log_steps = 0
     start_epoch = 0
     last_batch_idx = -1  # 当前 epoch 内最后已遍历的 batch index（含打分失败），resume 从 +1 继续
     resume_path = os.path.join(args.output_dir, "opd_checkpoint.pt")
@@ -506,26 +510,32 @@ def train(args):
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
             optimizer.zero_grad()
+            log_loss_sum += loss.item()
+            log_steps += 1
 
-            if global_step % args.log_interval == 0:
+            if (global_step + 1) % args.log_interval == 0:
+                window_loss = log_loss_sum / max(log_steps, 1)
                 # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构): loss/lr 帧后跟
                 # 诊断字段, 面板解析器只吃 loss=.., lr=.. 帧; flush 保证管道下实时
                 print(
                     f"{global_step}/{len(loader) * args.epochs} "
-                    f"[loss={loss.item():.4f}, lr={args.lr:.2e}] "
+                    f"[loss={window_loss:.4f}, lr={args.lr:.2e}] "
                     f"mean_A={advantages.mean().item():+.3f}  "
                     f"log_pi_S={log_pi_S.mean().item():+.2f}  "
                     f"log_pi_T={log_pi_T.mean().item():+.2f}",
                     flush=True,
                 )
-                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费。
+                # loss 记窗口均值（自上次记录至今的全部 step 平均）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=len(loader) * args.epochs,
-                    loss=loss.item(),
+                    loss=window_loss,
                     lr=args.lr,
                 )
+                log_loss_sum = 0.0
+                log_steps = 0
             global_step += 1
 
             # 周期保存: 中途崩溃可 resume (含完整训练状态 + 数据位置 + 随机状态)

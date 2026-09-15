@@ -197,6 +197,10 @@ def train(args):
         print(f"Steps: {total_steps} (lr_decay_steps: {decay_steps}) — lr 调度按 decay 视野走")
     global_step = 0
     skipped_batches = 0
+    # 记录窗口: 自上次指标行以来的微批原始 loss 累计与批数。
+    # 记窗口均值而非瞬时单批值 —— 单批采样噪声大, 曲线会锯齿化
+    win_loss_sum = 0.0
+    win_batches = 0
     for _ in range(args.epochs):
         for batch_idx, (input_ids, labels) in enumerate(loader):
             input_ids, labels = input_ids.to(device), labels.to(device)
@@ -226,6 +230,8 @@ def train(args):
             )
             loss = loss / denom
             scaler.scale(loss).backward()
+            win_loss_sum += loss.item() * denom  # 还原缩放, 微批原始 loss
+            win_batches += 1
             if is_accum:
                 # lr 调度在 step 前更新 (与 sft.py 同构): warmup → cosine/wsd 衰减,
                 # 替代原恒定 lr (无衰减后期难收敛)
@@ -248,18 +254,22 @@ def train(args):
                 global_step += 1
 
                 if global_step == 1 or global_step % args.log_interval == 0:
+                    window_loss = win_loss_sum / win_batches
                     print(
-                        f"{global_step}/{total_steps} [loss={loss.item() * denom:.4f}, lr={cur_lr:.2e}]",
+                        f"{global_step}/{total_steps} [loss={window_loss:.4f}, lr={cur_lr:.2e}]",
                         flush=True,
                     )
-                    # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                    # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费。
+                    # loss 记窗口均值（自上次记录至今的全部微批平均）
                     emit_metric(
                         split="train",
                         step=global_step,
                         total=total_steps,
-                        loss=loss.item() * denom,
+                        loss=window_loss,
                         lr=cur_lr,
                     )
+                    win_loss_sum = 0.0
+                    win_batches = 0
 
     if skipped_batches:
         print(f"跳过 {skipped_batches} 个全 mask 批 (无监督 token)")

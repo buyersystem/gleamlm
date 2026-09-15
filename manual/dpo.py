@@ -255,6 +255,13 @@ def main() -> None:
 
     global_step = 0
     log_interval = 50
+    # 记录窗口: 自上次指标行（log_interval 批）以来的微批 loss 与 DPO 监控量累计。
+    # 曲线记窗口均值而非瞬时单批值 —— 单批采样噪声大, 直接记会让曲线锯齿化
+    log_loss_sum = 0.0
+    log_batches = 0
+    log_term_sum = 0.0
+    log_term_pos = 0
+    log_pairs = 0
 
     for epoch in range(epochs):
         policy_model.train()
@@ -305,10 +312,24 @@ def main() -> None:
                 )
                 global_step += 1
 
-            epoch_loss += loss.item() * denom
+            batch_loss = loss.item() * denom  # 还原 /denom 缩放, 微批原始 loss
+            epoch_loss += batch_loss
             n_batches += 1
+            log_loss_sum += batch_loss
+            log_batches += 1
+            # DPO 专属监控量（设计文档 §7.3）。定义与 dpo_loss 自洽, 不另发明量:
+            #   term   = (logπ_c - logπ_ref_c) - (logπ_r - logπ_ref_r)
+            #   margin = β · mean(term)     ← loss = -logsigmoid(β·term) 的 pre-sigmoid 值,
+            #                                  正 = 偏好 chosen, 与 loss 一一对应
+            #   acc    = mean(term > 0)     ← chosen 隐式奖励高于 rejected 的配对占比
+            # 逐批累计（no_grad, 不进入训练路径）, 记录时取窗口均值
+            with torch.no_grad():
+                _term = (policy_cho - ref_cho) - (policy_rej - ref_rej)
+            log_term_sum += _term.sum().item()
+            log_term_pos += int((_term > 0).sum().item())
+            log_pairs += _term.numel()
 
-            if batch_idx % log_interval == 0:
+            if batch_idx % log_interval == log_interval - 1:
                 if lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
                         global_step, total_steps, warmup_ratio, stable_ratio, min_lr_ratio
@@ -316,33 +337,54 @@ def main() -> None:
                 else:
                     lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
-                pbar.set_postfix({"loss": f"{loss.item() * denom:.4f}", "lr": f"{cur_lr:.2e}"})
-                # DPO 专属监控量（设计文档 §7.3）。定义与 dpo_loss 自洽, 不另发明量:
-                #   term   = (logπ_c - logπ_ref_c) - (logπ_r - logπ_ref_r)
-                #   margin = β · mean(term)     ← loss = -logsigmoid(β·term) 的 pre-sigmoid 值,
-                #                                  正 = 偏好 chosen, 与 loss 一一对应
-                #   acc    = mean(term > 0)     ← chosen 隐式奖励高于 rejected 的配对占比
-                # 只在日志步计算（no_grad, 不进入训练路径）。
+                window_loss = log_loss_sum / log_batches
+                pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
+                # margin/acc 与 loss 同口径取窗口均值。
                 # **不放进 set_postfix**: tqdm 帧的 N/M 是 dataloader 位置而非 global_step,
                 # 经正则回退路径入库会落在错的 x 上 —— 所以只走哨兵（step 由下面显式给出）。
-                with torch.no_grad():
-                    _term = (policy_cho - ref_cho) - (policy_rej - ref_rej)
-                    dpo_margin = (beta * _term).mean().item()
-                    dpo_acc = (_term > 0).float().mean().item()
+                dpo_margin = beta * log_term_sum / max(log_pairs, 1)
+                dpo_acc = log_term_pos / max(log_pairs, 1)
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
-                # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）
+                # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）。
+                # loss 记窗口均值（自上次记录至今的全部批平均）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=total_steps,
-                    loss=loss.item() * denom,
+                    loss=window_loss,
                     lr=cur_lr,
                     margin=dpo_margin,
                     acc=dpo_acc,
                 )
+                log_loss_sum = 0.0
+                log_batches = 0
+                log_term_sum = 0.0
+                log_term_pos = 0
+                log_pairs = 0
 
         epoch_loss /= max(n_batches, 1)
         avg_loss = epoch_loss
+
+        if log_batches:
+            # 尾部残窗（本 epoch 末不足 log_interval 的批）补记一点后清零,
+            # 避免记录窗口跨 epoch 混合
+            cur_lr = optimizer.param_groups[0]["lr"]
+            window_loss = log_loss_sum / log_batches
+            pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
+            emit_metric(
+                split="train",
+                step=global_step,
+                total=total_steps,
+                loss=window_loss,
+                lr=cur_lr,
+                margin=beta * log_term_sum / max(log_pairs, 1),
+                acc=log_term_pos / max(log_pairs, 1),
+            )
+            log_loss_sum = 0.0
+            log_batches = 0
+            log_term_sum = 0.0
+            log_term_pos = 0
+            log_pairs = 0
 
         print(f"\n--- DPO Epoch {epoch} 生成评估 ---")
         evaluate_generations(policy_model, tokenizer, eval_prompts, "DPO 生成评估")

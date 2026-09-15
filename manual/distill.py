@@ -105,6 +105,10 @@ def train(args):
         f"Distill — Teacher: {t_params / 1e6:.2f}M, Student: {s_params / 1e6:.2f}M, τ={args.temperature}, α={args.alpha}"
     )
     os.makedirs(args.output_dir, exist_ok=True)
+    # 记录窗口: 自上次日志行（log_interval 批）以来的 loss 累计,
+    # 打印窗口均值而非瞬时单批值 —— 单批采样噪声会让日志锯齿化
+    log_loss_sum = 0.0
+    log_batches = 0
 
     for epoch in range(args.epochs):
         for step, input_ids in enumerate(loader):
@@ -125,9 +129,14 @@ def train(args):
             nn.utils.clip_grad_norm_(student.parameters(), args.clip)
             optimizer.step()
             optimizer.zero_grad()
+            log_loss_sum += loss.item()
+            log_batches += 1
 
-            if step % args.log_interval == 0:
-                print(f"epoch {epoch} step {step} loss={loss.item():.4f}")
+            if step % args.log_interval == args.log_interval - 1:
+                window_loss = log_loss_sum / max(log_batches, 1)
+                print(f"epoch {epoch} step {step} loss={window_loss:.4f}")
+                log_loss_sum = 0.0
+                log_batches = 0
 
     out_path = os.path.join(args.output_dir, "distilled.pt")
     torch.save({"model_state_dict": student.state_dict(), "_config": cfg}, out_path)
