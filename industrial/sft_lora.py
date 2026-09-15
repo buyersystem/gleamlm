@@ -55,6 +55,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
     parser.add_argument("--max_seq_length", type=int, default=1024)
+    parser.add_argument(
+        "--eval_data",
+        type=str,
+        default=None,
+        help="验证集 JSONL (与训练数据同格式); 提供后按 --eval_steps 周期评估",
+    )
+    parser.add_argument("--eval_steps", type=int, default=200)
     parser.add_argument("--lora_r", type=int, default=8)
     parser.add_argument("--lora_alpha", type=int, default=32)
     parser.add_argument("--lora_dropout", type=float, default=0.05)
@@ -92,6 +99,11 @@ def main() -> None:
     raw_data = load_jsonl(args.data_path)
     dataset = Dataset.from_list(raw_data)
 
+    eval_dataset = None
+    if args.eval_data:
+        eval_dataset = Dataset.from_list(load_jsonl(args.eval_data))
+        print(f"Eval dataset: {len(eval_dataset)} samples (每 {args.eval_steps} 步)")
+
     if not args.tokenizer_path:
         raise ValueError(
             "SFT needs an HF-format tokenizer (tokenizer.json). "
@@ -114,6 +126,9 @@ def main() -> None:
         learning_rate=args.lr,
         logging_steps=10,
         save_steps=200,
+        # --eval_data 提供时接周期验证 (transformers>=4.41 字段名 eval_strategy)
+        eval_strategy="steps" if args.eval_data else "no",
+        eval_steps=args.eval_steps,
         save_total_limit=2,
         bf16=torch.cuda.is_available(),
         fp16=False,
@@ -135,6 +150,7 @@ def main() -> None:
         model=model,
         args=training_args,
         train_dataset=dataset,
+        eval_dataset=eval_dataset,
         processing_class=tokenizer,
     )
 

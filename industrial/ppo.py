@@ -36,6 +36,15 @@ TRL 1.x 变化:
 数据格式 (JSONL，推荐带 ground_truth 做规则 reward):
   {"prompt": "请解释质能方程"}
   {"prompt": "2+2=?", "ground_truth": "4"}
+
+守门 (与 manual/grpo.py 1a/1b 同口径, 见 industrial/rl_reward.py):
+  - 1a 截断奖励守卫: 未以 eos 收尾的回答 clamp(max=0) —— 半截文本碰巧
+    包含 ground_truth 不再拿 +1.0, 只惩罚不受益
+  - 1b 零方差审计: 训练结束打印零方差组占比; RLOO rollout 内嵌于 trainer,
+    无法像 manual 轨动态重采样 (组内全同 → leave-one-out 优势≈0)
+  - 奖励口径: 有 ground_truth 规则匹配 (+1/0/-1); 无 gt 启发式分级
+    (与 manual 轨 compute_reward 同口径), 不再是"非空全 +1.0"的常数兜底
+  - 过易题预剔除用 data_tools/rl/filter_by_difficulty.py（零方差根治）
 """
 
 import argparse
@@ -53,6 +62,7 @@ from trl import RLOOConfig, RLOOTrainer
 from gleamlm.utils.config import extract_checkpoint_config
 from hf.hf_config import GleamLMConfig, gleamlm_config_from_core
 from hf.hf_model import GleamLMForCausalLM, load_from_checkpoint
+from industrial.rl_reward import build_reward_fn
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -63,26 +73,6 @@ def load_jsonl(path: str) -> list[dict]:
             if line:
                 data.append(json.loads(line))
     return data
-
-
-def default_reward(prompts, completions, **kwargs):
-    """规则 reward：数据含 ground_truth 列时做答案匹配，否则长度兜底。
-
-    RLOOTrainer 要求 reward_funcs 至少一个可调用函数；生产环境应替换为
-    Reward Model 或规则 reward（如格式/答案正确性检查）。
-    """
-    ground_truth = kwargs.get("ground_truth")
-    if ground_truth is not None:
-        rewards = []
-        for c, gt in zip(completions, ground_truth, strict=False):
-            if not c:
-                rewards.append(-1.0)
-            elif gt and str(gt).strip() in c:
-                rewards.append(1.0)
-            else:
-                rewards.append(0.0)
-        return rewards
-    return [1.0 if len(c) > 0 else -1.0 for c in completions]
 
 
 def parse_args() -> argparse.Namespace:
@@ -147,12 +137,26 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # 1a/1b 奖励守卫 (口径见 industrial/rl_reward.py): 截断回答 clamp(max=0),
+    # 零方差组审计; eos id 缺失 (非 BBPE 导出词表) 时 1a 自动停用
+    reward_fn, reward_stats = build_reward_fn(tokenizer.eos_token_id, args.num_generations)
+    if tokenizer.eos_token_id is None:
+        print("[warn] tokenizer.eos_token_id 未定义 — 1a 截断守卫停用")
+
     # ── 数据集 ──
     raw_data = load_jsonl(args.data_path)
     for item in raw_data:
         if "prompt" not in item and "instruction" in item:
             item["prompt"] = item.pop("instruction")
     dataset = Dataset.from_list(raw_data)
+    no_gt = sum(1 for item in raw_data if not str(item.get("ground_truth") or "").strip())
+    if no_gt:
+        print(f"数据: 无 ground_truth {no_gt}/{len(raw_data)} 行 — 这些行用启发式 reward")
+    if no_gt * 2 > len(raw_data):
+        print(
+            "WARN: 无 gt 行过半, 规则信号弱 — 建议数据提供 ground_truth, 并先用 "
+            "data_tools/rl/filter_by_difficulty.py 剔除过易题 (零方差组无优势梯度)"
+        )
 
     # RLOO 无 ValueHead（leave-one-out baseline），无需调 GAE λ，
     # 参数只有 num_generations + beta
@@ -182,7 +186,7 @@ def main() -> None:
         args=rloo_config,
         train_dataset=dataset,
         processing_class=tokenizer,
-        reward_funcs=[default_reward],
+        reward_funcs=[reward_fn],
     )
 
     # ── 训练 ──
@@ -192,6 +196,7 @@ def main() -> None:
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"PPO/RLOO model saved to {args.output_dir}")
+    print(reward_stats.summary())
 
 
 if __name__ == "__main__":

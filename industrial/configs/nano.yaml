@@ -18,7 +18,7 @@ parallel:
 
 training:
   micro_batch_size: 4
-  global_batch_size: 64
+  global_batch_size: 64        # 总 batch = micro × DP × grad_accum（启动时与实际值校验）
   accumulate_grad: 16          # 有效 batch = micro(4) × 16 = 64，对齐手写轨 8×8
   train_iters: 100
   lr: 0.0004
@@ -34,5 +34,5 @@ training:
   bf16: true
   fp16: false
   log_interval: 5
-  eval_interval: 50
+  eval_interval: 50            # 周期验证步数（配合 --eval-data 生效）
   save_interval: 25

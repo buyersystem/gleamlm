@@ -31,10 +31,19 @@ GRPO 核心设计:
   {"prompt": "2+2=?", "ground_truth": "4"}
   {"prompt": [{"role": "user", "content": "2+2=?"}], "ground_truth": "4"}
 
+守门 (与 manual/grpo.py 1a/1b 同口径, 见 industrial/rl_reward.py):
+  - 1a 截断奖励守卫: 未以 eos 收尾的回答 clamp(max=0) —— 半截文本碰巧
+    包含 ground_truth 不再拿 +1.0, 只惩罚不受益
+  - 1b 零方差审计: 训练结束打印零方差组占比; TRL rollout 内嵌于 trainer,
+    无法像 manual 轨动态重采样 (组内全同 → 优势≈0, 只费采样预算)
+  - 奖励口径: 有 ground_truth 规则匹配 (+1/0/-1); 无 gt 启发式分级
+    (与 manual 轨 compute_reward 同口径), 不再是"非空全 +1.0"的常数兜底
+
 注意:
   GRPOTrainer 自动为每个 prompt 采样 num_generations 个 response，
   用 reward function 打分后组内归一化计算优势，然后 PPO-clip 更新。
-  数据含 ground_truth 列时 default_reward 做答案匹配（工业规则 reward）。
+  数据含 ground_truth 列时 default_reward 做答案匹配（工业规则 reward）；
+  过易题预剔除用 data_tools/rl/filter_by_difficulty.py（零方差根治）。
 """
 
 import argparse
@@ -52,6 +61,7 @@ from trl import GRPOConfig, GRPOTrainer
 from gleamlm.utils.config import extract_checkpoint_config
 from hf.hf_config import GleamLMConfig, gleamlm_config_from_core
 from hf.hf_model import GleamLMForCausalLM, load_from_checkpoint
+from industrial.rl_reward import build_reward_fn
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -62,30 +72,6 @@ def load_jsonl(path: str) -> list[dict]:
             if line:
                 data.append(json.loads(line))
     return data
-
-
-def default_reward(prompts, completions, **kwargs):
-    """规则 reward：数据含 ground_truth 列时做答案匹配，否则长度兜底。
-
-    TRL GRPOTrainer 的 reward_funcs 签名: 接收 prompts/completions/completion_ids
-    及数据集中除 prompt 外的所有列（如 ground_truth）。返回 list[float]。
-    工业上（DeepSeek/OpenR1）用规则 reward（答案正确性），生产可替换为
-    Reward Model 或更细的格式/重复检查。
-    """
-    ground_truth = kwargs.get("ground_truth")
-    if ground_truth is not None:
-        # 规则匹配: 精确命中 +1，否则 0；空回答 -1 惩罚
-        rewards = []
-        for c, gt in zip(completions, ground_truth, strict=False):
-            if not c:
-                rewards.append(-1.0)
-            elif gt and str(gt).strip() in c:
-                rewards.append(1.0)
-            else:
-                rewards.append(0.0)
-        return rewards
-    # 无 ground_truth: 长度兜底（短回答 +1，空回答 -1）
-    return [1.0 if len(c) > 0 else -1.0 for c in completions]
 
 
 def parse_args() -> argparse.Namespace:
@@ -160,12 +146,26 @@ def main() -> None:
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # 1a/1b 奖励守卫 (口径见 industrial/rl_reward.py): 截断回答 clamp(max=0),
+    # 零方差组审计; eos id 缺失 (非 BBPE 导出词表) 时 1a 自动停用
+    reward_fn, reward_stats = build_reward_fn(tokenizer.eos_token_id, args.num_generations)
+    if tokenizer.eos_token_id is None:
+        print("[warn] tokenizer.eos_token_id 未定义 — 1a 截断守卫停用")
+
     # ── 数据集 ──
     raw_data = load_jsonl(args.data_path)
     for item in raw_data:
         if "prompt" not in item and "instruction" in item:
             item["prompt"] = item.pop("instruction")
     dataset = Dataset.from_list(raw_data)
+    no_gt = sum(1 for item in raw_data if not str(item.get("ground_truth") or "").strip())
+    if no_gt:
+        print(f"数据: 无 ground_truth {no_gt}/{len(raw_data)} 行 — 这些行用启发式 reward")
+    if no_gt * 2 > len(raw_data):
+        print(
+            "WARN: 无 gt 行过半, 规则信号弱 — 建议数据提供 ground_truth, 并先用 "
+            "data_tools/rl/filter_by_difficulty.py 剔除过易题 (零方差组无优势梯度)"
+        )
 
     # GRPO 无需 reward model / value function / GAE λ，核心只有 group_size + beta
     grpo_config = GRPOConfig(
@@ -194,7 +194,7 @@ def main() -> None:
         args=grpo_config,
         train_dataset=dataset,
         processing_class=tokenizer,
-        reward_funcs=[default_reward],
+        reward_funcs=[reward_fn],
     )
 
     # ── 训练 ──
@@ -204,6 +204,7 @@ def main() -> None:
     trainer.save_model(args.output_dir)
     tokenizer.save_pretrained(args.output_dir)
     print(f"GRPO model saved to {args.output_dir}")
+    print(reward_stats.summary())
 
 
 if __name__ == "__main__":

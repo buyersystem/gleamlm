@@ -15,16 +15,17 @@ model:
   ffn_hidden_size: 4096        # SwiGLU 中间维度 (d_ff 4x)
   seq_length: 4096             # 训练序列长度 (0.6B 定义: max_seq_len 4096)
   max_position_embeddings: 4096
+  rotary_base: 10000           # RoPE base (与手写轨默认一致; YaRN 外推属规划，工业轨未接线)
   vocab_size: 24002            # BBPE 24K (data_tools/pretrain/run_pipeline.py --tokenizer bbpe)
 
 parallel:
-  tensor_model_parallel_size: 1   # TP: 权重切分 (0.6B 单卡可跑，多卡可开 2/4 演示)
-  pipeline_model_parallel_size: 1 # PP: 层数流水切分 (37 层可开 2/3 演示)
-  context_parallel_size: 1        # CP: 长序列沿 seq 维切分 (可选)
+  tensor_model_parallel_size: 1   # TP: 权重切分 (>1 训练可跑，但 checkpoint/eval 暂不可用)
+  pipeline_model_parallel_size: 1 # PP: >1 需 pipeline schedule，本脚本不支持（启动即报错）
+  context_parallel_size: 1        # CP: >1 仅初始化接线、未经验证
 
 training:
   micro_batch_size: 2          # 每卡 batch (0.6B 定义: batch_size 1 + accum 64)
-  global_batch_size: 64        # 总 batch = micro × DP × grad_accum
+  global_batch_size: 64        # 总 batch = micro × DP × grad_accum（启动时与实际值校验）
   accumulate_grad: 32          # 单卡有效 batch = micro(2)×32 = 64（对齐 global 64；多卡 DP 按需调小）
   train_iters: 10000           # 训练步数
   lr: 2.0e-4                   # 0.6B 定义: lr 2e-4
@@ -37,5 +38,5 @@ training:
   z_loss_weight: 1.0e-5        # Z-Loss 防 logits 爆炸（SmolLM3 默认 1e-5；nano 用 1e-4）
   bf16: true                   # 与手写轨 AMP 对应 (Megatron 的混合精度开关)
   log_interval: 10
-  eval_interval: 500
+  eval_interval: 500           # 周期验证步数（配合 --eval-data 生效）
   save_interval: 1000

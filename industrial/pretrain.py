@@ -28,9 +28,9 @@ Megatron-Core 预训练 — 最小训练循环（对照工业级预训练框架�
     --config industrial/configs/0.6b.yaml \
     --data data/processed/wiki_zh
 
-  # 并行拓扑取 --config YAML 的 parallel 段（TP=1/PP=1 即纯数据并行）;
-  # 改 0.6b.yaml 的 tensor_model_parallel_size / pipeline_model_parallel_size
-  # 即为 Megatron 招牌 3D 并行（如 8 卡: TP2 × PP2 × DP2）
+  # 并行拓扑取 --config YAML 的 parallel 段（默认 TP=1/PP=1 即纯数据并行）;
+  # 多卡推荐数据并行（DP）；TP>1 训练可跑但 checkpoint/eval 不可用（分片
+  # 权重需官方 dist_checkpointing 落盘）；PP>1 需 pipeline schedule，本脚本不支持
 
 生产级用法（Megatron-LM 官方入口，功能最全，直接可跑）:
   torchrun --nproc_per_node=8 pretrain_gpt.py \
@@ -54,7 +54,6 @@ API 说明: 本脚本以 megatron-core 0.9+ 为例；若版本不同，
 """
 
 import argparse
-import bisect
 import itertools
 import os
 import sys
@@ -80,52 +79,14 @@ from torch.utils.data import DataLoader, Dataset
 # from megatron.core.models.gpt.gpt_model import GPTModel  ← 延迟导入（见 build_model）
 
 
-class IndexedDatasetWrapper(Dataset):
-    """把 .bin/.idx 包装成 PyTorch Dataset + 定长 block 切分。
-
-    对比手写轨 `tokenize_and_group`: 那里是内存里切 block，
-    这里通过 mmap 随机访问，任意大语料不占内存。
-    """
-
-    def __init__(self, prefix: str, seq_len: int):
-        from megatron.core.datasets.indexed_dataset import IndexedDataset
-
-        self.ds = IndexedDataset(prefix)
-        self.seq_len = seq_len
-        self.lengths = self.ds.sequence_lengths.tolist() or [0]
-        # 每个文档的起始 token 位置（累计和），用于二分定位 start_tok 所在文档
-        self.cumsum = list(itertools.accumulate(self.lengths))
-        total = self.cumsum[-1]
-        self.num_blocks = max(total // seq_len, 1)
-
-    def __len__(self) -> int:
-        return self.num_blocks
-
-    def __getitem__(self, idx: int):
-        # 跨文档连续采样: 从 start_tok 所在文档起连续拼接，直到凑满 seq_len；
-        # 文档末尾不 padding（生产 Megatron 的 BlendedMegatronDatasetBuilder 同思路）
-        start_tok = idx * self.seq_len
-        tokens: list[int] = []
-        doc_i = bisect.bisect_right(self.cumsum, start_tok)
-        pos = start_tok - (self.cumsum[doc_i - 1] if doc_i > 0 else 0)
-        while len(tokens) < self.seq_len:
-            doc = self.ds[doc_i].tolist()
-            tokens.extend(doc[pos:])
-            pos = 0
-            doc_i = (doc_i + 1) % len(self.lengths)
-        input_ids = torch.tensor(tokens[: self.seq_len], dtype=torch.long)
-        labels = input_ids.clone()
-        return input_ids, labels
-
-
 def build_train_dataset(config, prefix: str, tokenizer, seq_length: int) -> Dataset:
     """官方 GPTDataset + BlendedMegatronDatasetBuilder 构建训练数据集。
 
     megatron 官方 pretrain_gpt.py 的数据路径:
       BlendedMegatronDatasetBuilder(GPTDataset, sizes, is_built_on_rank, config).build()
     GPTDataset 内部完成跨文档滑窗切块（document/sample/shuffle index），
-    返回 {tokens, labels, attention_mask, loss_mask, position_ids} 样本。
-    这里替换手写 IndexedDatasetWrapper，对齐官方数据类语义。
+    返回 {tokens, labels, loss_mask, position_ids} 样本（create_attention_mask=False
+    时不返回 attention_mask，掩码与位置由消费端显式构造）。
     """
     from megatron.core.datasets.blended_megatron_dataset_builder import (
         BlendedMegatronDatasetBuilder,
@@ -141,8 +102,10 @@ def build_train_dataset(config, prefix: str, tokenizer, seq_length: int) -> Data
         path_to_cache=None,
         mmap_bin_files=True,
         tokenizer=tokenizer,
-        reset_position_ids=True,
-        reset_attention_mask=True,
+        # 训练用 build_position_ids 的全序列连续位置（与手写轨 RoPE 一致）；
+        # 不消费 dataset 的 eod 重置位置，两项显式关闭以免配置语义分叉
+        reset_position_ids=False,
+        reset_attention_mask=False,
         eod_mask_loss=True,
         create_attention_mask=False,
         allow_ambiguous_pad_tokens=True,
@@ -163,7 +126,10 @@ def build_train_dataset(config, prefix: str, tokenizer, seq_length: int) -> Data
 
 
 def build_model(
-    config: TransformerConfig, vocab_size: int, max_sequence_length: int
+    config: TransformerConfig,
+    vocab_size: int,
+    max_sequence_length: int,
+    rotary_base: float = 10000.0,
 ) -> torch.nn.Module:
     """构建 Megatron GPT 模型（延迟导入，未装 megatron 时错误信息更友好）。
 
@@ -195,12 +161,13 @@ def build_model(
         parallel_output=False,  # TP>1 时为 True（logits 按 rank 切分）
         share_embeddings_and_output_weights=True,  # 与手写轨 weight tying 对齐
         position_embedding_type="rope",  # RoPE（手写轨一致），非 learned_absolute
-        rotary_base=config.rotary_base if hasattr(config, "rotary_base") else 10000.0,
+        # RoPE base 可配（yaml model.rotary_base；默认 10000 与手写轨一致）
+        rotary_base=float(rotary_base),
     )
 
 
 def build_position_ids(input_ids: torch.Tensor) -> torch.Tensor:
-    """position_ids: 每行从 0 递增（手写轨在 RoPE 里隐式处理，Megatron 显式传入）。"""
+    """position_ids: 每行 0..S-1 连续递增（与手写轨全序列 RoPE 位置一致）。"""
     B, S = input_ids.shape
     return torch.arange(S, device=input_ids.device).unsqueeze(0).expand(B, S)
 
@@ -281,7 +248,10 @@ def _run_eval(
     """训练结束后在验证集上评估 loss/ppl（rank0，只读 mmap）。
 
     与 forward_backward 相同 CE 口径（labels 已 shift + loss_mask 加权）。
+    仅 TP=PP=1 成立：TP>1 时单 rank 前向缺通信组参与，直接跳过。
     """
+    if parallel_state.get_tensor_model_parallel_world_size() > 1:
+        return None, 0
     import torch.nn.functional as F
 
     dataset = build_train_dataset(transformer_config, eval_prefix, tokenizer, seq_length)
@@ -342,7 +312,8 @@ def main():
     parser.add_argument(
         "--eval-data",
         default=None,
-        help="验证数据 .bin/.idx 前缀（可选，训练结束后评估 val loss/ppl）",
+        help="验证数据 .bin/.idx 前缀（可选；提供后按 training.eval_interval 周期评估"
+        " + 训练结束评估）",
     )
     parser.add_argument(
         "--wandb_project",
@@ -355,6 +326,25 @@ def main():
     cfg = load_config(args.config)
     m, p, t = cfg["model"], cfg["parallel"], cfg["training"]
 
+    # 并行拓扑前置校验：PP>1 缺 pipeline schedule（裸 model() 调用会协议错配），
+    # 直接早失败；CP 仅初始化接线、TP>1 的 checkpoint/eval 受限，给出显式提示
+    tp_size = int(p["tensor_model_parallel_size"])
+    pp_size = int(p["pipeline_model_parallel_size"])
+    cp_size = int(p.get("context_parallel_size", 1))
+    if pp_size > 1:
+        raise SystemExit(
+            "ERROR: pipeline_model_parallel_size>1 需 pipeline schedule，"
+            "本最小循环不支持；生产请用官方 pretrain_gpt.py"
+        )
+    if int(os.environ.get("RANK", 0)) == 0:
+        if cp_size > 1:
+            print("WARN: context_parallel_size>1 仅初始化接线、未经验证，建议保持 1")
+        if tp_size > 1:
+            print(
+                "WARN: tensor_model_parallel_size>1 下 checkpoint/eval 不可用"
+                "（分片权重需官方 dist_checkpointing），训练本身可继续"
+            )
+
     # ── 1. 初始化分布式（手写轨: ddp_setup() 手动 init_process_group + DDP wrap）──
     dist.init_process_group(backend="nccl")
     parallel_state.initialize_model_parallel(
@@ -362,7 +352,8 @@ def main():
         pipeline_model_parallel_size=p["pipeline_model_parallel_size"],
         context_parallel_size=p.get("context_parallel_size", 1),
     )
-    torch.cuda.set_device(dist.get_rank())
+    # 多机下取本机设备号（torchrun 注入 LOCAL_RANK）；单机自然回退全局 rank
+    torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", dist.get_rank())))
     # megatron-core 0.16: TP 权重初始化需要 model-parallel cuda seed（含 rng tracker）
     from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 
@@ -401,7 +392,12 @@ def main():
     )
 
     # 3. 模型（GleamLMModel + DDP wrap 对应 Megatron build_model）
-    model = build_model(config, m["vocab_size"], m["max_position_embeddings"]).cuda()
+    model = build_model(
+        config,
+        m["vocab_size"],
+        m["max_position_embeddings"],
+        rotary_base=float(m.get("rotary_base", 10000.0)),
+    ).cuda()
 
     # 4. 数据（官方 GPTDataset + BlendedMegatronDatasetBuilder，对齐 pretrain_gpt.py）
     from gleamlm.tokenizer.tokenizer import BBPETokenizer
@@ -434,13 +430,20 @@ def main():
     autocast_ctx = (
         torch.autocast(device_type="cuda", dtype=torch.bfloat16) if bf16 else nullcontext()
     )
-    # ratio → step 换算（对齐 configs/{variant}.yaml 的 lr 段；显式 iters 优先）
-    warmup_steps = t.get("lr_warmup_iters") or int(
-        round(t.get("lr_warmup_ratio", 0.02) * train_iters)
+    # ratio → step 换算（对齐 configs/{variant}.yaml 的 lr 段；显式 iters 优先；
+    # 显式 0 表示无 warmup，须与"未配置"区分，不能用 or 兜底）
+    warmup_iters = t.get("lr_warmup_iters")
+    warmup_steps = (
+        int(warmup_iters)
+        if warmup_iters is not None
+        else int(round(t.get("lr_warmup_ratio", 0.02) * train_iters))
     )
     decay_style = str(t.get("lr_decay_style", "cosine")).upper()
     max_lr = t["lr"]
-    min_lr = t.get("min_lr", max_lr * t.get("min_lr_ratio", 0.1))
+    # min_lr 显式给值优先（含 0）；null/缺失才按 min_lr_ratio 换算
+    min_lr = t.get("min_lr")
+    if min_lr is None:
+        min_lr = max_lr * float(t.get("min_lr_ratio", 0.1))
     wd = t.get("weight_decay", 0.1)
     sched_kwargs = dict(
         init_lr=min_lr,
@@ -476,7 +479,25 @@ def main():
     micros_per_epoch = max(len(dataloader), 1)
     clip_grad = t.get("clip_grad", 1.0)
     save_interval = t.get("save_interval", 0)
+    eval_interval = int(t.get("eval_interval", 0))
     z_loss_weight = float(t.get("z_loss_weight", 0.0))
+
+    # global_batch_size 一致性校验：总 batch = micro × DP × grad_accum；
+    # 多卡 DP 下若未同步调小 accumulate_grad，字段会与实际不符（提示而非阻断）
+    gbs = t.get("global_batch_size")
+    if gbs is not None:
+        eff_gbs = (
+            int(t["micro_batch_size"])
+            * parallel_state.get_data_parallel_world_size()
+            * accumulate_grad
+        )
+        if int(gbs) != eff_gbs and dist.get_rank() == 0:
+            print(
+                f"WARN: global_batch_size={int(gbs)} 与实际 micro×DP×accum={eff_gbs} "
+                "不一致，请调整 accumulate_grad 或该字段"
+            )
+    if eval_interval > 0 and not args.eval_data and dist.get_rank() == 0:
+        print("NOTE: 配置了 eval_interval 但未提供 --eval-data，周期验证跳过")
 
     # MFU 估算（近似；4070 Ti bf16 稠密算力 ~165 TFLOPS）
     num_params = sum(p.numel() for p in model.parameters())
@@ -516,9 +537,15 @@ def main():
     _t_last = [time.monotonic()]  # 容器便于 _finish_step 闭包修改
 
     def _save(path: str):
+        # TP/PP>1 时 state_dict 为分片残片，单文件保存无意义（需官方 dist_checkpointing）
+        if tp_size > 1 or pp_size > 1:
+            if dist.get_rank() == 0:
+                print(f"[skip] TP/PP>1 下 checkpoint 不可用，已跳过保存: {path}")
+            return
         if dist.get_rank() != 0:
             return
         sd = model.state_dict()  # 同一对象挂双键，pickle memo 只落盘一份
+        tmp = path + ".tmp"
         torch.save(
             {
                 "model_state_dict": sd,
@@ -530,8 +557,9 @@ def main():
                 "total_loss": total_loss,
                 "config": cfg,
             },
-            path,
+            tmp,
         )
+        os.replace(tmp, path)  # 临时文件 + 原子替换，防中断留下半截 ckpt
         print(f"Saved: {path}")
 
     def _finish_step(acc_n: int) -> None:
@@ -591,6 +619,29 @@ def main():
                 )
         if save_interval > 0 and step % save_interval == 0:
             _save(os.path.join(args.out, f"iter_{step:07d}.pt"))
+        # 周期验证（rank0 单独前向，TP/PP=1 时无通信组依赖）；前后 barrier
+        # 让其余 rank 等待，否则会提前进入下一轮 all-reduce 造成错配。
+        # 最后一步不在此触发——交由训练结束的统一评估，避免同一 step 双评
+        if (
+            eval_interval > 0
+            and step % eval_interval == 0
+            and step < train_iters
+            and args.eval_data
+            and tp_size == 1
+            and pp_size == 1
+        ):
+            dist.barrier()
+            if dist.get_rank() == 0:
+                _run_eval(
+                    model,
+                    args.eval_data,
+                    megatron_tok,
+                    m["seq_length"],
+                    config,
+                    max_batches=t.get("eval_max_batches", 200),
+                    autocast_ctx=autocast_ctx,
+                )
+            dist.barrier()
 
     # 第一次优化器 step 前恢复 epoch 内已消耗的 micro；随后逐 epoch 续跑
     while step < train_iters:

@@ -1,11 +1,13 @@
-"""rl_trainer.sample_responses 单测 (GRPO rollout 与难度过滤共用的采样函数)。"""
+"""rl_trainer 单测 —— sample_responses (GRPO rollout 与难度过滤共用的采样
+函数) 与 compute_reward (规则/启发式奖励口径)。"""
 
+import pytest
 import torch
 
 from gleamlm.data.rl_data import tokenize_prompts
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.rl_trainer import sample_responses
+from gleamlm.trainer.rl_trainer import compute_reward, sample_responses
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 VOCAB_SIZE = 12002
@@ -168,3 +170,26 @@ class TestSampleResponses:
             )
         assert torch.equal(gen[0], gen[1])
         assert len(trunc) == 2
+
+
+class TestComputeReward:
+    """规则/启发式奖励口径 (GRPO rollout 与难度过滤共用)。"""
+
+    def test_gt_hit_miss_and_empty(self):
+        assert compute_reward("答案是 4", "4") == 1.0
+        assert compute_reward("不知道", "4") == 0.0
+        assert compute_reward("", "4") == -1.0
+
+    def test_blank_gt_falls_back_to_heuristic(self):
+        # 空白 gt 曾因 `"" in response` 恒真而全样本命中 +1.0 (组内零方差);
+        # 现走启发式: 短文本无结构 → 0.0
+        assert compute_reward("答案", "") == 0.0
+        assert compute_reward("答案", "   ") == 0.0
+        assert compute_reward("答案", None) == 0.0
+
+    def test_heuristic_dimensions(self):
+        # 换行 +0.2 / 长度 20-512 +0.1 / 句末标点 +0.1
+        assert compute_reward("行1\n行2", None) == pytest.approx(0.2)
+        assert compute_reward("行1\n行2。", None) == pytest.approx(0.3)
+        assert compute_reward("a" * 30, None) == pytest.approx(0.1)
+        assert compute_reward("a" * 30 + "。", None) == pytest.approx(0.2)

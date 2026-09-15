@@ -21,12 +21,15 @@ def compute_reward(response: str, ground_truth: str | None = None) -> float:
       - 长度合理 (+0.1): 20-512 字符内
       - 完整性   (+0.1): 以句号/问号/感叹号结尾
 
-    有 ground_truth（工业规则 reward，对齐工业轨 default_reward）:
+    有 ground_truth（工业规则 reward，与工业轨 industrial/rl_reward.py 同口径）:
       - 答案命中 +1.0
       - 空回答 -1.0
       - 未命中 0.0
+
+    空白 ground_truth（None / "" / 纯空白）走启发式：空串的
+    `"" in response` 恒真，会全样本命中 +1.0（组内零方差、无优势梯度）。
     """
-    if ground_truth is not None:
+    if ground_truth is not None and str(ground_truth).strip():
         if not response:
             return -1.0
         return 1.0 if str(ground_truth).strip() in response else 0.0
