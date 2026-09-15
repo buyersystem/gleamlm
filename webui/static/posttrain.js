@@ -172,18 +172,34 @@ function onStatus(st) {
 }
 
 function onMetric(m) {
-  const st = trainer.run || {};
   if (!m) return;
-  if (st.task && st.task !== "pretrain" && st.run_id === m.run_id) {
+  const st = trainer.run || {};
+  const live = !!st.task && st.task !== "pretrain" && st.running === true;
+  if (live && st.run_id === m.run_id) {
+    // live 训练: 实时更新主曲线
     pt2.mainId = m.run_id;
     pt2.series = m.series;
     drawPt2();
     renderStages();
+    return;
+  }
+  // 非 live (训练已结束/空闲): 只接受当前所选 run 的数据。不能再用
+  // trainer.run.run_id 判归属 —— 它残留最后完成的 run, 点击该 run 回放后
+  // 其 in-flight pollMetrics 返回会把用户刚切走的主曲线劫持回去 (曲线卡死)
+  if (!live && m.run_id === pt2.mainId) {
+    pt2.series = m.series;
+    drawPt2();
   }
 }
 
-function onExit() {
-  loadRuns(true);
+function onExit(ev) {
+  // 历史回放结束 (status=idle) 只是日志流播完, 非训练事件 —— 不得重置主曲线
+  // (回放 exit 曾触发 loadRuns(true) 把主曲线强制切回列表第一条:
+  //  点击历史 run 后曲线「出现一瞬间就消失」的根因)。
+  if (ev && ev.status === "idle") return;
+  // live 结束: mainId 已在 live 期跟随该 run, 其在列表中仍有效 → 不强制重置,
+  // 仅当 mainId 失效 (run 被删) 才回退列表第一条 (loadRuns 内 !mine.some 覆盖)
+  loadRuns(false);
 }
 
 async function loadRuns(reloadMain) {
@@ -258,7 +274,8 @@ function bindDelRun(b) {
       await api(`/api/train/runs/${encodeURIComponent(id)}`, { method: "DELETE" });
       pt2.hist.delete(id);
       pt2.checked = pt2.checked.filter((x) => x !== id);
-      loadRuns(true);
+      // 删的不是主曲线 → 保持当前选择; 删的是主曲线 → loadRuns 内失效检查回退列表头
+      loadRuns(false);
     } catch (err) {
       toast("删除失败：" + err.message, "err");
     }
@@ -450,6 +467,9 @@ function setPt2Main(id) {
   renderRuns();
   renderStatusLine();
   ensureHist(id);
+  // ensureHist 缓存命中时不重绘 (直接 return) —— 这里先按缓存立即重绘一次,
+  // 否则再次点击已看过的 run 时曲线不切换 (停留在被旧数据劫持的画面)
+  drawPt2();
   if (id !== liveTaskId()) trainer.replay(id);
 }
 

@@ -11,6 +11,7 @@ LoRA SFT 微调 — 冻结预训练权重，只更新低秩 adapter。
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -22,7 +23,9 @@ from torch.utils.data import DataLoader, Dataset
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.trainer.base_trainer import create_scaler, optimizer_step
 from gleamlm.trainer.lora import LoraConfig, apply_lora_to_model, merge_lora_weights
+from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.chatml import format_chatml
 from gleamlm.utils.config import (
     DEFAULT_TOKENIZER_PATH,
@@ -30,7 +33,7 @@ from gleamlm.utils.config import (
     load_config,
 )
 from gleamlm.utils.metrics import emit_metric
-from gleamlm.utils.torch_utils import clean_state_dict
+from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
@@ -128,10 +131,19 @@ def train(args):
         r=args.lora_r, lora_alpha=args.lora_alpha, target_modules=["W_q", "W_k", "W_v", "W_o"]
     )
     apply_lora_to_model(model, lora_cfg)
+    # LoRA 语义: base 全冻结, 仅训练 adapter。apply_lora_to_model 只冻结被替换的
+    # W_q/k/v/o, 其余层 (MLP/embedding/norm) 仍是 requires_grad=True —— 不显式再冻
+    # 会让 optimizer 拿到 ~66M 参数, 退化成"除 attention 外全参微调"
+    # (trainable 66.4M vs 纯 adapter ~0.5M, loss 趋势平且震荡大)。
+    model.requires_grad_(False)
+    for name, param in model.named_parameters():
+        if "lora_" in name:
+            param.requires_grad_(True)
     lora_params = [p for p in model.parameters() if p.requires_grad]
     lora_count = sum(p.numel() for p in lora_params)
 
     optimizer = torch.optim.AdamW(lora_params, lr=args.lr, weight_decay=0.01)
+    scaler = create_scaler()
 
     print(
         f"LoRA — base: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M, trainable: {lora_count / 1e3:.1f}K, r={args.lora_r}"
@@ -141,39 +153,67 @@ def train(args):
     # x 轴步数跨 epoch 单调递增 (面板按 step 去重, 归零会使后段点全部被丢);
     # 进度行与 sft.py tqdm postfix 同构 (N/M [... loss=.., lr=..]), WebUI 解析器可识别;
     # flush=True 保证管道/重定向下实时到达 (不 flush 会块缓冲延迟, 面板实时曲线缺失)。
-    total_steps = len(loader) * args.epochs
+    # step = 优化器步: 梯度累积后 global_step 才 +1 (同 sft.py 语义)。
+    total_steps = math.ceil(len(loader) / args.accumulate_grad) * args.epochs
     global_step = 0
     for _ in range(args.epochs):
-        for _, (input_ids, labels) in enumerate(loader):
+        for batch_idx, (input_ids, labels) in enumerate(loader):
             input_ids, labels = input_ids.to(device), labels.to(device)
-            logits, _, aux_loss, _ = model(input_ids)
+            # AMP 同 SFT 轨 (bf16 autocast): matmul 走 tensor core，kernel 时长短、
+            # 显存减半。Windows WDDM 下纯 fp32 长 kernel 易致驱动挂起甚至蓝屏。
+            with safe_autocast():
+                logits, _, aux_loss, _ = model(input_ids)
 
-            shift_logits = logits[:, :-1, :].contiguous()
-            shift_labels = labels[:, 1:].contiguous()
-            loss = nn.CrossEntropyLoss(ignore_index=-100)(
-                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+                shift_logits = logits[:, :-1, :].contiguous()
+                shift_labels = labels[:, 1:].contiguous()
+                loss = nn.CrossEntropyLoss(ignore_index=-100)(
+                    shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+                )
+                loss = loss + aux_loss * 0.01
+
+            is_accum = (batch_idx + 1) % args.accumulate_grad == 0 or (batch_idx + 1) == len(loader)
+            # 残差批 (末尾不足 accumulate) 按实际批数除, 避免归一化过头 (同 sft.py)
+            denom = (
+                ((batch_idx % args.accumulate_grad) + 1)
+                if (batch_idx + 1) == len(loader)
+                else args.accumulate_grad
             )
-            loss = loss + aux_loss * 0.01
+            loss = loss / denom
+            scaler.scale(loss).backward()
+            if is_accum:
+                # lr 调度在 step 前更新 (与 sft.py 同构): warmup → cosine/wsd 衰减,
+                # 替代原恒定 lr (无衰减后期难收敛)
+                if args.lr_scheduler == "wsd":
+                    lr_mult = get_lr_wsd(
+                        global_step,
+                        total_steps,
+                        args.warmup_ratio,
+                        args.stable_ratio,
+                        args.min_lr_ratio,
+                    )
+                else:
+                    lr_mult = get_lr_cosine(
+                        global_step, total_steps, args.warmup_ratio, args.min_lr_ratio
+                    )
+                cur_lr = args.lr * lr_mult
+                for pg in optimizer.param_groups:
+                    pg["lr"] = cur_lr
+                optimizer_step(optimizer, scaler, parameters=lora_params, clip_grad=args.clip)
+                global_step += 1
 
-            loss.backward()
-            nn.utils.clip_grad_norm_(lora_params, args.clip)
-            optimizer.step()
-            optimizer.zero_grad()
-            global_step += 1
-
-            if global_step == 1 or global_step % args.log_interval == 0:
-                print(
-                    f"{global_step}/{total_steps} [loss={loss.item():.4f}, lr={args.lr:.2e}]",
-                    flush=True,
-                )
-                # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
-                emit_metric(
-                    split="train",
-                    step=global_step,
-                    total=total_steps,
-                    loss=loss.item(),
-                    lr=args.lr,
-                )
+                if global_step == 1 or global_step % args.log_interval == 0:
+                    print(
+                        f"{global_step}/{total_steps} [loss={loss.item() * denom:.4f}, lr={cur_lr:.2e}]",
+                        flush=True,
+                    )
+                    # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费
+                    emit_metric(
+                        split="train",
+                        step=global_step,
+                        total=total_steps,
+                        loss=loss.item() * denom,
+                        lr=cur_lr,
+                    )
 
     save_path = os.path.join(args.output_dir, "lora.pt")
     lora_state = {k: v for k, v in model.state_dict().items() if "lora_" in k}
@@ -221,9 +261,40 @@ def parse_args():
     )
     p.add_argument("--batch_size", type=int, default=None, help="覆写 batch size")
     p.add_argument(
+        "--accumulate_grad",
+        type=int,
+        default=None,
+        help="覆写梯度累积步数 (默认取 YAML lora.accumulate_grad)",
+    )
+    p.add_argument(
         "--seq_len", type=int, default=None, help="覆写序列长度 (默认取 YAML lora.max_seq_len)"
     )
     p.add_argument("--lr", type=float, default=None, help="覆写学习率 (默认取 YAML lora.lr)")
+    p.add_argument(
+        "--lr_scheduler",
+        type=str,
+        choices=["cosine", "wsd"],
+        default=None,
+        help="覆写学习率调度器 (默认取 YAML lora.lr_scheduler)",
+    )
+    p.add_argument(
+        "--warmup_ratio",
+        type=float,
+        default=None,
+        help="覆写 warmup 比例 (默认取 YAML lora.warmup_ratio)",
+    )
+    p.add_argument(
+        "--stable_ratio",
+        type=float,
+        default=None,
+        help="覆写 WSD stable 比例 (cosine 时忽略, 默认取 YAML)",
+    )
+    p.add_argument(
+        "--min_lr_ratio",
+        type=float,
+        default=None,
+        help="覆写 lr 终点比例 (默认取 YAML lora.min_lr_ratio)",
+    )
     p.add_argument(
         "--clip", type=float, default=None, help="覆写梯度裁剪 (默认取 YAML lora.clip_grad)"
     )
@@ -249,7 +320,19 @@ def parse_args():
     for _cli, _key in (("data", "data_path"), ("seq_len", "max_seq_len"), ("clip", "clip_grad")):
         if getattr(args, _cli) is None:
             setattr(args, _cli, getattr(cfg.lora, _key))
-    for _key in ("epochs", "batch_size", "lr", "lora_r", "lora_alpha", "log_interval"):
+    for _key in (
+        "epochs",
+        "batch_size",
+        "accumulate_grad",
+        "lr",
+        "lr_scheduler",
+        "warmup_ratio",
+        "stable_ratio",
+        "min_lr_ratio",
+        "lora_r",
+        "lora_alpha",
+        "log_interval",
+    ):
         if getattr(args, _key) is None:
             setattr(args, _key, getattr(cfg.lora, _key))
     if not args.data:

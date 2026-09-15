@@ -125,7 +125,12 @@ _CONSUMED = {
     "lora": (
         "epochs",
         "batch_size",
+        "accumulate_grad",
         "lr",
+        "lr_scheduler",
+        "warmup_ratio",
+        "stable_ratio",
+        "min_lr_ratio",
         "clip_grad",
         "max_seq_len",
         "lora_r",

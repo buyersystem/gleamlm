@@ -170,7 +170,12 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
         "lora": (
             "epochs",
             "batch_size",
+            "accumulate_grad",
             "lr",
+            "lr_scheduler",
+            "warmup_ratio",
+            "stable_ratio",
+            "min_lr_ratio",
             "clip_grad",
             "max_seq_len",
             "lora_r",
@@ -270,7 +275,12 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
         "lora": (
             "epochs",
             "batch_size",
+            "accumulate_grad",
             "lr",
+            "lr_scheduler",
+            "warmup_ratio",
+            "stable_ratio",
+            "min_lr_ratio",
             "clip_grad",
             "max_seq_len",
             "lora_r",
@@ -510,8 +520,18 @@ class LoraConfig(BaseModel):
     # LoRA 可选路线默认 (教学演示, README 标可选): r 8 / alpha 16;
     # 曾全部硬编码于 sft_lora.py argparse, 现沉淀 YAML
     epochs: int = 3
-    batch_size: int = 4
+    batch_size: int = 2
+    # 梯度累积: 等效 batch = batch_size × accumulate_grad。batch 2 单步噪声大,
+    # Adam 漂移被噪声淹没 (实测 1 epoch loss 仅降 0.05), 累积恢复等效 batch
+    accumulate_grad: int = 16
+    # 可训练参数仅 LoRA adapter (~0.5M), 小参数量需高于全参 SFT 的 lr;
+    # 曾随 batch 2 降到 1e-4, 实测 1 epoch loss 均值仅降 0.11, 回 2e-4
     lr: float = 2e-4
+    # LoRA 基线余弦调度 (终点 = lr × min_lr_ratio); 曾恒定 lr 训练, 与 sft/dpo 同构沉淀 YAML
+    lr_scheduler: Literal["cosine", "wsd"] = "cosine"
+    warmup_ratio: float = 0.02
+    stable_ratio: float = 0.80
+    min_lr_ratio: float = 0.05
     clip_grad: float = 1.0
     max_seq_len: int = 1024
     lora_r: int = 8

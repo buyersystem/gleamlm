@@ -1153,6 +1153,9 @@ function clearExitTitle() {
 }
 
 function noticeExit(ev) {
+  // 历史回放结束 (status=idle) 只是日志流播完, 非训练事件: 不弹完成 toast、
+  // 不改页面标题 (点击历史 run 回放 2s 后误弹「训练完成」的根因)。
+  if (ev.status === "idle") return;
   const st = trainer.run || {};
   const lm = st.last_metric || {};
   const task = st.task || "任务";

@@ -277,8 +277,18 @@ _TASKS: dict[str, dict[str, Any]] = {
             {"name": "output_dir", "type": "path", "label": "保存目录"},
             {"name": "epochs", "type": "int", "label": "epochs"},
             {"name": "batch_size", "type": "int", "label": "batch_size"},
+            {"name": "accumulate_grad", "type": "int", "label": "accumulate_grad"},
             {"name": "seq_len", "type": "int", "label": "seq_len"},
             {"name": "lr", "type": "float", "label": "lr"},
+            {
+                "name": "lr_scheduler",
+                "type": "choice",
+                "label": "lr_scheduler",
+                "choices": ["cosine", "wsd"],
+            },
+            {"name": "warmup_ratio", "type": "float", "label": "warmup_ratio"},
+            {"name": "stable_ratio", "type": "float", "label": "stable_ratio"},
+            {"name": "min_lr_ratio", "type": "float", "label": "min_lr_ratio"},
             {"name": "clip", "type": "float", "label": "clip"},
             {"name": "lora_r", "type": "int", "label": "lora_r"},
             {"name": "lora_alpha", "type": "int", "label": "lora_alpha"},
@@ -1542,7 +1552,16 @@ async def train_stream(run_id: str, seq: int = 0):
     """
     log_path = os.path.join(LOGS_DIR, f"run_{run_id}.log")
     run = manager.current()
-    live = run is not None and run.run_id == run_id
+    # live 判定必须同时要求进程仍在运行: manager.current() 在训练结束后仍保留
+    # 最后一次 run (供 /train/status 显示完成摘要), 若只看 run_id 匹配会把
+    # 「回放最近一条已完成 run」误判为 live → 结束帧 status=finished 而非 idle,
+    # 前端误弹「训练完成」toast 且曲线被劫持。
+    live = (
+        run is not None
+        and run.run_id == run_id
+        and run.proc is not None
+        and run.proc.poll() is None
+    )
 
     async def gen():
         last_pos = 0
