@@ -83,6 +83,13 @@ def main():
         help="覆写最小学习率比例 (默认取 YAML sft.min_lr_ratio)",
     )
     parser.add_argument(
+        "--lr_decay_steps",
+        type=int,
+        default=None,
+        help="LR 衰减视野步数 (默认取 YAML sft.lr_decay_steps; 未设 = 跟随实际总步数)。"
+        "smoke 短跑时设为完整计划步数可保持 LR 曲线形状不塌",
+    )
+    parser.add_argument(
         "--weight_decay",
         type=float,
         default=None,
@@ -150,6 +157,9 @@ def main():
     min_lr_ratio = (
         cli_args.min_lr_ratio if cli_args.min_lr_ratio is not None else cfg.sft.min_lr_ratio
     )
+    lr_decay_steps = (
+        cli_args.lr_decay_steps if cli_args.lr_decay_steps is not None else cfg.sft.lr_decay_steps
+    )
 
     set_seed(cli_args.seed)
 
@@ -210,6 +220,12 @@ def main():
     )
 
     total_steps = math.ceil(len(train_loader) / accumulate_grad) * epochs
+    # LR 衰减视野与实际训练步数解耦 (lr_decay_steps 独立于 total_steps):
+    # None 时与 total_steps 一致 (行为不变); 设值时 lr 调度按该视野算,
+    # 面板进度/指标 total 仍用实际 total_steps
+    decay_steps = lr_decay_steps if lr_decay_steps is not None else total_steps
+    if decay_steps != total_steps:
+        print(f"Steps: {total_steps} (lr_decay_steps: {decay_steps}) — lr 调度按 decay 视野走")
     scaler = create_scaler()
 
     start_epoch = 0
@@ -265,6 +281,7 @@ def main():
     }
 
     log_interval = 50
+    skipped_batches = 0
     for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
@@ -275,6 +292,12 @@ def main():
         for batch_idx, (input_ids, labels) in enumerate(pbar):
             input_ids = input_ids.to(device)
             labels = labels.to(device)
+
+            # 防线: 全 mask 批 (无监督 token) 会让 CE 产生 nan 并污染权重 → 跳过;
+            # 预检已剔除病理样本, 此防线防未来数据管线回归
+            if int((labels != -100).sum()) == 0:
+                skipped_batches += 1
+                continue
 
             with safe_autocast():
                 logits, _, _, _ = model(input_ids)
@@ -298,10 +321,10 @@ def main():
             if is_accum_step:
                 if lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
-                        global_step, total_steps, warmup_ratio, stable_ratio, min_lr_ratio
+                        global_step, decay_steps, warmup_ratio, stable_ratio, min_lr_ratio
                     )
                 else:
-                    lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
+                    lr_mult = get_lr_cosine(global_step, decay_steps, warmup_ratio, min_lr_ratio)
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr * lr_mult
                 optimizer_step(
@@ -315,10 +338,10 @@ def main():
             if batch_idx % log_interval == 0:
                 if lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
-                        global_step, total_steps, warmup_ratio, stable_ratio, min_lr_ratio
+                        global_step, decay_steps, warmup_ratio, stable_ratio, min_lr_ratio
                     )
                 else:
-                    lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
+                    lr_mult = get_lr_cosine(global_step, decay_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
                 pbar.set_postfix({"loss": f"{loss.item() * denom:.4f}", "lr": f"{cur_lr:.2e}"})
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
@@ -340,6 +363,8 @@ def main():
 
         cur_lr = optimizer.param_groups[0]["lr"]
         print(f"\nEpoch {epoch}: train_loss={epoch_loss:.4f}, lr={cur_lr:.2e}")
+        if skipped_batches:
+            print(f"  跳过 {skipped_batches} 个全 mask 批 (无监督 token)")
 
         ckpt_name = f"sft_epoch_{epoch}.pt"
         torch.save(

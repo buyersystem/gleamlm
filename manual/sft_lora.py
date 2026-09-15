@@ -11,6 +11,7 @@ LoRA SFT 微调 — 冻结预训练权重，只更新低秩 adapter。
 
 import argparse
 import json
+import logging
 import math
 import os
 import sys
@@ -37,6 +38,7 @@ from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_SCRIPT_DIR)
+logger = logging.getLogger(__name__)
 
 
 class SFTDataset(Dataset):
@@ -44,9 +46,12 @@ class SFTDataset(Dataset):
 
     返回 (prompt_text, resp_text)：prompt 含到 assistant 头为止的历史+指令，
     resp 为最后一条 assistant 内容；collate 里 assistant 起始之前全部 -100。
+
+    加载期传入 tokenizer 时预检剔除「prompt 过长导致回答被保头截断切掉」的
+    病理样本 (label 全 -100), 统计见 self.precheck_stats。
     """
 
-    def __init__(self, data_path: str, max_seq_len: int = 1024):
+    def __init__(self, data_path: str, max_seq_len: int = 1024, tokenizer=None):
         self.max_seq_len = max_seq_len
         self.data = []
         with open(data_path, encoding="utf-8") as f:
@@ -70,6 +75,35 @@ class SFTDataset(Dataset):
                 if not prompt_text.strip() or not resp_text.strip():
                     continue
                 self.data.append((prompt_text, resp_text))
+
+        # 加载期预检: collate 保头截断 (ids[:max_seq_len]) 后, prompt token 数
+        # >= max_seq_len 的样本 label 全 -100 (回答被整段切掉) → CE 无有效
+        # token (nan) 白训, 直接剔除; 不传 tokenizer 时跳过 (兼容旧调用)
+        self.precheck_stats: dict = {}
+        if tokenizer is not None:
+            kept: list[tuple[str, str]] = []
+            dropped_idx: list[int] = []
+            for i, (prompt_text, _resp) in enumerate(self.data):
+                p_len = len(tokenizer.encode(prompt_text, add_bos=True))
+                # collate 里 label = [-100] * (p_len - 1) + ids[p_len - 1:] 且 ids
+                # 已截到 max_seq_len; p_len - 1 >= max_seq_len 时 label 全 -100
+                if p_len - 1 >= max_seq_len:
+                    dropped_idx.append(i)
+                    continue
+                kept.append(self.data[i])
+            self.precheck_stats = {
+                "total": len(self.data),
+                "ok": len(kept),
+                "all_masked": len(dropped_idx),
+            }
+            if dropped_idx:
+                logger.warning(
+                    f"precheck 剔除 {len(dropped_idx)} 条病理样本 (prompt 过长, "
+                    f"保头截断后回答归零); 样例索引: {dropped_idx[:3]}"
+                )
+            if not kept:
+                raise ValueError("precheck 后无健康样本: 检查 prompt 长度与 seq_len 设置")
+            self.data = kept
 
     def __len__(self):
         return len(self.data)
@@ -102,7 +136,7 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = BBPETokenizer.load(args.tokenizer_path or DEFAULT_TOKENIZER_PATH)
 
-    dataset = SFTDataset(args.data, max_seq_len=args.seq_len)
+    dataset = SFTDataset(args.data, max_seq_len=args.seq_len, tokenizer=tokenizer)
     loader = DataLoader(
         dataset,
         batch_size=args.batch_size,
@@ -155,10 +189,22 @@ def train(args):
     # flush=True 保证管道/重定向下实时到达 (不 flush 会块缓冲延迟, 面板实时曲线缺失)。
     # step = 优化器步: 梯度累积后 global_step 才 +1 (同 sft.py 语义)。
     total_steps = math.ceil(len(loader) / args.accumulate_grad) * args.epochs
+    # LR 衰减视野与实际训练步数解耦 (lr_decay_steps 独立于 total_steps):
+    # None 时与 total_steps 一致 (行为不变); 设值时 lr 调度按该视野算,
+    # 面板进度/指标 total 仍用实际 total_steps
+    decay_steps = args.lr_decay_steps if args.lr_decay_steps is not None else total_steps
+    if decay_steps != total_steps:
+        print(f"Steps: {total_steps} (lr_decay_steps: {decay_steps}) — lr 调度按 decay 视野走")
     global_step = 0
+    skipped_batches = 0
     for _ in range(args.epochs):
         for batch_idx, (input_ids, labels) in enumerate(loader):
             input_ids, labels = input_ids.to(device), labels.to(device)
+
+            # 防线 (同 core SFT): 全 mask 批跳过, 防 CE nan 污染权重
+            if int((labels != -100).sum()) == 0:
+                skipped_batches += 1
+                continue
             # AMP 同 SFT 轨 (bf16 autocast): matmul 走 tensor core，kernel 时长短、
             # 显存减半。Windows WDDM 下纯 fp32 长 kernel 易致驱动挂起甚至蓝屏。
             with safe_autocast():
@@ -186,14 +232,14 @@ def train(args):
                 if args.lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
                         global_step,
-                        total_steps,
+                        decay_steps,
                         args.warmup_ratio,
                         args.stable_ratio,
                         args.min_lr_ratio,
                     )
                 else:
                     lr_mult = get_lr_cosine(
-                        global_step, total_steps, args.warmup_ratio, args.min_lr_ratio
+                        global_step, decay_steps, args.warmup_ratio, args.min_lr_ratio
                     )
                 cur_lr = args.lr * lr_mult
                 for pg in optimizer.param_groups:
@@ -214,6 +260,9 @@ def train(args):
                         loss=loss.item() * denom,
                         lr=cur_lr,
                     )
+
+    if skipped_batches:
+        print(f"跳过 {skipped_batches} 个全 mask 批 (无监督 token)")
 
     save_path = os.path.join(args.output_dir, "lora.pt")
     lora_state = {k: v for k, v in model.state_dict().items() if "lora_" in k}
@@ -296,6 +345,12 @@ def parse_args():
         help="覆写 lr 终点比例 (默认取 YAML lora.min_lr_ratio)",
     )
     p.add_argument(
+        "--lr_decay_steps",
+        type=int,
+        default=None,
+        help="LR 衰减视野步数 (默认取 YAML lora.lr_decay_steps; 未设 = 跟随实际总步数)",
+    )
+    p.add_argument(
         "--clip", type=float, default=None, help="覆写梯度裁剪 (默认取 YAML lora.clip_grad)"
     )
     p.add_argument("--lora_r", type=int, default=None, help="覆写 LoRA rank")
@@ -326,6 +381,7 @@ def parse_args():
         "accumulate_grad",
         "lr",
         "lr_scheduler",
+        "lr_decay_steps",
         "warmup_ratio",
         "stable_ratio",
         "min_lr_ratio",

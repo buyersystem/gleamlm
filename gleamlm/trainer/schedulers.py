@@ -24,8 +24,11 @@ def get_lr_cosine(
     if step < warmup_steps:
         return step / max(1, warmup_steps)
     else:
-        # +1 使最后一步 (step=total_steps-1) 正好 progress=1 → cos(π) → min_lr_ratio
+        # +1 使最后一步 (step=total_steps-1) 正好 progress=1 → cos(π) → min_lr_ratio；
+        # clamp 上界: lr_decay_steps < 实际步数时 (LR 视野解耦), 越过 decay 视野的
+        # step 必须停在 min_lr_ratio —— 不 clamp 则 progress>1 让余弦回升
         progress = (step - warmup_steps + 1) / max(1, total_steps - warmup_steps)
+        progress = min(max(progress, 0.0), 1.0)
         return min_lr_ratio + (1.0 - min_lr_ratio) * 0.5 * (1 + math.cos(math.pi * progress))
 
 

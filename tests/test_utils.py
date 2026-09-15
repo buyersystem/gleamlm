@@ -55,6 +55,13 @@ def test_lr_cosine_midpoint():
     assert abs(lr - 0.55) < 0.01
 
 
+def test_lr_cosine_clamped_past_decay_view():
+    """step 越过衰减视野 (lr_decay_steps < 实际步数) 必须停在 min_lr, 不得余弦回升。"""
+    lr_end = get_lr_cosine(step=999, total_steps=1000, warmup_ratio=0.01, min_lr_ratio=0.1)
+    lr_over = get_lr_cosine(step=5000, total_steps=1000, warmup_ratio=0.01, min_lr_ratio=0.1)
+    assert abs(lr_over - lr_end) < 1e-9
+
+
 def test_lr_wsd_warmup():
     lr = get_lr_wsd(
         step=5, total_steps=1000, warmup_ratio=0.02, stable_ratio=0.8, min_lr_ratio=0.05

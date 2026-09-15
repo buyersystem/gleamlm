@@ -128,6 +128,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "accumulate_grad",
             "lr",
             "lr_scheduler",
+            "lr_decay_steps",
             "warmup_ratio",
             "stable_ratio",
             "min_lr_ratio",
@@ -173,6 +174,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "accumulate_grad",
             "lr",
             "lr_scheduler",
+            "lr_decay_steps",
             "warmup_ratio",
             "stable_ratio",
             "min_lr_ratio",
@@ -222,6 +224,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "accumulate_grad",
             "lr",
             "lr_scheduler",
+            "lr_decay_steps",
             "warmup_ratio",
             "stable_ratio",
             "min_lr_ratio",
@@ -278,6 +281,7 @@ _SCOPE_REQUIRED: dict[str, dict[str, tuple[str, ...]]] = {
             "accumulate_grad",
             "lr",
             "lr_scheduler",
+            "lr_decay_steps",
             "warmup_ratio",
             "stable_ratio",
             "min_lr_ratio",
@@ -465,6 +469,10 @@ class SFTConfig(BaseModel):
     lr: float = 1e-4
     # SFT 基线余弦调度 (终点 = lr × min_lr_ratio)；曾为 sft.py 硬编码 default，现沉淀 YAML
     lr_scheduler: Literal["cosine", "wsd"] = "cosine"
+    # LR 衰减视野: None = 跟随 total_steps (实际训练步数); 设值 = lr 调度按该步数算
+    # (lr 调度视野与训练步数独立配置)。smoke 短跑时设为完整计划步数可保持
+    # LR 曲线形状不塌; global_step 超此值后 lr 停在 min_lr
+    lr_decay_steps: int | None = None
     warmup_ratio: float = 0.02
     stable_ratio: float = 0.8
     min_lr_ratio: float = 0.05
@@ -529,6 +537,8 @@ class LoraConfig(BaseModel):
     lr: float = 2e-4
     # LoRA 基线余弦调度 (终点 = lr × min_lr_ratio); 曾恒定 lr 训练, 与 sft/dpo 同构沉淀 YAML
     lr_scheduler: Literal["cosine", "wsd"] = "cosine"
+    # LR 衰减视野: None = 跟随 total_steps; 设值 = lr 调度按该步数算 (语义同 SFTConfig)
+    lr_decay_steps: int | None = None
     warmup_ratio: float = 0.02
     stable_ratio: float = 0.80
     min_lr_ratio: float = 0.05

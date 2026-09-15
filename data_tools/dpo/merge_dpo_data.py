@@ -10,6 +10,9 @@
 产物目录按 variant 推导（data/<variant>/dpo/dpo_data.jsonl，与训练轨
 dpo.data_path 指向一致，重建后即生效）。
 
+产物旁写 {output}.manifest.json（输入分片指纹 / 清洗剔除计数，见
+data_tools/shared/audit.py）。
+
 用法:
   python data_tools/dpo/merge_dpo_data.py --variant nano
   python data_tools/dpo/merge_dpo_data.py --variant lite --output data/lite/dpo/dpo_data_new.jsonl
@@ -19,6 +22,13 @@ import argparse
 import glob
 import json
 import os
+import sys
+
+_sys_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _sys_root not in sys.path:
+    sys.path.insert(0, _sys_root)
+
+from data_tools.shared.audit import write_manifest
 
 
 def load(path: str) -> list[dict]:
@@ -117,6 +127,15 @@ def main():
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
     n_single = sum(1 for r in clean if "instruction" in r)
     print(f"Done -> {out} (single {n_single} + multi {len(clean) - n_single})")
+
+    write_manifest(
+        out,
+        tool="merge_dpo_data",
+        inputs=single_files + multi_files,
+        dropped=dropped,
+        params={"variant": args.variant},
+        seed=None,
+    )
 
 
 if __name__ == "__main__":

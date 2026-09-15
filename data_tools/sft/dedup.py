@@ -18,12 +18,21 @@
   # 执行：备份原件 → 去重写回 → 合并闲聊样本
   python data_tools/sft/dedup.py --input data/nano/sft/sft_data.jsonl \
       --chat-extra data/nano/sft/chat_extra.jsonl --apply
+
+--apply 写回后在产物旁写 {input}.manifest.json（来源指纹 / 剔除计数，见
+data_tools/shared/audit.py；处理前指纹取备份文件，见 params.backup）。
 """
 
 import argparse
 import json
 import os
 import sys
+
+_sys_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _sys_root not in sys.path:
+    sys.path.insert(0, _sys_root)
+
+from data_tools.shared.audit import write_manifest
 
 
 def instruction_quality(ins: str, out: str) -> float:
@@ -114,6 +123,16 @@ def main():
             for r in chat_rows:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
     print(f"Written: {args.input}  (total {len(keep) + len(multi) + chat_n})")
+
+    # 原地重写: 处理前状态已不可寻, 以备份文件为输入指纹
+    write_manifest(
+        args.input,
+        tool="dedup",
+        inputs=[backup],
+        dropped={"duplicate_output": removed},
+        params={"inplace": True, "chat_extra": args.chat_extra or "", "backup": backup},
+        seed=None,
+    )
 
 
 if __name__ == "__main__":

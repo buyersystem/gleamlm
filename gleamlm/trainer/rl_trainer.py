@@ -6,7 +6,7 @@ GRPO (Group Relative Policy Optimization): group 内归一化优势，无 value 
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 import torch
 import torch.nn.functional as F
@@ -39,6 +39,59 @@ def compute_reward(response: str, ground_truth: str | None = None) -> float:
     if response and response[-1] in "。！？.!?":
         r += 0.1
     return r
+
+
+def sample_responses(
+    model: nn.Module,
+    tokenizer: Any,
+    prompt_ids: torch.Tensor,
+    *,
+    group_size: int,
+    max_new_tokens: int,
+    temperature: float,
+    seq_len: int,
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """对 prompt_ids 采样 group_size 个回答 (GRPO rollout 与难度过滤共用)。
+
+    逐 token 自回归生成: temperature <= 0 走贪心 (组内轨迹将完全相同 ——
+    GRPO 场景会退化为零方差组)；否则按 softmax(logits / temperature) 采样。
+
+    完成判定 (方案 1a): **逐样本独立** —— 每个样本一旦采样出 eos 即记
+    finished (此后该行用 pad 填充占位, 防止 eos 后续写污染回答文本)；
+    某样本跑完 max_new_tokens / seq_len 仍未出 eos = 截断 (truncated=True)。
+    全 batch 完成 (或触达上限) 才退出循环。
+
+    调用方负责 model 模式切换 (rollout 须 eval) 与 no_grad 上下文。
+
+    Returns:
+        gen_seqs: [group_size] 个 [B, S] 完整序列 (prompt + 回答)
+        truncated: [group_size] 个 [B] bool 掩码, True = 该样本截断未出 eos
+    """
+    gen_seqs: list[torch.Tensor] = []
+    truncated: list[torch.Tensor] = []
+    for _ in range(group_size):
+        ids = prompt_ids.clone()
+        finished = torch.zeros(ids.size(0), dtype=torch.bool, device=ids.device)
+        for _ in range(max_new_tokens):
+            logits, _, _, _ = model(ids)
+            if temperature <= 0:
+                nxt = logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            else:
+                # 组内多样性来源: 采样而非贪心
+                # (greedy → 组内 std=0 → 优势全 0, 只剩 KL 在学)
+                probs = F.softmax(logits[:, -1, :] / temperature, dim=-1)
+                nxt = torch.multinomial(probs, 1)
+            # 已完成样本用 pad 占位 (同步 batch 须等最慢样本; pad 是特殊 token,
+            # decode(skip_special=True) 跳过) —— 防止 eos 后模型续写混入回答
+            if finished.any():
+                nxt = nxt.masked_fill(finished.unsqueeze(-1), tokenizer.pad_id)
+            ids = torch.cat([ids, nxt], dim=-1)
+            finished |= (nxt == tokenizer.eos_id).squeeze(-1)
+            if finished.all() or ids.size(1) >= seq_len:
+                break
+        gen_seqs.append(ids)
+        truncated.append(~finished)
+    return gen_seqs, truncated
 
 
 # GRPO: 无 value network，用 group 内归一化奖励做优势估计 (MC baseline)；

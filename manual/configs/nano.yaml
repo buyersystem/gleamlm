@@ -95,6 +95,7 @@ sft:
   warmup_ratio: 0.02
   stable_ratio: 0.80           # WSD 专用 (cosine 时忽略)
   min_lr_ratio: 0.05           # cosine 终点比例
+  lr_decay_steps: null         # LR 衰减视野步数 (null = 跟随总步数)
   weight_decay: 0.01
   max_seq_len: 512
   inject_system_ratio: 0.2
@@ -150,6 +151,7 @@ lora:
   warmup_ratio: 0.02
   stable_ratio: 0.80          # WSD 专用 (cosine 时忽略)
   min_lr_ratio: 0.05          # cosine 终点比例
+  lr_decay_steps: null        # LR 衰减视野步数 (null = 跟随总步数)
   clip_grad: 1.0
   max_seq_len: 1024
   lora_r: 8

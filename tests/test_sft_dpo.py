@@ -14,6 +14,7 @@ from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.trainer.base_trainer import evaluate_generations, set_seed
 from gleamlm.trainer.dpo_loss import compute_log_probs, dpo_loss
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
+from manual.sft_lora import SFTDataset as LoraSFTDataset
 
 VOCAB_SIZE = 12002
 D_MODEL = 256
@@ -98,6 +99,76 @@ class TestSFT:
 
             model.eval()
             evaluate_generations(model, tokenizer, ["你好"])
+
+
+class TestSFTPrecheck:
+    """加载期截断病理守卫 (precheck): 病理样本剔除 + 统计正确。"""
+
+    @staticmethod
+    def _write(path: str, rows: list[dict]) -> None:
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def test_core_precheck_drops_prompt_lost(self):
+        """超长输出保尾截断后 prompt 归零 → 剔除; 健康样本 (含多轮) 保留。"""
+        tokenizer = BBPETokenizer.load(DEFAULT_TOKENIZER_PATH)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "pre_core.jsonl")
+            self._write(
+                path,
+                [
+                    {"instruction": "你好", "output": "你好！有什么可以帮助你的？"},
+                    # 输出远超 max_seq_len → 保尾截断后 prompt 整体被切 (病理 a)
+                    {"instruction": "什么是AI", "output": "人工智能" * 80},
+                    {
+                        "messages": [
+                            {"role": "user", "content": "解释一下什么是机器学习。"},
+                            {
+                                "role": "assistant",
+                                "content": "机器学习是让计算机从数据中学习规律的方法。",
+                            },
+                        ]
+                    },
+                    {"instruction": "推荐一道菜", "output": "西红柿炒鸡蛋简单好做"},
+                ],
+            )
+            ds = SFTDataset(path, tokenizer, max_seq_len=MAX_SEQ_LEN)
+            st = ds.precheck_stats
+            assert st["total"] == 4
+            assert st["prompt_lost"] == 1
+            assert st["all_masked"] == 0  # core 路径理论不可达, 防御计数
+            assert st["truncated"] >= 1
+            assert st["ok"] == 3 and len(ds) == 3
+            # 保留样本必须都有监督 token (labels 不全 -100)
+            for i in range(len(ds)):
+                input_ids, labels = ds[i]
+                assert input_ids.shape == (MAX_SEQ_LEN,)
+                assert (labels != -100).any()
+
+    def test_lora_precheck_drops_all_masked(self):
+        """LoRA 副本: prompt 过长保头截断砍掉回答 → 剔除; 未传 tokenizer 跳过预检。"""
+        tokenizer = BBPETokenizer.load(DEFAULT_TOKENIZER_PATH)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "pre_lora.jsonl")
+            self._write(
+                path,
+                [
+                    {"instruction": "你好", "output": "你好！"},
+                    # prompt 本身超过 max_seq_len → 回答被保头截断切掉 (全 mask)
+                    {
+                        "instruction": "请详细介绍人工智能的发展历史与关键技术。" * 30,
+                        "output": "好的。",
+                    },
+                ],
+            )
+            ds = LoraSFTDataset(path, max_seq_len=MAX_SEQ_LEN, tokenizer=tokenizer)
+            assert ds.precheck_stats["total"] == 2
+            assert ds.precheck_stats["all_masked"] == 1
+            assert len(ds) == 1
+            # 兼容: 不传 tokenizer 时不预检 (旧调用行为不变)
+            ds_plain = LoraSFTDataset(path, max_seq_len=MAX_SEQ_LEN)
+            assert len(ds_plain) == 2 and ds_plain.precheck_stats == {}
 
 
 class TestDPO:
