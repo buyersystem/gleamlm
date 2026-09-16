@@ -135,7 +135,7 @@ lora:
   epochs: 3
   batch_size: 2
   accumulate_grad: 16       # 等效 batch 32 (与全参 SFT 对齐; batch 2 单步噪声大收敛不动)
-  lr: 2.0e-4                  # adapter 仅 ~0.5M 参数, 需高于全参 SFT (1e-4)
+  lr: 2.0e-4                  # adapter ~2.7M 参数 (r16 全覆盖), 需高于全参 SFT (1e-4)
   lr_scheduler: cosine       # 与 SFT/DPO 同构: cosine 衰减 (终点 = lr × min_lr_ratio)
   warmup_ratio: 0.02
   stable_ratio: 0.80          # WSD 专用 (cosine 时忽略)
@@ -143,8 +143,8 @@ lora:
   lr_decay_steps: null        # LR 衰减视野步数 (null = 跟随总步数)
   clip_grad: 1.0
   max_seq_len: 2048
-  lora_r: 8
-  lora_alpha: 16
+  lora_r: 16
+  lora_alpha: 32
   log_interval: 10
   data_path: data/lite/sft/sft_mix.jsonl
 

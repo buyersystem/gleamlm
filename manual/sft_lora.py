@@ -161,14 +161,18 @@ def train(args):
     model.load_state_dict(clean_state_dict(ckpt["model_state_dict"]), strict=False)
     model.train()
 
+    # attention + FFN 全覆盖: FFN 是知识载体 (ADR-0003), 仅挂 Q/K/V/O 时
+    # 知识型 SFT 数据学不动, loss 快速平台化 (~3.0, 全参 SFT 可至 ~2.34)
     lora_cfg = LoraConfig(
-        r=args.lora_r, lora_alpha=args.lora_alpha, target_modules=["W_q", "W_k", "W_v", "W_o"]
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        target_modules=["W_q", "W_k", "W_v", "W_o", "W_gate", "W_up", "W_down"],
     )
     apply_lora_to_model(model, lora_cfg)
     # LoRA 语义: base 全冻结, 仅训练 adapter。apply_lora_to_model 只冻结被替换的
-    # W_q/k/v/o, 其余层 (MLP/embedding/norm) 仍是 requires_grad=True —— 不显式再冻
-    # 会让 optimizer 拿到 ~66M 参数, 退化成"除 attention 外全参微调"
-    # (trainable 66.4M vs 纯 adapter ~0.5M, loss 趋势平且震荡大)。
+    # 投影层 (Q/K/V/O + FFN), 其余层 (embedding/norm) 仍是 requires_grad=True —— 不显式再冻
+    # 会让 optimizer 拿多余参数, 退化成"部分全参微调"(早期 QKVO: 66.4M vs 纯 adapter ~0.5M,
+    # loss 趋势平且震荡大)。
     model.requires_grad_(False)
     for name, param in model.named_parameters():
         if "lora_" in name:
