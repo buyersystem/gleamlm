@@ -72,7 +72,7 @@ def optimizer_step(
     scaler: Any,
     parameters: Any | None = None,
     clip_grad: float | None = None,
-) -> None:
+) -> float | None:
     """Atomic AMP update: unscale → clip → step → update → zero_grad.
 
     Args:
@@ -81,14 +81,19 @@ def optimizer_step(
         parameters: model.parameters() for grad clipping (optional).
                     If None, clips optimizer's first param group params.
         clip_grad:  max grad norm. None or 0 → skip clipping.
+
+    Returns:
+        裁剪前的梯度总范数（K4: 面板 grad_norm 曲线数据源）；未启用裁剪时为 None。
     """
     scaler.unscale_(optimizer)
+    grad_norm = None
     if clip_grad and clip_grad > 0:
         params = parameters if parameters is not None else optimizer.param_groups[0]["params"]
-        torch.nn.utils.clip_grad_norm_(params, clip_grad)
+        grad_norm = float(torch.nn.utils.clip_grad_norm_(params, clip_grad))
     scaler.step(optimizer)
     scaler.update()
     optimizer.zero_grad()
+    return grad_norm
 
 
 # DDP: torchrun 设置 LOCAL_RANK/RANK/WORLD_SIZE 等环境变量；

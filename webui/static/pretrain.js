@@ -11,6 +11,7 @@
 (function () {
 const pt = {
   logY: false,    // B6：loss 图对数纵轴（默认关，loss 跨量级时手动开）
+  smooth: 0.6,    // K3：loss 图 EMA 平滑系数（TB 默认 0.6；滑杆可调，持久化到 localStorage）
   runs: [],       // /api/train/runs 条目（仅 pretrain）
   hist: new Map(),// run_id → series {loss:[[s,v]], lr:[...]}
   checked: [],    // 勾选对比的 run id（≤2）
@@ -342,7 +343,7 @@ async function ensureHist(id) {
     noteFetchFail("pt-hist:" + id, false); // 无旧数据可留 → 立即显示
   }
   setChartErr(
-    ["pt-loss-err", "pt-lr-err"],
+    ["pt-loss-err", "pt-lr-err", "pt-gnorm-err", "pt-tps-err", "pt-gmem-err"],
     failShown("pt-hist:" + id) && !isLinkDown()
       ? `无法读取该任务的曲线数据 · ${pt.histErr}`
       : "",
@@ -440,21 +441,43 @@ function lrPhases() {
   };
 }
 
+/* K1：run 是否启用了 label_smoothing —— 从 config 快照读实际值（快照来自启动时刻
+   的 YAML，见 webui/routers/training.py _read_yaml_summary）。旧 run 快照无此键
+   （字段引入前创建，历史预训练均为默认 0.1）→ 回退视为启用。 */
+function lsEnabled(id) {
+  const r = pt.runs.find((x) => x.id === id);
+  const ys = r && r.config ? r.config.yaml_summary : null;
+  const v = ys ? ys.label_smoothing : null;
+  return v == null || Number(v) > 0;
+}
+
 let drawTimer = null;
 function drawCharts() {
   clearTimeout(drawTimer);
   drawTimer = setTimeout(() => {
     const C = LineChart.palette(); // B2：色板来自 :root，不再本地写死
     const main = mainSeriesData();
-    const loss = [], lr = [];
+    const loss = [], lr = [], gnorm = [], tps = [], gmem = [];
+    let hasValLine = false; // K1：loss 图上是否有 val 线（口径尾注的显示前提之一）
     if (main) {
       loss.push({ name: shortId(pt.mainId), color: C.loss, points: main.loss || [] });
       // 周期验证序列（稀疏: 每 eval_interval 步一点）叠在主 loss 图上;
       // 无验证的 run 没有该键, 不 push 空序列
       if ((main.val_loss || []).length) {
+        hasValLine = true;
         loss.push({ name: shortId(pt.mainId) + " · val", color: C.val, points: main.val_loss || [] });
       }
       lr.push({ name: shortId(pt.mainId), color: C.lr, points: main.lr || [] });
+      // K4/K5：健康度三小图 —— 有该键才 push（旧 run 无 grad_norm，空序列不进图例）
+      if ((main.grad_norm || []).length) {
+        gnorm.push({ name: shortId(pt.mainId), color: C.x1, points: main.grad_norm });
+      }
+      if ((main.tok_per_sec || []).length) {
+        tps.push({ name: shortId(pt.mainId), color: C.val, points: main.tok_per_sec });
+      }
+      if ((main.gpu_mem || []).length) {
+        gmem.push({ name: shortId(pt.mainId), color: C.x2, points: main.gpu_mem });
+      }
     }
     // B4/Q3：对比系列按勾选顺序给 cmp=0/1 —— 让两条历史线用不同线型区分，
     // 而不是原先统一涂灰（叠两条后认不出哪条是哪条）
@@ -463,20 +486,46 @@ function drawCharts() {
       if (!s) return; // 注意：这里是 forEach 回调，不是 for 循环 —— 用 return 不用 continue
       loss.push({ name: shortId(id), color: C.loss, points: s.loss || [], cmp: i });
       if ((s.val_loss || []).length) {
+        hasValLine = true;
         loss.push({ name: shortId(id) + " · val", color: C.val, points: s.val_loss || [], cmp: i });
       }
       lr.push({ name: shortId(id), color: C.lr, points: s.lr || [], cmp: i });
+      if ((s.grad_norm || []).length) {
+        gnorm.push({ name: shortId(id), color: C.x1, points: s.grad_norm, cmp: i });
+      }
+      if ((s.tok_per_sec || []).length) {
+        tps.push({ name: shortId(id), color: C.val, points: s.tok_per_sec, cmp: i });
+      }
+      if ((s.gpu_mem || []).length) {
+        gmem.push({ name: shortId(id), color: C.x2, points: s.gpu_mem, cmp: i });
+      }
     });
     if (!pt.lossChart) {
       pt.lossChart = new LineChart($("#pt-loss-chart"));
       pt.lrChart = new LineChart($("#pt-lr-chart"));
+      pt.gnormChart = new LineChart($("#pt-gnorm-chart"));
+      pt.tpsChart = new LineChart($("#pt-tps-chart"));
+      pt.gmemChart = new LineChart($("#pt-gmem-chart"));
     }
-    // zeroY：纵轴从 0 起（与 lr 图一致；log y 打开时自动失效，见 yDomain）
+    // K2/Q8：loss 图撤掉 zeroY（loss 没有绝对零点，自适应更接近 TB 默认）；lr 图保留从 0 起。
+    // K3：smooth 只影响绘制（原始点仍供悬停读数与 CSV 导出）。
+    // K1：口径尾注（与图例同一行）—— train 含 label_smoothing+z_loss、val 为裸 CE
+    // （README「训练与验证口径说明」）。图上任一 train 线来自 label_smoothing>0 的
+    // run 才提示（按实际配置判断，不写死；返回键与 v>0 同义）。
+    const lsOn = [pt.mainId, ...pt.checked]
+      .filter(Boolean)
+      .some((id) => lsEnabled(id));
     pt.lossChart.render({
-      series: loss, yLabel: "loss", xLabel: "step", logY: pt.logY, zeroY: true,
+      series: loss, yLabel: "loss", xLabel: "step", logY: pt.logY, smooth: pt.smooth,
+      legendNote: hasValLine && lsOn ? "已启用 label_smoothing" : "",
     });
     const lp = lrPhases(); // P1：带三阶段底色
     pt.lrChart.render({ series: lr, phases: lp.phases, bands: lp.bands, yLabel: "lr", xLabel: "step", zeroY: true });
+    // K4/K5：健康度三小图。不接 smooth（grad_norm 的尖峰是核心信息，EMA 会抹掉它）、
+    // 不设 zeroY（自适应放大局部波动：tok/s 的 ±5%、显存的缓慢爬升）。
+    pt.gnormChart.render({ series: gnorm, yLabel: "grad_norm", xLabel: "step", emptyText: "该 run 未记录 grad_norm" });
+    pt.tpsChart.render({ series: tps, yLabel: "tok/s", xLabel: "step", emptyText: "该 run 未记录 tok/s" });
+    pt.gmemChart.render({ series: gmem, yLabel: "GiB", xLabel: "step", emptyText: "该 run 未记录 gpu_mem" });
     renderMetrics();
     renderAb(); // D4
   }, 60);
@@ -727,6 +776,33 @@ function initPretrain() {
     applyLogYBtn();
     drawCharts();
   });
+  // K3：EMA 平滑滑杆。持久化写法与 log y 同款（两页共用 "webui.smooth" —— 同一个"我习惯的平滑度"）。
+  try {
+    const sv = parseFloat(localStorage.getItem("webui.smooth"));
+    if (isFinite(sv) && sv >= 0 && sv <= 0.99) pt.smooth = sv;
+  } catch (_) {
+    /* 读失败用默认 0.6 */
+  }
+  const sld = $("#pt-smooth");
+  const sval = $("#pt-smooth-val");
+  const applySmooth = () => {
+    if (sld) sld.value = String(pt.smooth);
+    if (sval) sval.textContent = pt.smooth.toFixed(2);
+  };
+  applySmooth();
+  if (sld) {
+    sld.addEventListener("input", () => {
+      const v = parseFloat(sld.value);
+      pt.smooth = isFinite(v) ? Math.min(0.99, Math.max(0, v)) : 0;
+      applySmooth();
+      try {
+        localStorage.setItem("webui.smooth", String(pt.smooth));
+      } catch (_) {
+        /* 隐私模式等写入失败：本次会话内仍然生效 */
+      }
+      drawCharts();
+    });
+  }
   trainer.on("status", onStatus);
   trainer.on("metric", onMetric);
   trainer.on("exit", onExit);

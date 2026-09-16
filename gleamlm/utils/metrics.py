@@ -12,6 +12,7 @@
   lr        float — 当前学习率
   tok_per_s float — 吞吐（tok/s）
   gpu_mem   float — 进程显存占用（GiB）
+  grad_norm float — 裁剪前梯度总范数（clip_grad_norm_ 返回值；面板 grad_norm 曲线）
   margin    float — DPO 隐式奖励间隔 β·mean((logπc−logπref_c)−(logπr−logπref_r))
   acc       float — 上式的排序正确率（term>0 的配对占比）
   reward    float — GRPO/PPO 的平均奖励（GRPO 已产出；PPO 尚未）

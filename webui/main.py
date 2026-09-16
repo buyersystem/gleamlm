@@ -96,9 +96,11 @@ app.mount("/images", StaticFiles(directory=_IMAGES_DIR), name="images")
 @app.middleware("http")
 async def no_cache_static(request: Request, call_next):
     """静态资源（页面/JS/CSS/图片）一律 no-store，避免浏览器缓存旧文件
-    （luna-agent server.py 同款做法）。"""
+    （luna-agent server.py 同款做法）。根文档 / 也要 —— 此前只覆盖 /static/ 前缀，
+    index.html 本身会被浏览器启发式缓存：DOM 已更新却渲染旧文档。"""
     response = await call_next(request)
-    if request.url.path.startswith(("/images/", "/static/")):
+    p = request.url.path
+    if p in ("/", "/index.html") or p.startswith(("/images/", "/static/")):
         response.headers["Cache-Control"] = "no-store"
     return response
 

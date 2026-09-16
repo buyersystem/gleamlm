@@ -23,6 +23,7 @@ const FLOW = [
 
 const pt2 = {
   logY: false, // B6：loss 图对数纵轴（默认关）
+  smooth: 0.6, // K3：loss 图 EMA 平滑系数（TB 默认 0.6；与预训练页共用 webui.smooth）
   runs: [],
   hist: new Map(),
   checked: [],
@@ -447,7 +448,7 @@ async function ensureHist(id) {
     noteFetchFail("pt2-hist:" + id, false);
   }
   setChartErr(
-    ["pt2-loss-err", "pt2-lr-err"],
+    ["pt2-loss-err", "pt2-lr-err", "pt2-gnorm-err", "pt2-tps-err", "pt2-gmem-err"],
     failShown("pt2-hist:" + id) && !isLinkDown()
       ? `无法读取该任务的曲线数据 · ${pt2.histErr}`
       : "",
@@ -498,6 +499,9 @@ function pt2SlotLabels(xk) {
 /* ── 曲线：左 loss 主图 / 右 副图（默认 lr，有专属指标时切换，见 H4）── */
 let pt2LossChart = null;
 let pt2LrChart = null;
+let pt2GnormChart = null;
+let pt2TpsChart = null;
+let pt2GmemChart = null;
 
 /* ── 片三：导出曲线 CSV（同预训练页：原始 series、不抽稀、不四舍五入）──
    前缀与左栏角标对齐（main / A / B）。 */
@@ -533,6 +537,7 @@ function drawPt2() {
   const lm = (trainer.run || {}).last_metric || {};
   const loss = [];
   const sub = [];
+  const gnorm = [], tps = [], gmem = [];
   const C = LineChart.palette(); // B2：色板来自 :root
   const xk = pt2Extras(main, lm);
   const subTitle = $("#pt2-sub-title");
@@ -550,6 +555,16 @@ function drawPt2() {
     } else {
       sub.push({ name: shortPt2Id(pt2.mainId), color: C.lr, points: main.lr || [] });
     }
+    // K4/K5：健康度三小图（同预训练页）—— 有该键才 push
+    if ((main.grad_norm || []).length) {
+      gnorm.push({ name: shortPt2Id(pt2.mainId), color: C.x1, points: main.grad_norm });
+    }
+    if ((main.tok_per_sec || []).length) {
+      tps.push({ name: shortPt2Id(pt2.mainId), color: C.val, points: main.tok_per_sec });
+    }
+    if ((main.gpu_mem || []).length) {
+      gmem.push({ name: shortPt2Id(pt2.mainId), color: C.x2, points: main.gpu_mem });
+    }
   }
   // B4/Q3：对比线按勾选顺序 cmp=0/1，用不同线型区分（原先是统一灰）
   pt2.checked.forEach((id, i) => {
@@ -558,16 +573,40 @@ function drawPt2() {
     loss.push({ name: shortPt2Id(id), color: C.loss, points: s.loss || [], cmp: i });
     // lr 模式保留对比线（与改动前一致）；专属指标模式不加，避免副图图例被撑爆
     if (!xk.length) sub.push({ name: shortPt2Id(id), color: C.lr, points: s.lr || [], cmp: i });
+    if ((s.grad_norm || []).length) {
+      gnorm.push({ name: shortPt2Id(id), color: C.x1, points: s.grad_norm, cmp: i });
+    }
+    if ((s.tok_per_sec || []).length) {
+      tps.push({ name: shortPt2Id(id), color: C.val, points: s.tok_per_sec, cmp: i });
+    }
+    if ((s.gpu_mem || []).length) {
+      gmem.push({ name: shortPt2Id(id), color: C.x2, points: s.gpu_mem, cmp: i });
+    }
   });
   if (!pt2LossChart) pt2LossChart = new LineChart($("#pt2-loss-chart"));
   if (!pt2LrChart) pt2LrChart = new LineChart($("#pt2-lr-chart"));
-  // zeroY：两张图的纵轴都从 0 起（副图切到 margin/acc 时同样；
+  if (!pt2GnormChart) pt2GnormChart = new LineChart($("#pt2-gnorm-chart"));
+  if (!pt2TpsChart) pt2TpsChart = new LineChart($("#pt2-tps-chart"));
+  if (!pt2GmemChart) pt2GmemChart = new LineChart($("#pt2-gmem-chart"));
+  // K2/Q8：loss 图撤掉 zeroY（同预训练页）；副图保留从 0 起（lr 看 WSD 相对衰减幅度；
   // 若该指标出现负值，yDomain 会保留 dataMin 而不是贴 0 —— 不裁掉负半轴）
+  // K3：smooth 只影响 loss 图绘制
   pt2LossChart.render({
-    series: loss, yLabel: "loss", xLabel: "step", logY: pt2.logY, zeroY: true,
+    series: loss, yLabel: "loss", xLabel: "step", logY: pt2.logY, smooth: pt2.smooth,
   });
   pt2LrChart.render({
     series: sub, yLabel: xk.length ? "value" : "lr", xLabel: "step", zeroY: true,
+  });
+  // K4/K5：健康度三小图（同预训练页）。后训练脚本暂未采集 tok/s / gpu_mem ——
+  // 训练侧补点后无需改前端，序列出现即自动绘制。
+  pt2GnormChart.render({
+    series: gnorm, yLabel: "grad_norm", xLabel: "step", emptyText: "该 run 未记录 grad_norm",
+  });
+  pt2TpsChart.render({
+    series: tps, yLabel: "tok/s", xLabel: "step", emptyText: "训练脚本暂未采集 tok/s",
+  });
+  pt2GmemChart.render({
+    series: gmem, yLabel: "GiB", xLabel: "step", emptyText: "训练脚本暂未采集 gpu_mem",
   });
   renderMetrics();
   renderAb(); // D4
@@ -611,7 +650,8 @@ function setSlotLabels(rootSel, labels) {
    第 3/4 格是阶段专属指标，标签随数据切换；无数据时保留槽位与默认标签、值为「—」
    —— 槽位数不变，格宽比例才与提案图一致；数据到位即自动可见（不需要再动前端）。
    tok·s 与 GPU 已移出本条：tok·s 进日志标题栏的运行摘要（只覆盖"正在跑"的场景），
-   GPU 不再显示（header 徽章是面板侧 NVML 全卡占用，两处并存反而容易误读）。── */
+   GPU 不再显示（面板侧 NVML 全卡占用在推理页采样行尾的 GPU 徽章，
+   训练页的「显存」曲线已覆盖同一信息）。── */
 function renderMetrics() {
   const st = trainer.run || {};
   const lm = st.last_metric || {};
@@ -726,6 +766,33 @@ function initPosttrain() {
     applyLogYBtn();
     drawPt2();
   });
+  // K3：EMA 平滑滑杆（同预训练页；两页共用 "webui.smooth" 持久化偏好）。
+  try {
+    const sv = parseFloat(localStorage.getItem("webui.smooth"));
+    if (isFinite(sv) && sv >= 0 && sv <= 0.99) pt2.smooth = sv;
+  } catch (_) {
+    /* 读失败用默认 0.6 */
+  }
+  const sld = $("#pt2-smooth");
+  const sval = $("#pt2-smooth-val");
+  const applySmooth = () => {
+    if (sld) sld.value = String(pt2.smooth);
+    if (sval) sval.textContent = pt2.smooth.toFixed(2);
+  };
+  applySmooth();
+  if (sld) {
+    sld.addEventListener("input", () => {
+      const v = parseFloat(sld.value);
+      pt2.smooth = isFinite(v) ? Math.min(0.99, Math.max(0, v)) : 0;
+      applySmooth();
+      try {
+        localStorage.setItem("webui.smooth", String(pt2.smooth));
+      } catch (_) {
+        /* 隐私模式等写入失败：本次会话内仍然生效 */
+      }
+      drawPt2();
+    });
+  }
   $("#pt2-start-btn").addEventListener("click", () => {
     const meta = trainer.meta;
     if (!meta || !meta.tasks) {

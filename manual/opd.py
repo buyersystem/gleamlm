@@ -507,7 +507,8 @@ def train(args):
                 continue
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+            # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
+            grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip))
             optimizer.step()
             optimizer.zero_grad()
             log_loss_sum += loss.item()
@@ -533,6 +534,7 @@ def train(args):
                     total=len(loader) * args.epochs,
                     loss=window_loss,
                     lr=args.lr,
+                    grad_norm=grad_norm,
                 )
                 log_loss_sum = 0.0
                 log_steps = 0

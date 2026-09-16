@@ -437,7 +437,8 @@ def train(args, model_cfg: ModelConfig):
 
             if is_last_acc:
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(raw_model.parameters(), args.clip)
+                # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
+                grad_norm = float(torch.nn.utils.clip_grad_norm_(raw_model.parameters(), args.clip))
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -473,6 +474,7 @@ def train(args, model_cfg: ModelConfig):
                         lr=lr,
                         tok_per_s=tok_per_sec,
                         gpu_mem=gpu_mem,
+                        grad_norm=grad_norm,
                     )
                     if wandb is not None:
                         wandb.log(

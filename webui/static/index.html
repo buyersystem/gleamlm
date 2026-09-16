@@ -12,9 +12,6 @@
     <h1>GleamLM 训练控制台</h1>
   </div>
   <span class="spacer"></span>
-  <span id="gpu-badge" class="meta-item" title="GPU 显存占用（面板侧探测）">
-    <span class="dot gpu"></span>GPU <b id="gpu-text">–</b>
-  </span>
   <span id="inf-badge" class="meta-item" title="推理模型（加载时占显存，训练会 OOM 提示）">
     <span class="dot idle" id="inf-dot"></span>推理模型 <b id="inf-text">未加载</b>
   </span>
@@ -40,13 +37,13 @@
 </nav>
 
 <main>
-  <!-- F3：后端失联提示（独立容器 —— 与 GPU 互斥提示各占一行，互不覆盖） -->
-  <div id="link-warn" role="status" aria-live="polite"></div>
-  <div id="warn-line"></div>
+  <!-- 警告条视觉副本在各页左栏底部（.link-warn 后端失联 / .warn-line GPU 互斥，
+       紧贴任务列表下方，出现时不再下推整个页面）；这里只保留读屏播报位。 -->
+  <div id="link-warn-sr" class="sr-only" role="status" aria-live="polite"></div>
 
-  <!-- ── ① 预训练：左栏任务/配置 + 中央指标条/loss 主图 + lr 副图 + 底部日志 ── -->
+  <!-- ── ① 预训练：左栏任务列表 + 中部（指标条 / loss / lr / 日志）+ 右列三小图 ── -->
   <section id="pane-pretrain" class="tabpane active" role="tabpanel" aria-labelledby="tab-pretrain" tabindex="-1">
-    <div class="pane-row" style="flex:3">
+    <div class="pane-row" style="flex:1">
       <div class="panel" style="width:var(--pane-left);flex:none">
         <!-- P2 + H18：运行控制收成一条「运行条」—— 状态在左、动作在右，启动/停止**共用同一槽位**
              （靠 .run-bar[data-state] 切换显示，见 theme.css）。标题栏只留标题 + 次级工具。
@@ -70,8 +67,11 @@
              若并进去会破坏 D5 的 sig 原地更新（每 2s 会重建列表，丢悬停与焦点）。 -->
         <div id="pt-runs-warn" class="warnbar" hidden></div>
         <div id="pt-runs" class="p-body" style="flex:1"></div>
+        <!-- 全局警告（后端失联 / GPU 互斥）显示在任务列表最下方；空态整块收起 -->
+        <div class="link-warn" style="padding:0 8px 8px"></div>
+        <div class="warn-line" style="padding:0 8px 8px"></div>
       </div>
-      <div class="pane-col" style="flex:1">
+      <div class="pane-col" style="flex:2">
         <!-- D1/D2 指标条：原先把 step/loss、lr、val ppl 分散在三处 chip，现收成一条 -->
         <div class="metrics" id="pt-metrics" role="group" aria-label="实时指标">
           <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span></div>
@@ -81,11 +81,22 @@
           <div class="m-cell"><span class="m-k">val ppl</span><span class="m-v" data-m="vppl">—</span></div>
           <div class="m-cell"><span class="m-k">ETA</span><span class="m-v" data-m="eta">—</span></div>
         </div>
-        <!-- loss 占 2/3 主视觉，lr 副图 1/3（设计文档 §6.1） -->
+        <!-- 布局：loss 与 lr 各占 1/3；最右 1/3 整列归三小图。
+             高度 flex:1 吸剩余：日志高度被下方公式锁定后，曲线行自动吃掉余量 -->
         <div class="pane-row" style="flex:1">
-          <div class="panel" style="flex:2;min-width:200px">
-            <div class="p-title">损失曲线 Loss
+          <div class="panel" style="flex:1;min-width:150px">
+            <!-- 面板缩到 1/3 宽后标题栏控件放不进一行：标题恒单行，控件自动折行
+                 （否则标题文字会被挤成逐字竖排，撑高整个标题栏） -->
+            <div class="p-title" style="flex-wrap:wrap;white-space:nowrap">损失曲线 Loss
               <span class="spacer"></span>
+              <!-- K3：EMA 平滑滑杆（默认 0.6，与 TensorBoard 一致）。只影响绘制：
+                   悬停仍读原始值（tooltip 同时给平滑值），导出 CSV 始终为原始精度。 -->
+              <label class="smooth-ctl" title="EMA 平滑：0 = 原始曲线；只影响显示，取值与导出不变">
+                <span>平滑</span>
+                <input id="pt-smooth" type="range" min="0" max="0.99" step="0.01" value="0.6"
+                       aria-label="loss 曲线平滑系数" />
+                <span id="pt-smooth-val" class="val">0.60</span>
+              </label>
               <!-- B6：log y 纵轴（默认关 —— 默认开会让人误读轴刻度） -->
               <button id="pt-logy" class="btn ghost sm" type="button" aria-pressed="false"
                       title="对数纵轴：loss 跨量级时把曲线拉开">log y</button>
@@ -94,6 +105,8 @@
                       title="导出当前曲线（含 A/B 对比）为 CSV">导出</button>
             </div>
             <div class="chart-box" style="margin:8px"><canvas id="pt-loss-chart"></canvas><div id="pt-loss-err" class="chart-err" hidden></div></div>
+            <!-- K1：口径提示（train 含 label_smoothing+z_loss、val 为裸 CE）由
+                 pretrain.js 以 legendNote 传入图例尾注（与图例同一行），不再单列一块 -->
           </div>
           <div class="panel" style="flex:1;min-width:150px">
             <div class="p-title">学习率 LR</div>
@@ -102,25 +115,44 @@
         </div>
         <!-- D4：勾选 A/B 对比时才出现 -->
         <div class="ab-diff" id="pt-abdiff" hidden></div>
+        <!-- 日志收进中部列（右缘与 lr 右缘对齐），把最右 1/3 让给三小图列。
+             高度恒等于右侧三小图单格高（右列三等分同公式）——两列同高同底，
+             日志上沿与显存面板上沿精确对齐（任意窗口高度成立；
+             A/B 差异条出现时由曲线行吸收，对齐不变）。 -->
+        <div class="panel" style="flex:none;height:calc((100% - 2 * var(--space-2)) / 3);min-height:120px">
+          <div class="p-title">训练日志
+            <span class="spacer"></span>
+            <span id="pt-run-info" class="run-info"></span>
+          </div>
+          <!-- 工具条由 trainer.js 注入（两页共用同一份模板，避免 HTML 抄两遍漂移） -->
+          <div class="log-bar" data-log-bar></div>
+          <div class="log-wrap">
+            <pre id="pt-log" class="log"></pre>
+            <button class="log-jump" type="button" data-log-jump hidden></button>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="panel" style="flex:1.8;min-height:120px">
-      <div class="p-title">训练日志
-        <span class="spacer"></span>
-        <span id="pt-run-info" class="run-info"></span>
-      </div>
-      <!-- 工具条由 trainer.js 注入（两页共用同一份模板，避免 HTML 抄两遍漂移） -->
-      <div class="log-bar" data-log-bar></div>
-      <div class="log-wrap">
-        <pre id="pt-log" class="log"></pre>
-        <button class="log-jump" type="button" data-log-jump hidden></button>
+      <!-- 最右 1/3：纵排三小图（各 1/3 高），与 loss / lr 同屏对照 -->
+      <div class="pane-col" style="flex:1">
+        <div class="panel" style="flex:1;min-width:130px">
+          <div class="p-title">梯度范数 grad_norm</div>
+          <div class="chart-box" style="margin:6px"><canvas id="pt-gnorm-chart"></canvas><div id="pt-gnorm-err" class="chart-err" hidden></div></div>
+        </div>
+        <div class="panel" style="flex:1;min-width:130px">
+          <div class="p-title">吞吐 tok/s</div>
+          <div class="chart-box" style="margin:6px"><canvas id="pt-tps-chart"></canvas><div id="pt-tps-err" class="chart-err" hidden></div></div>
+        </div>
+        <div class="panel" style="flex:1;min-width:130px">
+          <div class="p-title">显存 GPU mem (GiB)</div>
+          <div class="chart-box" style="margin:6px"><canvas id="pt-gmem-chart"></canvas><div id="pt-gmem-err" class="chart-err" hidden></div></div>
+        </div>
       </div>
     </div>
   </section>
 
-  <!-- ── ② 后训练：左栏任务列表 + 右侧（任务卡在上、曲线在下），底部通栏日志 ── -->
+  <!-- ── ② 后训练：左栏任务列表 + 中部（指标条 / 阶段卡 / loss / 副图 / 日志）+ 右列三小图 ── -->
   <section id="pane-posttrain" class="tabpane" role="tabpanel" aria-labelledby="tab-posttrain" tabindex="-1">
-    <div class="pane-row" style="flex:3">
+    <div class="pane-row" style="flex:1">
       <div class="panel" style="width:var(--pane-left);flex:none">
         <!-- H18：运行条（与预训练页同一形态） -->
         <div class="p-title">任务列表</div>
@@ -139,15 +171,19 @@
              若并进去会破坏 D5 的 sig 原地更新（每 2s 会重建列表，丢悬停与焦点）。 -->
         <div id="pt2-runs-warn" class="warnbar" hidden></div>
         <div id="pt2-runs" class="p-body" style="flex:1"></div>
+        <!-- 全局警告位（同预训练页；推理页的副本在模型栏底部） -->
+        <div class="link-warn" style="padding:0 8px 8px"></div>
+        <div class="warn-line" style="padding:0 8px 8px"></div>
       </div>
-      <div class="pane-col" style="flex:1">
+      <div class="pane-col" style="flex:2">
         <!-- D1/D2 + H4 指标条（后训练）。槽位与提案图一致为**六格**:
              step · loss · <专属> · <专属> · lr · ETA。
              - 第 3/4 格是「阶段专属指标」: DPO→margin/acc、GRPO/PPO→reward/kl，
                标签随实际数据切换；无数据时保持槽位与默认标签、值显示「—」
                —— 槽位数不变才能维持与提案图相同的格宽比例。
              - tok·s 与 GPU 已移出本条: tok·s 进日志标题栏的运行摘要（信息不丢），
-               GPU 去掉（header 的徽章已是面板侧 NVML 全卡占用，两处并存反而易误读）。 -->
+               GPU 去掉（面板侧 NVML 全卡占用现于推理页采样行尾的 GPU 徽章，
+               训练页的「显存」曲线已覆盖同一信息）。 -->
         <div class="metrics" id="pt2-metrics" role="group" aria-label="实时指标">
           <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span></div>
           <div class="m-cell"><span class="m-k">loss</span><span class="m-v" data-m="loss">—</span></div>
@@ -156,23 +192,31 @@
           <div class="m-cell"><span class="m-k">lr</span><span class="m-v" data-m="lr">—</span></div>
           <div class="m-cell"><span class="m-k">ETA</span><span class="m-v" data-m="eta">—</span></div>
         </div>
-        <!-- 上排与曲线行同宽：左=主链卡，右=可选路线卡（LoRA/PPO/GRPO） -->
-        <!-- H11：可选路线是**分支/旁路**，视觉上从属于主链 —— 按提案图给窄栏（约 1/4）。
-             等宽会让 3 张卡撑成三条横幅，也丢掉了「主链 vs 分支」的主次关系。 -->
-        <!-- 分栏比必须与**下面的曲线行**一致（loss 2 : 副图 1），否则两条竖缝错开
-             （75% vs 67%，差 8% 列宽，面板边界连不成一条直线）。
-             曲线行那组比例是提案图定过的，所以由本行来对齐它。 -->
+        <!-- 上排与曲线行同宽：左=主链卡，右=可选路线卡（LoRA/PPO/GRPO）。
+             H11 原按「分支从属」给可选路线窄栏（约 1/4），现曲线行改为
+             loss : 副图 = 1 : 1（与预训练页统一的布局），本行随之为 1 : 1
+             保持两条竖缝对齐（面板边界连成直线）。 -->
         <div class="pane-row" style="flex:none">
-          <div class="panel" style="flex:2">
+          <div class="panel" style="flex:1">
             <div id="pt2-stages" class="pipeline"></div>
           </div>
-          <!-- 可选路线横排：3 张卡最少 250px（见 theme.css #pt2-alts 说明） -->
-          <div id="pt2-alts" class="panel" style="flex:1;min-width:250px"></div>
+          <!-- 可选路线横排：卡片放不下时由 #pt2-alts 自身的 overflow-x 滚动兜底
+               （内联 min-width:250px 已移除 —— 两栏 1:1 等分下它会挤窄主链卡、
+               破坏与下方曲线行的竖缝对齐） -->
+          <div id="pt2-alts" class="panel" style="flex:1"></div>
         </div>
         <div class="pane-row" style="flex:1">
-          <div class="panel" style="flex:2;min-height:140px">
-            <div class="p-title">损失曲线 Loss
+          <div class="panel" style="flex:1;min-height:140px">
+            <!-- 面板缩到 1/3 宽后标题栏控件放不进一行：标题恒单行，控件自动折行 -->
+            <div class="p-title" style="flex-wrap:wrap;white-space:nowrap">损失曲线 Loss
               <span class="spacer"></span>
+              <!-- K3：EMA 平滑滑杆（同预训练页；两页共用 "webui.smooth" 持久化偏好） -->
+              <label class="smooth-ctl" title="EMA 平滑：0 = 原始曲线；只影响显示，取值与导出不变">
+                <span>平滑</span>
+                <input id="pt2-smooth" type="range" min="0" max="0.99" step="0.01" value="0.6"
+                       aria-label="loss 曲线平滑系数" />
+                <span id="pt2-smooth-val" class="val">0.60</span>
+              </label>
               <!-- B6：log y 纵轴（默认关 —— 默认开会让人误读轴刻度） -->
               <button id="pt2-logy" class="btn ghost sm" type="button" aria-pressed="false"
                       title="对数纵轴：loss 跨量级时把曲线拉开">log y</button>
@@ -191,17 +235,36 @@
         </div>
         <!-- D4：勾选 A/B 对比时才出现 -->
         <div class="ab-diff" id="pt2-abdiff" hidden></div>
+        <!-- 日志收进中部列（右缘与副图右缘对齐），把最右 1/3 让给三小图列。
+             高度恒等于右侧三小图单格高（与预训练页同款公式）——
+             日志上沿与显存面板上沿精确对齐，与 metrics / 阶段卡行高度无关。 -->
+        <div class="panel" style="flex:none;height:calc((100% - 2 * var(--space-2)) / 3);min-height:120px">
+          <div class="p-title">训练日志
+            <span class="spacer"></span>
+            <span id="pt2-status" class="run-info"></span>
+          </div>
+          <div class="log-bar" data-log-bar></div>
+          <div class="log-wrap">
+            <pre id="pt2-log" class="log"></pre>
+            <button class="log-jump" type="button" data-log-jump hidden></button>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="panel" style="flex:1.8;min-height:120px">
-      <div class="p-title">训练日志
-        <span class="spacer"></span>
-        <span id="pt2-status" class="run-info"></span>
-      </div>
-      <div class="log-bar" data-log-bar></div>
-      <div class="log-wrap">
-        <pre id="pt2-log" class="log"></pre>
-        <button class="log-jump" type="button" data-log-jump hidden></button>
+      <!-- 最右 1/3：纵排三小图（各 1/3 高）。后训练脚本暂未采集 tok/s / gpu_mem
+           —— 空图以 emptyText 说明；grad_norm 自 K4 补点后的新 run 起有数据。 -->
+      <div class="pane-col" style="flex:1">
+        <div class="panel" style="flex:1;min-width:130px">
+          <div class="p-title">梯度范数 grad_norm</div>
+          <div class="chart-box" style="margin:6px"><canvas id="pt2-gnorm-chart"></canvas><div id="pt2-gnorm-err" class="chart-err" hidden></div></div>
+        </div>
+        <div class="panel" style="flex:1;min-width:130px">
+          <div class="p-title">吞吐 tok/s</div>
+          <div class="chart-box" style="margin:6px"><canvas id="pt2-tps-chart"></canvas><div id="pt2-tps-err" class="chart-err" hidden></div></div>
+        </div>
+        <div class="panel" style="flex:1;min-width:130px">
+          <div class="p-title">显存 GPU mem (GiB)</div>
+          <div class="chart-box" style="margin:6px"><canvas id="pt2-gmem-chart"></canvas><div id="pt2-gmem-err" class="chart-err" hidden></div></div>
+        </div>
       </div>
     </div>
   </section>
@@ -224,6 +287,9 @@
           </div>
           <div class="ms-sub" id="chat-sub">选择左侧 checkpoint 并加载</div>
         </div>
+        <!-- 推理页无任务列表，全局警告位放模型栏底部（GPU 互斥卸载就发生在这一栏） -->
+        <div class="link-warn" style="padding:0 8px 8px"></div>
+        <div class="warn-line" style="padding:0 8px 8px"></div>
       </div>
       <div class="panel" style="flex:1">
         <!-- E10：标题栏原先同时挤着「一长句标题 + 温度滑杆 + 清空按钮」三样东西。
@@ -257,6 +323,11 @@
             <button id="chat-reset" class="btn ghost sm" type="button"
                     title="恢复各参数的默认值（与后端请求默认值对齐）">重置</button>
             <span id="chat-stream-lbl" class="chip" title="SSE 流式输出（fetch + ReadableStream）">流式 ✓</span>
+            <!-- GPU 显存徽章从 header 移来：预训练/后训练页已有显存曲线，环境信息
+                 归到推理页（采样行尾），与「流式」同一套 chip 语法 -->
+            <span id="gpu-badge" class="chip" title="GPU 显存占用（面板侧探测）">
+              <span class="dot gpu"></span>GPU <b id="gpu-text">–</b>
+            </span>
           </div>
           <form id="chat-form" style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">
             <textarea id="chat-input" rows="1" placeholder="输入消息…" style="resize:none;max-height:160px"></textarea>

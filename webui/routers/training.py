@@ -410,10 +410,10 @@ for _t in _TASKS.values():
 
 
 def _read_yaml_summary(rel: str) -> dict:
-    """读模型 YAML 浅层摘要（供 lr 图 WSD 阶段线等展示）。
+    """读模型 YAML 浅层摘要（供 lr 图 WSD 阶段线、loss 图口径尾注等展示）。
 
     只取已知展示键，不展开 extends（子配置若无对应段则返回空，前端自动降级
-    为不画阶段线 —— 阶段线只是装饰，不阻塞任何功能）。
+    —— 展示类信息不阻塞任何功能）。内置/用户副本配置均为独立完整配置，浅读足矣。
     """
     try:
         with open(_abs(rel), encoding="utf-8") as f:
@@ -428,6 +428,10 @@ def _read_yaml_summary(rel: str) -> dict:
             for k in ("type", "lr", "warmup_ratio", "stable_ratio", "min_lr_ratio")
             if k in lr
         }
+    # 训练口径：loss 图口径尾注按 run 实际配置显示（不写死文案），键缺省时前端回退
+    tr = doc.get("training")
+    if isinstance(tr, dict) and "label_smoothing" in tr:
+        out["label_smoothing"] = tr["label_smoothing"]
     return out
 
 
@@ -859,6 +863,9 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
                         out.append(("tok_per_sec", step, float(rec["tok_per_s"])))
                     if rec.get("gpu_mem") is not None:
                         out.append(("gpu_mem", step, float(rec["gpu_mem"])))
+                    # K4：裁剪前梯度总范数（仅哨兵通道产出；旧日志无此键、不产点）
+                    if rec.get("grad_norm") is not None:
+                        out.append(("grad_norm", step, float(rec["grad_norm"])))
                     # H4：后训练阶段专属指标（DPO 的 margin/acc、GRPO/PPO 的 reward/kl）。
                     # 键名与 _EXTRA_KEYS 同一份名单 —— 哨兵与正则回退两条路产出的键必须一致，
                     # 否则同一指标会因来源不同而落在不同的键上。

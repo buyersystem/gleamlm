@@ -205,15 +205,17 @@ function fmtClock(ms) {
    本项目的训练以「几十小时」计，期间 WebUI 进程可能崩掉、机器可能休眠。
    原先两处轮询的 catch 都是静默的 —— 界面会永久停在最后一次成功的数据上，
    看起来像「训练还在跑」。
-   阈值取 3 次：单次请求超时（GC 停顿、请求排队）不该弹警，那会变成噪音。 */
+   阈值取 3 次：单次请求超时（GC 停顿、请求排队）不该弹警，那会变成噪音。
+   条位在每页左栏底部（任务列表 / 模型栏下方，见 .link-warn 副本），
+   不再占页面顶部空间；读屏播报由 #link-warn-sr 单独承担（避免多副本各播一遍）。 */
 let _pollFail = 0;
 let _linkDown = false;
 let _lastOkClock = "";
 
 function notePoll(ok) {
-  const el = $("#link-warn");
   const dot = $("#link-dot"); // P3：header 的连接状态徽章
   const txt = $("#link-text");
+  const sr = $("#link-warn-sr");
   if (ok) {
     _pollFail = 0;
     _lastOkClock = fmtClock(Date.now());
@@ -221,7 +223,8 @@ function notePoll(ok) {
     if (txt) txt.textContent = "正常";
     if (_linkDown) {
       _linkDown = false;
-      if (el) el.innerHTML = "";
+      $$(".link-warn").forEach((el) => { el.innerHTML = ""; });
+      if (sr) sr.textContent = "";
     }
     return;
   }
@@ -230,11 +233,11 @@ function notePoll(ok) {
   _linkDown = true;
   if (dot) dot.className = "dot err";
   if (txt) txt.textContent = "已断开";
-  if (el) {
-    el.innerHTML =
-      `<div class="warnbar err">⚠ 与后端失联（最后更新 ${_lastOkClock || "未知"}）` +
-      ` —— 界面数据可能已过期，连接恢复后自动消失</div>`;
-  }
+  const msg =
+    `<div class="warnbar err">⚠ 与后端失联（最后更新 ${_lastOkClock || "未知"}）` +
+    ` —— 界面数据可能已过期，连接恢复后自动消失</div>`;
+  $$(".link-warn").forEach((el) => { el.innerHTML = msg; });
+  if (sr) sr.textContent = "与后端失联，界面数据可能已过期";
 }
 
 /* ── 片一：局部失败态（把「取数失败」与「没有数据」分开）──
@@ -293,7 +296,7 @@ function bindRetry(root, fn) {
 }
 
 /* 曲线失败的叠加提示：.chart-box 已是 relative，所以直接 inset 铺满。
-   两张图共用一份数据源 → 同一句话同时控制（传 id 数组）。
+   同一数据源的多张图共用一句话同时控制（传 id 数组）。
    dataset 比对避免重复重建（重建会丢焦点）。 */
 function setChartErr(ids, msg, retry) {
   for (const id of ids) {
@@ -656,13 +659,15 @@ function initShell() {
   // 直接绑按钮会随重建丢失。按钮的 data-unload 携带模型身份 —— 卸载的就是
   // 警告里点名的那个模型。unloadModel 定义在 chat.js（defer 顺序在 util.js 之后，
   // 但点击发生在脚本全部加载后），typeof 守卫兼容裁掉 chat.js 的部署。
-  $("#warn-line").addEventListener("click", (e) => {
+  // 警告条视觉副本每页一份（左栏底部），逐份绑定。
+  const onWarnClick = (e) => {
     const b = e.target.closest("button[data-unload]");
     if (!b) return;
     if (typeof unloadModel === "function") unloadModel(b.dataset.unload);
-  });
+  };
+  $$(".warn-line").forEach((el) => el.addEventListener("click", onWarnClick));
 
-  // header 状态：GPU 显存 / 推理模型 / tab 能力列表
+  // 状态轮询：推理模型徽章（header）/ GPU 显存（推理页采样行尾 chip）/ tab 能力列表
   async function pollHeader() {
     if (document.hidden) return; // F4：后台标签页不再每 3s 打请求
     try {
@@ -684,14 +689,14 @@ function initShell() {
       }
       // GPU 互斥警告条统一收敛：加载且占满 → 提示；卸载/切 CPU/显存够 → 清空。
       // 原先警告只在 loaded 分支里更新，卸载后旧警告会残留（A10 显存紧张防 OOM）。
+      // 视觉副本每页左栏一份（.warn-line）；内容有变化才重写（避免打断按钮悬停）。
       const gpuFree = info.gpu && info.gpu.some((g) => g.used_gb < g.total_gb * 0.95);
-      const warn = $("#warn-line");
       // 警告点名模型 + 卸载按钮携带同一身份（卸载的就是这里显示的模型）
       const infName = inf && inf.model_path ? inf.model_path.replace(/\\/g, "/").split("/").pop() : "";
       const w = inf && inf.loaded && info.train && inf.device.startsWith("cuda") && gpuFree === false
         ? `<div class="warnbar err">⚠ 推理模型 ${esc(infName)} 已加载并占满显存 — 启动训练前请先卸载 <button class="btn sm" type="button" data-unload="${esc(inf.model_path)}" title="卸载 ${esc(infName)}，释放显存（可随时重新加载）">卸载</button></div>`
         : "";
-      if (warn && warn.innerHTML !== w) warn.innerHTML = w;
+      $$(".warn-line").forEach((el) => { if (el.innerHTML !== w) el.innerHTML = w; });
       // 能力列表控制 tab 显隐（--no-train 部署只留推理）
       const tabSet = new Set(info.tabs || []);
       $$("#tabs .tab").forEach((t) => {

@@ -240,7 +240,7 @@ header h1 {
 .dot.idle { background: var(--dim); }
 .dot.run { background: var(--ok); box-shadow: 0 0 6px rgba(46, 204, 113, 0.6); }
 .dot.err { background: var(--err); }
-.dot.gpu { background: var(--accent2); }
+.dot.gpu { background: var(--accent2); flex: none; }
 
 /* ── tab bar ── */
 nav.tabs {
@@ -283,6 +283,10 @@ main {
      改为纵向可滚：正常视口不出现滚动条，矮视口下内容不丢。 */
   overflow: hidden auto;
 }
+/* 两条全局警告位（.link-warn 后端失联 / .warn-line GPU 互斥）在各页左栏底部
+   （任务列表 / 模型栏下方）显示，每页一份副本。空态 display:none —— 连内边距
+   一起省掉，有警告时由 JS 写入内容自动撑开（不再下推页面顶部布局）。 */
+.link-warn:empty, .warn-line:empty { display: none; }
 /* F2：内容下限。窗口被拖小 / 开 DevTools 时不再把图表与日志压扁到看不见，
    而是在 main 上出现滚动条。 */
 .tabpane { display: none; flex: 1; min-height: 460px; flex-direction: column; gap: var(--space-2); }
@@ -613,6 +617,19 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 }
 .chart-err[hidden] { display: none; }
 
+/* K1 口径尾注已并入图例行：由 chart.js 的 legendNote 渲染为 .chart-legend .lg-note
+   （样式继承图例），原独立 .chart-note 块随之移除。 */
+
+/* K3 平滑滑杆：放在图标题栏里（与 log y 同排）。原生 range 在深色主题几乎不可见，
+   显式给 accent-color；数值用等宽字对齐，便于余光扫读。 */
+.smooth-ctl {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); color: var(--dim);
+  margin-right: 8px; white-space: nowrap;
+}
+.smooth-ctl input[type="range"] { width: 84px; accent-color: var(--accent2); cursor: pointer; }
+.smooth-ctl .val { font-family: var(--mono); color: var(--text); min-width: 26px; text-align: right; }
+
 /* ── 警告条（GPU 互斥 / 状态）── */
 .warnbar {
   display: flex; gap: 8px; align-items: center;
@@ -734,8 +751,9 @@ select.path-select { font-family: var(--mono); font-size: 12px; }
 /* 右面板：可选路线卡**横排**（与主链同向）。
    注意不能只改 flex-direction —— 3 张卡最少需 3×78(min-width) + 2×8(gap) = 250px，
    而 .panel 带 overflow:hidden，窄视口下会静默裁掉最后一张（F1 是同一个坑）。
-   所以这里自己开横向滚动；配套 index.html 的 min-width 从 120px 提到 250px，
-   让"够宽就用满、不够宽才滚"。 */
+   所以这里自己开横向滚动。原先配套 index.html 内联 min-width:250px
+   （"够宽用满、不够才滚"），但两栏 1:1 等分后它会反过来挤窄主链卡、
+   错开竖缝，已移除 —— 放不下时的滚动由本规则兜底。 */
 #pt2-alts {
   flex-direction: row;
   /* 卡片尺寸必须与主链卡**一致**：不给 flex-grow（宽度按内容，min-width 78px 由
@@ -870,7 +888,9 @@ footer {
    批次 1 新增组件：指标条（D1/D2）· 日志工具条（C1~C4/C7）· toast（E6/E9）
    ══════════════════════════════════════════════════════════════════ */
 
-/* ── 指标条：一屏可扫的关键指标，替代原先散落三处的 chip ── */
+/* ── 指标条：一屏可扫的关键指标，替代原先散落三处的 chip ──
+   每格内标签与数值同行（baseline 对齐）—— 六格躺成一行，扫读时不必
+   「先读标签再下移一行读值」上下跳。 */
 .metrics {
   display: flex;
   gap: 8px;
@@ -885,8 +905,9 @@ footer {
   flex: 1 1 0;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
   padding: 4px 8px;
   background: var(--surface-inset);
   border-radius: var(--radius-md);
@@ -894,6 +915,7 @@ footer {
 .m-k {
   font-size: var(--fs-xs);
   color: var(--dim);
+  flex: none;
 }
 .m-v {
   font-size: var(--fs-sm);
@@ -902,6 +924,7 @@ footer {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0; /* flex 子项默认 min-width:auto 会撑开格子，导致上面的 ellipsis 失效 */
 }
 
 /* ── 日志工具条 ── */

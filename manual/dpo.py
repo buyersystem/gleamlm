@@ -262,6 +262,9 @@ def main() -> None:
     log_term_sum = 0.0
     log_term_pos = 0
     log_pairs = 0
+    # K4: 窗口内最近一次 optimizer_step 的裁剪前梯度范数（面板 grad_norm 曲线）。
+    # 未启用裁剪时恒为 None —— 哨兵行记 null，解析侧跳过、不产曲线点。
+    last_grad_norm = None
 
     for epoch in range(epochs):
         policy_model.train()
@@ -307,7 +310,7 @@ def main() -> None:
                     lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr * lr_mult
-                optimizer_step(
+                last_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=policy_model.parameters(), clip_grad=clip_grad
                 )
                 global_step += 1
@@ -355,6 +358,7 @@ def main() -> None:
                     lr=cur_lr,
                     margin=dpo_margin,
                     acc=dpo_acc,
+                    grad_norm=last_grad_norm,
                 )
                 log_loss_sum = 0.0
                 log_batches = 0
@@ -379,6 +383,7 @@ def main() -> None:
                 lr=cur_lr,
                 margin=beta * log_term_sum / max(log_pairs, 1),
                 acc=log_term_pos / max(log_pairs, 1),
+                grad_norm=last_grad_norm,
             )
             log_loss_sum = 0.0
             log_batches = 0

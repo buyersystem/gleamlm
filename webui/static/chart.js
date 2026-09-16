@@ -162,14 +162,20 @@ class LineChart {
 
   render(data) {
     this._retry = 0; // 新数据重给 rAF 补绘机会（见 draw 的 0 尺寸分支）
-    this.data = data;
-    // 每系列抽稀至 maxPoints（默认 2000），桶内 min/max 保峰谷（见文件尾 decimate）
+    // 每系列抽稀至 maxPoints（默认 2000），桶内 min/max 保峰谷（见文件尾 decimate）。
+    // K3：smooth>0 时另算一条 EMA 平滑副本（pointsSmooth）**只用于绘制** ——
+    // 原始点照旧留给悬停读数（tooltip 同时给两值）；CSV 导出在数据层取原始 series，不受影响。
+    // 顺序必须「先 EMA 后抽稀」：反过来的话抽稀的保峰谷包络会被平滑抹掉。
+    const max = data.maxPoints || 2000;
+    const beta = clamp01(data.smooth);
     this.data = {
       ...data,
-      series: (data.series || []).map((s) => ({
-        ...s,
-        points: decimate((s.points || []).filter((p) => p[1] != null && isFinite(p[1])), data.maxPoints || 2000),
-      })),
+      series: (data.series || []).map((s) => {
+        const pts = (s.points || []).filter((p) => p[1] != null && isFinite(p[1]));
+        const out = { ...s, points: decimate(pts, max) };
+        if (beta > 0 && pts.length) out.pointsSmooth = decimate(emaPoints(pts, beta), max);
+        return out;
+      }),
     };
     this.draw();
     this._syncLegend();
@@ -181,11 +187,14 @@ class LineChart {
     const box = this.cv.parentElement;
     if (!box || !box.classList.contains("chart-box")) return;
     const series = this.data.series || [];
+    // K1：图例尾注（如 loss 的「已启用 label_smoothing」）—— 与图例同一行渲染，
+    // 并进图例签名一起比对，不必单独维护一个 DOM 块
+    const note = this.data.legendNote || "";
     const items = series.map((s) => {
       const st = seriesStyle(s, this.c);
       return { name: s.name || "", style: swatchStyle(st), color: st.color };
     });
-    const sig = items.map((i) => i.name + "|" + i.style).join("~");
+    const sig = items.map((i) => i.name + "|" + i.style).join("~") + "#" + note;
     if (sig === this._legendSig) return;
     this._legendSig = sig;
     let el = box.querySelector(".chart-legend");
@@ -204,6 +213,12 @@ class LineChart {
       span.appendChild(sw);
       span.appendChild(document.createTextNode(it.name));
       el.appendChild(span);
+    }
+    if (note) {
+      const ns = document.createElement("span");
+      ns.className = "lg-note";
+      ns.textContent = note;
+      el.appendChild(ns);
     }
     // B5：给读屏一句摘要（最新值与系列名）
     const last = series.length
@@ -245,7 +260,8 @@ class LineChart {
       ctx.fillStyle = this.c.faint;
       ctx.font = "13px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("启动任务后，等待训练指标…", w / 2, h / 2);
+      // K4/K5：三小图用 emptyText 区分「该 run 无此指标」与「还没开始训练」
+      ctx.fillText(this.data.emptyText || "启动任务后，等待训练指标…", w / 2, h / 2);
       return;
     }
     const xs = all.map((p) => p[0]), ys = all.map((p) => p[1]);
@@ -263,7 +279,13 @@ class LineChart {
     xMax += pad;
     // B7：整根轴用同一份刻度精度（必须在 pad 之后取量级）。
     // B6：log 轴的量级要按**反变换后的显示值**取，否则精度会按 log 值算错。
-    const yFmt = makeTickFmt(logY ? 10 ** yMax : Math.max(Math.abs(yMin), Math.abs(yMax)));
+    // K7：刻度改 1-2-5-10 nice number 序列，精度随刻度步长走（步长 2.5 → 1 位小数）。
+    const yTicks = niceTicks(yMin, yMax, 5);
+    const yStep = yTicks.length > 1 ? yTicks[1] - yTicks[0] : null;
+    const yFmt = makeTickFmt(
+      logY ? 10 ** yMax : Math.max(Math.abs(yMin), Math.abs(yMax)),
+      logY && yStep != null ? 10 ** yTicks[1] - 10 ** yTicks[0] : yStep,
+    );
 
     // 底边距 34: 刻度数字 (top 基线) 与 xLabel (bottom 基线) 需要各占一行,
     // 26 时两者在 h-20~h-9 与 h-13~h-2 重叠约 4px — 刻度贴 plot 底、标签另起行
@@ -280,9 +302,7 @@ class LineChart {
     ctx.font = "11px monospace";
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
-    const steps = 5;
-    for (let i = 0; i <= steps; i++) {
-      const val = yMin + ((yMax - yMin) * i) / steps;
+    for (const val of yTicks) {
       const y = YT(val);
       ctx.strokeStyle = this.c.grid;
       ctx.beginPath();
@@ -292,10 +312,8 @@ class LineChart {
       ctx.fillStyle = this.c.axis;
       ctx.fillText(yFmt(yDisp(val)), m.l - 7, y);
     }
-    // x 刻度
-    const xt = 5;
-    for (let i = 0; i <= xt; i++) {
-      const x = xMin + ((xMax - xMin) * i) / xt;
+    // x 刻度（K7 同款 nice number；step 为整数计数，取整与 k/M 后缀交给 fmtStepTick）
+    for (const x of niceTicks(xMin, xMax, 5)) {
       ctx.fillStyle = this.c.axis;
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
@@ -347,14 +365,14 @@ class LineChart {
       ctx.fillText(ph.label || "", X(ph.x) + (ph.x > (xMin + xMax) / 2 ? -4 : 4), m.t + 8);
     }
 
-    // 各系列曲线
-    for (const s of series) {
-      const pts = (s.points || []).filter((p) => p[1] != null && isFinite(p[1]));
-      if (pts.length < 1) continue;
-      const st = seriesStyle(s, this.c);
-      ctx.strokeStyle = st.color;
-      ctx.lineWidth = st.width;
-      ctx.setLineDash(st.dash);
+    // 各系列曲线（K3：有 pointsSmooth 时画两层 —— 原始淡底 + 平滑主线，TB 同款双线）
+    const strokePts = (pts, color, width, dash, alpha) => {
+      if (!pts.length) return;
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.setLineDash(dash);
       ctx.beginPath();
       pts.forEach((p, i) => {
         const x = X(p[0]), y = Y(p[1]);
@@ -362,7 +380,18 @@ class LineChart {
         else ctx.lineTo(x, y);
       });
       ctx.stroke();
-      ctx.setLineDash([]);
+      ctx.restore();
+    };
+    for (const s of series) {
+      const pts = (s.points || []).filter((p) => p[1] != null && isFinite(p[1]));
+      if (pts.length < 1) continue;
+      const st = seriesStyle(s, this.c);
+      if (s.pointsSmooth && s.pointsSmooth.length) {
+        strokePts(pts, st.color, 1, st.dash, 0.25);
+        strokePts(s.pointsSmooth, st.color, st.width, st.dash, 1);
+      } else {
+        strokePts(pts, st.color, st.width, st.dash, 1);
+      }
     }
 
     // 悬停：最近 x 点竖线 + 数值
@@ -373,7 +402,7 @@ class LineChart {
         for (const p of s.points || []) {
           const d = Math.abs(p[0] - mx);
           if (!best || d < best.dist) {
-            best = { dist: d, x: p[0], s: s.name, y: p[1], color: seriesStyle(s, this.c).color };
+            best = { dist: d, x: p[0], s: s.name, y: p[1], color: seriesStyle(s, this.c).color, ref: s };
           }
         }
       }
@@ -394,7 +423,17 @@ class LineChart {
         ctx.font = "11px monospace";
         ctx.textAlign = "left";
         ctx.textBaseline = "top";
-        const txt = `${best.s} x=${fmtStepTick(best.x)} y=${yFmt(best.y)}`;
+        let txt = `${best.s} x=${fmtStepTick(best.x)} y=${yFmt(best.y)}`;
+        // K3：平滑开启时 tooltip 同时给出平滑值（TB 惯例；找不到对应点就只显示原始值）
+        const sm = (best.ref && best.ref.pointsSmooth) || [];
+        if (sm.length) {
+          let bs = null, bd = Infinity;
+          for (const p of sm) {
+            const d = Math.abs(p[0] - best.x);
+            if (d < bd) { bd = d; bs = p; }
+          }
+          if (bs && bs[1] !== best.y) txt += ` smooth=${yFmt(bs[1])}`;
+        }
         const tw = ctx.measureText(txt).width + 12;
         let bx = X(best.x) + 8;
         if (bx + tw > w - m.r) bx = X(best.x) - tw - 8;
@@ -453,18 +492,64 @@ function yDomain(ys, opts) {
   return { min: lo, max: max + span * 0.06, log: useLog };
 }
 
+/* K3：EMA 平滑（TB 同款递推 s_t = β·s_{t-1} + (1−β)·y_t）。
+   x 原样保留 —— 绘制与悬停共用同一套 x 坐标，平滑只改 y。 */
+function emaPoints(pts, beta) {
+  const out = new Array(pts.length);
+  let prev = null;
+  for (let i = 0; i < pts.length; i++) {
+    const y = pts[i][1];
+    prev = prev == null ? y : prev * beta + y * (1 - beta);
+    out[i] = [pts[i][0], prev];
+  }
+  return out;
+}
+
+function clamp01(v) {
+  const n = Number(v);
+  return isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
+}
+
+/* K7：1-2-5-10 nice number 刻度。入参是「已变换空间」的值域（log 轴传 log10 值），
+   返回落在 [lo,hi] 内的刻度值数组（最多 13 个；跨度异常时兜底返回两端点）。 */
+function niceTicks(lo, hi, target) {
+  if (!(isFinite(lo) && isFinite(hi)) || !(hi > lo)) return [lo, hi];
+  const rawStep = (hi - lo) / Math.max(1, target || 5);
+  const mag = 10 ** Math.floor(Math.log10(rawStep));
+  const norm = rawStep / mag;
+  const step = (norm <= 1.5 ? 1 : norm <= 3 ? 2 : norm <= 7 ? 5 : 10) * mag;
+  const first = Math.ceil(lo / step - 1e-9) * step;
+  const n = Math.floor((hi - first) / step + 1e-9);
+  if (n < 1) return [lo, hi];
+  const out = [];
+  for (let i = 0; i <= Math.min(n, 12); i++) out.push(first + i * step);
+  return out;
+}
+
 /* B7：原先每个刻度按自己的量级决定小数位 —— 同一根轴上会出现
    「2.500 / 5.000 / 12.5」这种位数不齐的混排，看着像精度不同。
    改为按该轴的最大绝对量级定一次精度，全体刻度同格式。
    （fmtTick 保留给无轴上下文的单点场景，如图例摘要。） */
-function makeTickFmt(maxAbs) {
+function makeTickFmt(maxAbs, step) {
   const a = Math.abs(maxAbs);
+  // K7：给得出刻度步长时按步长定小数位（步长 2.5 → 1 位、步长 1 → 0 位），
+  // 替代原先 a>=0.01 一律 toFixed(3)（nice 步长下会出现「2.500」这类冗余精度）。
+  const d = step != null && isFinite(step) && step > 0 ? stepDecimals(step) : null;
   if (a >= 1e6) return (v) => (v / 1e6).toFixed(1) + "M";
   if (a >= 1e4) return (v) => (v / 1e3).toFixed(1) + "k";
-  if (a >= 1000) return (v) => v.toFixed(0);
-  if (a >= 10) return (v) => v.toFixed(1);
-  if (a >= 0.01) return (v) => v.toFixed(3);
+  if (a >= 1000) return (v) => v.toFixed(d == null ? 0 : Math.min(d, 6));
+  if (a >= 10) return (v) => v.toFixed(d == null ? 1 : Math.min(d, 6));
+  if (a >= 0.01) return (v) => v.toFixed(d == null ? 3 : Math.min(d, 6));
   return (v) => v.toExponential(1);
+}
+
+/* 步长所需的最少小数位：1→0、0.5→1、2.5→1、1e-4→4 */
+function stepDecimals(step) {
+  for (let d = 0; d <= 6; d++) {
+    const s = step * 10 ** d;
+    if (Math.abs(s - Math.round(s)) < 1e-6) return d;
+  }
+  return 6;
 }
 
 function fmtTick(v) {

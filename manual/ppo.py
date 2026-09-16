@@ -130,8 +130,12 @@ def train(args):
             )
 
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.clip)
-            torch.nn.utils.clip_grad_norm_(value_head.parameters(), args.clip)
+            # K4: 双 head（policy / value）各裁一次，取大值上报 —— 任一 head 的尖峰都不漏。
+            # （clip_grad_norm_ 返回裁剪前总范数；实参从左到右求值，裁剪顺序与原实现一致）
+            grad_norm = max(
+                float(torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.clip)),
+                float(torch.nn.utils.clip_grad_norm_(value_head.parameters(), args.clip)),
+            )
             policy_optimizer.step()
             policy_optimizer.zero_grad()
             value_optimizer.step()
@@ -157,6 +161,7 @@ def train(args):
                     total=len(loader) * args.epochs,
                     loss=window_loss,
                     lr=args.lr,
+                    grad_norm=grad_norm,
                 )
                 log_loss_sum = 0.0
                 log_steps = 0

@@ -254,7 +254,9 @@ def train(args):
                 cur_lr = args.lr * lr_mult
                 for pg in optimizer.param_groups:
                     pg["lr"] = cur_lr
-                optimizer_step(optimizer, scaler, parameters=lora_params, clip_grad=args.clip)
+                last_grad_norm = optimizer_step(
+                    optimizer, scaler, parameters=lora_params, clip_grad=args.clip
+                )
                 global_step += 1
 
                 if global_step == 1 or global_step % args.log_interval == 0:
@@ -271,6 +273,7 @@ def train(args):
                         total=total_steps,
                         loss=window_loss,
                         lr=cur_lr,
+                        grad_norm=last_grad_norm,
                     )
                     win_loss_sum = 0.0
                     win_batches = 0

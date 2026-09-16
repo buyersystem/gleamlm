@@ -287,6 +287,9 @@ def main():
     # 直接记会让曲线锯齿化、趋势不可读
     log_loss_sum = 0.0
     log_batches = 0
+    # K4: 窗口内最近一次 optimizer_step 的裁剪前梯度范数（面板 grad_norm 曲线）。
+    # 未启用裁剪时恒为 None —— 哨兵行记 null，解析侧跳过、不产曲线点。
+    last_grad_norm = None
     for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
@@ -332,7 +335,7 @@ def main():
                     lr_mult = get_lr_cosine(global_step, decay_steps, warmup_ratio, min_lr_ratio)
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr * lr_mult
-                optimizer_step(
+                last_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=model.parameters(), clip_grad=clip_grad
                 )
                 global_step += 1
@@ -362,6 +365,7 @@ def main():
                     total=total_steps,
                     loss=window_loss,
                     lr=cur_lr,
+                    grad_norm=last_grad_norm,
                 )
                 log_loss_sum = 0.0
                 log_batches = 0
@@ -378,6 +382,7 @@ def main():
                 total=total_steps,
                 loss=window_loss,
                 lr=cur_lr,
+                grad_norm=last_grad_norm,
             )
             log_loss_sum = 0.0
             log_batches = 0
