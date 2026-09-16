@@ -430,8 +430,19 @@ def _read_yaml_summary(rel: str) -> dict:
         }
     # 训练口径：loss 图口径尾注按 run 实际配置显示（不写死文案），键缺省时前端回退
     tr = doc.get("training")
-    if isinstance(tr, dict) and "label_smoothing" in tr:
-        out["label_smoothing"] = tr["label_smoothing"]
+    if isinstance(tr, dict):
+        if "label_smoothing" in tr:
+            out["label_smoothing"] = tr["label_smoothing"]
+        # K6a：tokens/step = batch_size × accumulate_grad × max_seq_len，由前端做乘法
+        # 显示「已训 token 数」。**快照语义**：本函数只在 create_run 时调用一次、
+        # 结果写进 runs.config —— 之后再改 YAML 不会让已有 run 的数字跟着漂
+        # （否则老 run 的 token 数会被改过的配置污染）。
+        for k in ("batch_size", "accumulate_grad"):
+            if isinstance(tr.get(k), int):
+                out[k] = tr[k]
+    md = doc.get("model")
+    if isinstance(md, dict) and isinstance(md.get("max_seq_len"), int):
+        out["max_seq_len"] = md["max_seq_len"]
     return out
 
 

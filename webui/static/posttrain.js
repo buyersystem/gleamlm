@@ -650,7 +650,7 @@ function setSlotLabels(rootSel, labels) {
    第 3/4 格是阶段专属指标，标签随数据切换；无数据时保留槽位与默认标签、值为「—」
    —— 槽位数不变，格宽比例才与提案图一致；数据到位即自动可见（不需要再动前端）。
    tok·s 与 GPU 已移出本条：tok·s 进日志标题栏的运行摘要（只覆盖"正在跑"的场景），
-   GPU 不再显示（面板侧 NVML 全卡占用在推理页采样行尾的 GPU 徽章，
+   GPU 不再显示（面板侧 NVML 全卡占用在推理页采样行首的 GPU 徽章，
    训练页的「显存」曲线已覆盖同一信息）。── */
 function renderMetrics() {
   const st = trainer.run || {};

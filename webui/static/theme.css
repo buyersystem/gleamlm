@@ -926,6 +926,19 @@ footer {
   text-overflow: ellipsis;
   min-width: 0; /* flex 子项默认 min-width:auto 会撑开格子，导致上面的 ellipsis 失效 */
 }
+/* K6a：指标条副值（step 格挂「已训 token 数」）。
+   与 .m-v 同样允许收缩并省略：6 格等宽时 step 格最挤，
+   先让副值退让（它的 basis 更大，按收缩比例会先被省略），主值不被挤掉。
+   留空时该 span 无内容 → 不占视觉位。 */
+.m-sub {
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
 
 /* ── 日志工具条 ── */
 .log-bar {

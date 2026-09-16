@@ -549,6 +549,22 @@ function renderAb() {
 /* ── D1/D2 指标条：live run 取 last_metric；否则取所选 run 的末端值
    （历史 run 没有起点时间 → ETA 留空，不编造）。──
    原先这些字段分散在 loss/lr 两个 chip 与日志标题行三处，现收成一条。 */
+/* K6a：已训 token 数 = step × (batch_size × accumulate_grad × max_seq_len)。
+   配置取自 run **创建时的 yaml_summary 快照**（后端 _read_yaml_summary 在 create_run 时
+   算好并写进 runs.config）→ 事后改 YAML 不会让已有 run 的数字跟着漂。
+   ⚠️ 不要改用 tok/s 沿时间积分：实测偏高 +6.4% —— dt 只覆盖微批的前后向，
+   不含验证与每步开销，且偏差随 eval_interval 变化 → 跨 run 不可比（2026-09-17 实测）。
+   旧 run（快照里没有这几个键）与后训练 run（yaml_summary 为 {}）→ 返回 null，留空降级。 */
+function tokensPerStep() {
+  const r = pt.runs.find((x) => x.id === pt.mainId);
+  const ys = r && r.config && r.config.yaml_summary;
+  if (!ys) return null;
+  const b = Number(ys.batch_size);
+  const a = Number(ys.accumulate_grad);
+  const s = Number(ys.max_seq_len);
+  return b > 0 && a > 0 && s > 0 ? b * a * s : null;
+}
+
 function renderMetrics() {
   const st = trainer.run || {};
   const lm = st.last_metric || {};
@@ -576,6 +592,19 @@ function renderMetrics() {
     lr = sr && sr[1];
     tok = sk && sk[1];
     vppl = sv && sv[1];
+  }
+  /* K6a：已训 token。直接写 textContent —— 不走 setMetrics，因为它把空值渲染成「—」，
+     而这里没数据时应当什么都不显示（该 span 无边框、无占位）。 */
+  const box = $("#pt-metrics");
+  const tokEl = box && box.querySelector("[data-m=toktotal]");
+  const tps = tokensPerStep();
+  const tokUsed = tps && step != null ? fmtTokens(tps * step) : "";
+  if (tokEl) {
+    tokEl.textContent = tokUsed;
+    tokEl.title = tokUsed
+      ? `已训 ${tokUsed} token（${step} 步 × ${fmtTok(tps)}/步）` +
+        (live && st.total_steps ? ` · 计划 ${fmtTokens(tps * st.total_steps)}` : "")
+      : "";
   }
   setMetrics("#pt-metrics", {
     step: step != null ? step : "",

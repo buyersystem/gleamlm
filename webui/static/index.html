@@ -74,7 +74,7 @@
       <div class="pane-col" style="flex:2">
         <!-- D1/D2 指标条：原先把 step/loss、lr、val ppl 分散在三处 chip，现收成一条 -->
         <div class="metrics" id="pt-metrics" role="group" aria-label="实时指标">
-          <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span></div>
+          <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span><span class="m-sub" data-m="toktotal"></span></div>
           <div class="m-cell"><span class="m-k">loss</span><span class="m-v" data-m="loss">—</span></div>
           <div class="m-cell"><span class="m-k">lr</span><span class="m-v" data-m="lr">—</span></div>
           <div class="m-cell"><span class="m-k">tok/s</span><span class="m-v" data-m="tok">—</span></div>
@@ -182,10 +182,10 @@
                标签随实际数据切换；无数据时保持槽位与默认标签、值显示「—」
                —— 槽位数不变才能维持与提案图相同的格宽比例。
              - tok·s 与 GPU 已移出本条: tok·s 进日志标题栏的运行摘要（信息不丢），
-               GPU 去掉（面板侧 NVML 全卡占用现于推理页采样行尾的 GPU 徽章，
+               GPU 去掉（面板侧 NVML 全卡占用现于推理页采样行首的 GPU 徽章，
                训练页的「显存」曲线已覆盖同一信息）。 -->
         <div class="metrics" id="pt2-metrics" role="group" aria-label="实时指标">
-          <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span></div>
+          <div class="m-cell"><span class="m-k">step</span><span class="m-v" data-m="step">—</span><span class="m-sub" data-m="toktotal"></span></div>
           <div class="m-cell"><span class="m-k">loss</span><span class="m-v" data-m="loss">—</span></div>
           <div class="m-cell"><span class="m-k" data-mk="x1">margin</span><span class="m-v" data-m="x1">—</span></div>
           <div class="m-cell"><span class="m-k" data-mk="x2">acc</span><span class="m-v" data-m="x2">—</span></div>
@@ -309,6 +309,11 @@
                而温度恰恰是调得最勤的那个。现在归成一条，控件形态也统一。
                top_k 原来是裸 select（只靠 title 提示），补上文字标签。 -->
           <div class="sampler">
+            <!-- GPU 显存徽章（从 header 移来）：预训练/后训练页已有显存曲线，
+                 环境信息归到推理页；置采样行首（温度前），与「流式」同一套 chip 语法 -->
+            <span id="gpu-badge" class="chip" title="GPU 显存占用（面板侧探测）">
+              <span class="dot gpu"></span>GPU <b id="gpu-text">–</b>
+            </span>
             <label>温度
               <input id="temp" type="range" min="0.1" max="1.5" step="0.05" value="0.8" />
               <span id="temp-val">0.8</span>
@@ -323,11 +328,6 @@
             <button id="chat-reset" class="btn ghost sm" type="button"
                     title="恢复各参数的默认值（与后端请求默认值对齐）">重置</button>
             <span id="chat-stream-lbl" class="chip" title="SSE 流式输出（fetch + ReadableStream）">流式 ✓</span>
-            <!-- GPU 显存徽章从 header 移来：预训练/后训练页已有显存曲线，环境信息
-                 归到推理页（采样行尾），与「流式」同一套 chip 语法 -->
-            <span id="gpu-badge" class="chip" title="GPU 显存占用（面板侧探测）">
-              <span class="dot gpu"></span>GPU <b id="gpu-text">–</b>
-            </span>
           </div>
           <form id="chat-form" style="display:flex;gap:8px;margin-top:8px;align-items:flex-end">
             <textarea id="chat-input" rows="1" placeholder="输入消息…" style="resize:none;max-height:160px"></textarea>

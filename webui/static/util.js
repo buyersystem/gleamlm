@@ -184,6 +184,15 @@ function fmtTok(v) {
   if (v == null || !isFinite(v) || v <= 0) return "";
   return v >= 1000 ? `${(v / 1000).toFixed(1)}k` : String(Math.round(v));
 }
+/* token 总消耗量（K6a）：按量级给 B/M/k —— 模型卡口径写 4.46B。
+   与 fmtTok 分开：那个是吞吐（k 档封顶），这个是消耗量，量级与用途都不同。 */
+function fmtTokens(v) {
+  if (v == null || !isFinite(v) || v <= 0) return "";
+  if (v >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}k`;
+  return String(Math.round(v));
+}
 
 function fmtDur(sec) {
   if (!isFinite(sec) || sec <= 0) return "";
@@ -667,7 +676,7 @@ function initShell() {
   };
   $$(".warn-line").forEach((el) => el.addEventListener("click", onWarnClick));
 
-  // 状态轮询：推理模型徽章（header）/ GPU 显存（推理页采样行尾 chip）/ tab 能力列表
+  // 状态轮询：推理模型徽章（header）/ GPU 显存（推理页采样行首 chip）/ tab 能力列表
   async function pollHeader() {
     if (document.hidden) return; // F4：后台标签页不再每 3s 打请求
     try {
