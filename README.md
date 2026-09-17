@@ -522,7 +522,7 @@ Nano 与 Lite 同为四源（含 [Chinese FineWeb Edu](https://huggingface.co/da
 **数据**：13,413 条/epoch = 基础集 3,415（模板/API 蒸馏/多轮，dedup 清洗后）+ QA→SFT 10,000（知乎知识问答，占 74.5%）。训练集 `data/nano/sft/sft_mix.jsonl`，由 `data_tools/sft/mix_sft.py` 混合 `sft_data.jsonl`（基础）与 `qa_sft.jsonl`（QA 源，20,000 条由 `data_tools/sft/qa_to_sft.py` 从 qa_dedup 语料规则抽取）。
 
 
-**配置**：以预训练 `final.pt`（step 68108）为基座，ChatML 格式，loss mask 仅 assistant 回复，lr 1e-4 cosine，3 epochs，batch 8 × accumulate 4，seq 512。默认值来自 `manual/configs/nano.yaml`（变体已独立展开，base.yaml 为公共默认模板）。
+**配置**：以预训练 `final.pt`（step 68108）为基座，ChatML 格式，loss mask 仅 assistant 回复，lr 1e-4 cosine，3 epochs，batch 8 × accumulate 4，seq 512（这是本次 run 的取值；`nano.yaml` 的 sft 模板默认已于 2026-09-17 由 3 调为 2 epochs，理由见其 sft 段注释）。默认值来自 `manual/configs/nano.yaml`（变体已独立展开，base.yaml 为公共默认模板）。
 
 | 项目 | 值 |
 |---|---|

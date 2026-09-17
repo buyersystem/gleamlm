@@ -462,7 +462,10 @@ class AdvancedConfig(BaseModel):
 
 
 class SFTConfig(BaseModel):
-    epochs: int = 3
+    # 2 而非 3：2026-09-17 lite 实测（12,742 train / 670 held-out）——第 3 个 epoch 里
+    # train 继续降而 val 回升 +0.031，拐点在 ~1.9 epoch。base.yaml 为实证值来源，
+    # 两处必须同步（tests/test_config_defaults.py::test_pydantic_defaults_match_base_yaml 锁）
+    epochs: int = 2
     batch_size: int = 8
     accumulate_grad: int = 4
     # 历史坑: 曾误配 5e-6 (=1e-4×min_lr 0.05, 余弦终点值非起点), 与 base.yaml 实证 1e-4 对齐

@@ -77,7 +77,9 @@ advanced:
 
 # ---- SFT 微调 ----
 sft:
-  epochs: 3
+  # 2 epochs：小数据集（<20k 条）跑 3 个 epoch 会开始过拟合 ——
+  # 实测依据见 manual/configs/lite.yaml 的 sft 段注释。
+  epochs: 2
   batch_size: 8
   accumulate_grad: 4
   # SFT 默认超参（实测基线见各变体 yaml）
@@ -133,6 +135,8 @@ opd:
 # ---- LoRA 微调 (可选路线, 基座用预训练模型) ----
 lora:
   # 默认 = 教学演示值 (LoRA r 8 / alpha 16); LoRA 属可选实验路线, 非主链步骤
+  # 保持 3 epochs（未随 sft 一起降为 2）：adapter 仅 1~3M 可训练参数（全参 SFT ~87M），
+  # 容量不足以记住 12.7k 条 → 全参轨的过拟合证据不迁移；本轨尚无 val 曲线，待实测再定。
   epochs: 3
   batch_size: 2
   accumulate_grad: 16       # 等效 batch 32 (与全参 SFT 对齐; batch 2 单步噪声大收敛不动)

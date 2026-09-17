@@ -80,7 +80,11 @@ sft:
   # 数据与 nano 同源（data/<variant>/sft 为同一 sft_mix 拷贝，模型无关文本）;
   # sft_mix = 基础集 3,415 + QA→SFT 10,000（13,413 条）→ nano 基线 loss 2.6283;
   # split_val 切 5% held-out 后 train 12,742 / val 671（基线为旧全量口径, 不完全可比）
-  epochs: 3
+  # 2 epochs：SFT 拐点在 ~1.9 epoch（lite 实测：12,742 train / 670 held-out）。
+  # 第 3 个 epoch 里 train 继续降而 val 回升 +0.031 → epochs=3 是在训练过拟合。
+  # lr 保持 1.0e-4：同一步数下把 lr 减半到 5e-5，val 反而更差
+  #   （配对差 +0.0060，95%CI [+0.0005,+0.0119]；670 条自助法 4000 次）。
+  epochs: 2
   batch_size: 4
   accumulate_grad: 8
   lr: 1.0e-4
@@ -137,6 +141,8 @@ opd:
 # ---- LoRA 微调 (可选路线) ----
 lora:
   # LoRA 可选实验路线; 数据复用 SFT 集（与 sft.data_path 同源）
+  # 保持 3 epochs（未随 sft 一起降为 2）：adapter 仅 1~3M 可训练参数（全参 SFT ~87M），
+  # 容量不足以记住 12.7k 条 → 全参轨的过拟合证据不迁移；本轨尚无 val 曲线，待实测再定。
   epochs: 3
   batch_size: 2
   accumulate_grad: 16       # 等效 batch 32 (与全参 SFT 对齐; batch 2 单步噪声大收敛不动)

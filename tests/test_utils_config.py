@@ -94,7 +94,9 @@ def test_load_config_real_nano():
     assert cfg.training.epochs == 1
     assert cfg.advanced.bf16 is True
     # sft/dpo 段属性链直读 (原 cfg_to_namespace 拍平字段的语义)
-    assert cfg.sft.epochs == 3
+    # sft.epochs 2026-09-17 由 3 调为 2（lite 实测第 3 个 epoch 开始过拟合，
+    # val 回升 +0.031）—— 见 manual/configs/nano.yaml 的 sft 段注释
+    assert cfg.sft.epochs == 2
     assert cfg.sft.lr == 1e-4
     assert cfg.dpo.epochs == 1
     assert cfg.optimizer.type == "adamw"
