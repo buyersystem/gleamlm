@@ -10,7 +10,6 @@ Functions are grouped by concern:
   - AMP:            create_scaler, optimizer_step
   - Distributed:    ddp_setup, ddp_cleanup
   - Eval:           evaluate, evaluate_sft_loss
-  - Metrics:        window_max
   - Persistence:    save_checkpoint, load_checkpoint
 """
 
@@ -96,22 +95,6 @@ def optimizer_step(
     scaler.update()
     optimizer.zero_grad()
     return grad_norm
-
-
-def window_max(current: float | None, value: float | None) -> float | None:
-    """窗口内最大值累加（None 安全）—— K4/Q10 的 grad_norm 记录口径。
-
-    指标窗口 = "自上次哨兵行以来"，而一个 log_interval 窗口里会做多次 optimizer step。
-    grad_norm 记**窗口内 max 而非最后一个 step**：它的用途是预警发散，靠的是**尖峰**，
-    只留末值会把中间 log_interval-1 个 step 的尖峰无声丢掉（loss 记窗口均值是对的 ——
-    它关心趋势；两者口径刻意不同，见 gleamlm/utils/metrics.py 契约）。
-
-    `value=None`（未启用裁剪 / 该步未做 optimizer step）时保持 `current` 不变；
-    若整个窗口都没记录到，返回 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    """
-    if value is None:
-        return current
-    return value if current is None else max(current, value)
 
 
 # DDP: torchrun 设置 LOCAL_RANK/RANK/WORLD_SIZE 等环境变量；

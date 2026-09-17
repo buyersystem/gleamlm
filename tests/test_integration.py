@@ -10,7 +10,7 @@ import torch.nn.functional as F
 
 from gleamlm.models.attention_variants import NoPEGQA, SlidingWindowGQA
 from gleamlm.models.model import DecoderLayer, GleamLMModel, MoE, precompute_freqs_cis
-from gleamlm.trainer.base_trainer import create_scaler, optimizer_step, window_max
+from gleamlm.trainer.base_trainer import create_scaler, optimizer_step
 from gleamlm.trainer.schedulers import get_lr_cosine
 from gleamlm.utils.torch_utils import safe_autocast
 
@@ -278,26 +278,3 @@ def test_moe_aux_grad_survives_gradient_checkpointing():
         assert (ref_grad - cp_grads[name]).norm() / denom < 1e-2, (
             f"{name}: checkpoint 模式梯度相对偏差过大，aux→router 梯度可能丢失"
         )
-
-
-def test_window_max_records_peaks_not_last_value():
-    """K4/Q10：grad_norm 记窗口内 max —— 预警发散靠尖峰，末值口径会把它丢掉。
-
-    回归点：原实现在窗口里只留最后一次 optimizer_step 的值，中间 log_interval-1 个
-    step 的尖峰无声消失（loss 记窗口均值是对的，grad_norm 不是同一件事）。
-    """
-    assert window_max(None, None) is None  # 未启用裁剪：整个窗口都没值
-    assert window_max(None, 1.5) == 1.5  # 窗口首个 step 建基
-    assert window_max(1.5, None) == 1.5  # 中途没记录（如该步未做 optimizer step）
-    assert window_max(1.5, 0.4) == 1.5  # 后续更小：保留尖峰
-    assert window_max(1.5, 9.9) == 9.9  # 出现尖峰：必须被记住
-
-    # 模拟一个窗口：末值口径与 max 口径必须给出不同的答案（否则这个测试是空的）
-    window = [0.8, 0.9, 12.0, 1.0, 0.7]
-    last = None
-    peak = None
-    for v in window:
-        last = v
-        peak = window_max(peak, v)
-    assert last == 0.7 and peak == 12.0
-    assert peak != last, "max 与末值必须可区分，否则本测试无区分度"

@@ -10,8 +10,13 @@
   total     int — 总步数（面板进度用）
   loss      float — 训练/验证损失（SFT/预训练 val 为裸 CE 口径, 取 exp 即 PPL）
   lr        float — 当前学习率
-  tok_per_s float — 吞吐（tok/s）
-  gpu_mem   float — 进程显存占用（GiB）
+  tok_per_s float — 吞吐（tok/s）。**分族口径**（同名 key 只有一条定义 = 单位时间产出量）：
+                    训练型（pretrain / sft / sft_lora）= 微批 token ÷ 微批耗时；
+                    DPO = 2×batch×seq ÷ 微批耗时（一个微批含 chosen+rejected 两次前向）；
+                    生成型（grpo / opd / ppo）= 本迭代**新生成** token ÷ 迭代耗时（含 rollout）。
+                    跨族不可直接比较（生成型没有固定的 token/step）
+  gpu_mem   float — **设备已用**显存（GiB）= `nvidia-smi memory.used` 口径；
+                    **不是** torch 的 allocated（只含活跃张量，会把「已占满」读成「很宽裕」）
   grad_norm float — 裁剪前梯度总范数（clip_grad_norm_ 返回值）
                     **记窗口内 max，不记末值**（K4/Q10）—— 见文末「窗口口径」
   margin    float — DPO 隐式奖励间隔 β·mean((logπc−logπref_c)−(logπr−logπref_r))
@@ -19,6 +24,11 @@
   reward    float — GRPO/PPO 的平均奖励（GRPO 已产出；PPO 尚未）
   kl        float — GRPO/PPO 的 KL 散度（尚未有脚本产出）
   len       float — 平均响应长度（尚未有脚本产出）
+
+**实现位置**：上面的累积口径由 `gleamlm/utils/meter.py::MetricWindow` 统一实现，
+7 个训练脚本共用同一份（此前每个脚本各内联一遍，口径只能靠人工对齐）。
+本模块**源码不 import torch**（WebUI 解析侧直接 import 它；包级 `utils/__init__`
+拉 torch_utils 不属本模块依赖），所以累积器不放在这里。
 
 **键名即契约**：解析侧的许可名单在 `webui/routers/training.py::_EXTRA_KEYS`，
 两条通道（哨兵 / tqdm 正则回退）共用同一份。未知键会被静默忽略 ——
@@ -34,7 +44,7 @@ WebUI 解析侧（webui/routers/training.py::_parse_metric_lines）优先消费�
     单步/单批采样噪声大，记瞬时值会让曲线锯齿化、趋势不可读。
   - `grad_norm` 记**窗口内 max** —— 它的用途是**预警发散**，靠的是**尖峰**；
     只留末值会把窗口内其它 step 的尖峰无声丢掉（`log_interval=50` 时丢掉 49 个）。
-    累加用 `gleamlm.trainer.base_trainer.window_max`（None 安全：未启用裁剪时整窗为 null）。
+    累加用 `gleamlm.utils.meter.window_max`（None 安全：未启用裁剪时整窗为 null）。
 """
 
 import json

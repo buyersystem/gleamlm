@@ -40,9 +40,14 @@ from torch.utils.data import DataLoader
 from gleamlm.data.rl_data import RLHFDataset, tokenize_prompts
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.base_trainer import window_max
-from gleamlm.trainer.rl_trainer import compute_reward, grpo_loss, sample_responses
+from gleamlm.trainer.rl_trainer import (
+    compute_reward,
+    count_generated_tokens,
+    grpo_loss,
+    sample_responses,
+)
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
@@ -120,18 +125,17 @@ def train(args):
     zero_replaced = 0  # 1b: 累计被替换的零方差 prompt 数
     zero_skipped = 0  # 1b: 末轮仍零方差、裁掉不进 loss 的 prompt 数
     zero_skipped_steps = 0  # 1b: 整批无学习信号而被跳过的 step 数
-    # 记录窗口: 自上次指标行（log_interval step）以来的 loss/reward 累计。
-    # 曲线记窗口均值而非瞬时单 step 值 —— 单 step 采样噪声大, 直接记锯齿化
-    log_loss_sum = 0.0
+    # 监控累积器（生成吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max）——
+    # 口径与实现见 gleamlm/utils/meter.py，7 个训练脚本共用同一份。
+    # 生成型的 tok/s = 本迭代**新生成**的 token ÷ 整个迭代耗时（含 rollout）。
+    win = MetricWindow(device)
+    # GRPO 专属的窗口量（reward 均值）：分母同 win.batches（reward 与 loss 同步累加）
     log_reward_sum = 0.0
-    log_steps = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    log_grad_norm_max: float | None = None
 
     for global_step in range(total_steps):
+        win.start()
+        # 本迭代新生成的 token 累计 —— 含零方差重采样的每一轮（预算已花掉）
+        gen_tokens = 0
         batch_items = [next_item() for _ in range(args.batch_size)]
         pending_prompts = [it["prompt"] for it in batch_items]
         pending_gt = [it.get("ground_truth") for it in batch_items]
@@ -160,6 +164,9 @@ def train(args):
                     seq_len=args.seq_len,
                 )
                 policy_model.train()
+
+            # 本轮生成 token = Σ_g (完整序列长 − prompt 长) × B；gen_seqs 为 [G] 个 [B, S]
+            gen_tokens += count_generated_tokens(gen_seqs, prompt_len)
 
             # reward 只针对回答部分打分 (prompt 是固定条件，不计入)。
             for g_idx in range(args.group_size):
@@ -246,16 +253,16 @@ def train(args):
         total_loss.backward()
         # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
         grad_norm = float(torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.clip))
-        log_grad_norm_max = window_max(log_grad_norm_max, grad_norm)
+        win.add_grad_norm(grad_norm)
         optimizer.step()
         optimizer.zero_grad()
-        log_loss_sum += total_loss.item()
+        win.stop(gen_tokens)  # 一个训练迭代（含 rollout）的生成吞吐
+        win.add_loss(total_loss.item())
         log_reward_sum += rewards.mean().item()
-        log_steps += 1
 
         if rank == 0 and global_step % args.log_interval == args.log_interval - 1:
-            window_loss = log_loss_sum / max(log_steps, 1)
-            window_reward = log_reward_sum / max(log_steps, 1)
+            window_loss = win.loss
+            window_reward = log_reward_sum / max(win.batches, 1)
             # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构); flush 保证实时
             print(
                 f"{global_step}/{total_steps} [loss={window_loss:.4f}, "
@@ -265,19 +272,17 @@ def train(args):
             # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
             # 不再依赖手工帧格式; reward 为组内平均奖励（§7.3 的 GRPO 监控量,
             # 与优势同源, 无额外前向开销）。loss/reward 记窗口均值
+            win.refresh_gpu()  # 显存按上报节奏采样（查询较重，不逐步查）
             emit_metric(
                 split="train",
                 step=global_step,
                 total=total_steps,
-                loss=window_loss,
                 lr=args.lr,
                 reward=window_reward,
-                grad_norm=log_grad_norm_max,
+                **win.emit_kwargs(),
             )
-            log_loss_sum = 0.0
-            log_grad_norm_max = None
+            win.reset()
             log_reward_sum = 0.0
-            log_steps = 0
 
     if rank == 0:
         # 1a/1b 累计统计 (方案对齐: trunc=n/N 与 zero_var replaced/kept)

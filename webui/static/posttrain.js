@@ -615,16 +615,16 @@ function drawPt2() {
   pt2LrChart.render({
     series: sub, yLabel: xk.length ? "value" : "lr", xLabel: "step", zeroY: true,
   });
-  // K4/K5：健康度三小图（同预训练页）。后训练脚本暂未采集 tok/s / gpu_mem ——
-  // 训练侧补点后无需改前端，序列出现即自动绘制。
+  // K4/K5：健康度三小图（同预训练页）。三个键（grad_norm / tok_per_s / gpu_mem）
+  // 已由全部 7 个训练脚本上报（2026-09-17 补齐后训练侧）；旧 run 无这些点 → 空图。
   pt2GnormChart.render({
     series: gnorm, yLabel: "grad_norm", xLabel: "step", emptyText: "该 run 未记录 grad_norm",
   });
   pt2TpsChart.render({
-    series: tps, yLabel: "tok/s", xLabel: "step", emptyText: "训练脚本暂未采集 tok/s",
+    series: tps, yLabel: "tok/s", xLabel: "step", emptyText: "该 run 未记录 tok/s",
   });
   pt2GmemChart.render({
-    series: gmem, yLabel: "GiB", xLabel: "step", emptyText: "训练脚本暂未采集 gpu_mem",
+    series: gmem, yLabel: "GiB", xLabel: "step", emptyText: "该 run 未记录 gpu_mem",
   });
   renderMetrics();
   renderAb(); // D4

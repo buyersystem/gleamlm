@@ -28,7 +28,6 @@ from gleamlm.trainer.base_trainer import (
     create_scaler,
     evaluate_sft_loss,
     optimizer_step,
-    window_max,
 )
 from gleamlm.trainer.lora import LoraConfig, apply_lora_to_model, merge_lora_weights
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
@@ -38,6 +37,7 @@ from gleamlm.utils.config import (
     extract_checkpoint_config,
     load_config,
 )
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
@@ -218,17 +218,12 @@ def train(args):
         print(f"Steps: {total_steps} (lr_decay_steps: {decay_steps}) — lr 调度按 decay 视野走")
     global_step = 0
     skipped_batches = 0
-    # 记录窗口: 自上次指标行以来的微批原始 loss 累计与批数。
-    # 记窗口均值而非瞬时单批值 —— 单批采样噪声大, 曲线会锯齿化
-    win_loss_sum = 0.0
-    win_batches = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（替代原 last_grad_norm 末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    win_grad_norm_max: float | None = None
+    # 监控累积器（吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max）——
+    # 口径与实现见 gleamlm/utils/meter.py，7 个训练脚本共用同一份。
+    win = MetricWindow(device)
     for _ in range(args.epochs):
         for batch_idx, (input_ids, labels) in enumerate(loader):
+            win.start()
             input_ids, labels = input_ids.to(device), labels.to(device)
 
             # 防线 (同 core SFT): 全 mask 批跳过, 防 CE nan 污染权重
@@ -256,8 +251,9 @@ def train(args):
             )
             loss = loss / denom
             scaler.scale(loss).backward()
-            win_loss_sum += loss.item() * denom  # 还原缩放, 微批原始 loss
-            win_batches += 1
+            # 本微批 token = batch × seq（满长，与 pretrain 同式）
+            win.stop(args.batch_size * args.seq_len)
+            win.add_loss(loss.item() * denom)  # 还原缩放, 微批原始 loss
             if is_accum:
                 # lr 调度在 step 前更新 (与 sft.py 同构): warmup → cosine/wsd 衰减,
                 # 替代原恒定 lr (无衰减后期难收敛)
@@ -279,7 +275,7 @@ def train(args):
                 step_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=lora_params, clip_grad=args.clip
                 )
-                win_grad_norm_max = window_max(win_grad_norm_max, step_grad_norm)
+                win.add_grad_norm(step_grad_norm)
                 global_step += 1
                 # K8: per-step 模式 val 评估（eval_interval 为正数时）；epoch 末模式见循环外。
                 # val 为裸 mask CE（不含 aux 项，同 pretrain 裸 CE 口径先例）
@@ -296,24 +292,21 @@ def train(args):
                     emit_metric(split="val", step=global_step, loss=val_loss, ppl=val_ppl)
 
                 if global_step == 1 or global_step % args.log_interval == 0:
-                    window_loss = win_loss_sum / win_batches
+                    window_loss = win.loss
                     print(
                         f"{global_step}/{total_steps} [loss={window_loss:.4f}, lr={cur_lr:.2e}]",
                         flush=True,
                     )
                     # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费。
-                    # loss 记窗口均值（自上次记录至今的全部微批平均）
+                    win.refresh_gpu()  # 显存按上报节奏采样（查询较重，不逐步查）
                     emit_metric(
                         split="train",
                         step=global_step,
                         total=total_steps,
-                        loss=window_loss,
                         lr=cur_lr,
-                        grad_norm=win_grad_norm_max,
+                        **win.emit_kwargs(),
                     )
-                    win_loss_sum = 0.0
-                    win_grad_norm_max = None
-                    win_batches = 0
+                    win.reset()
 
         # K8: per-epoch 模式 val 评估（仅 eval_interval=None 时每 epoch 末一次）;
         # 正数走训练内 per-step 通道, ≤0 关闭评估

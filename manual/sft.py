@@ -23,10 +23,10 @@ from gleamlm.trainer.base_trainer import (
     evaluate_sft_loss,
     optimizer_step,
     set_seed,
-    window_max,
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
@@ -322,16 +322,9 @@ def main():
 
     log_interval = 50
     skipped_batches = 0
-    # 记录窗口: 自上次指标行以来的微批原始 loss 累计与批数。
-    # 曲线与 pbar 记窗口均值而非瞬时单批值 —— 单批采样噪声大,
-    # 直接记会让曲线锯齿化、趋势不可读
-    log_loss_sum = 0.0
-    log_batches = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    log_grad_norm_max: float | None = None
+    # 监控累积器（吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max）——
+    # 口径与实现见 gleamlm/utils/meter.py，7 个训练脚本共用同一份。
+    win = MetricWindow(device)
     for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
@@ -340,6 +333,7 @@ def main():
         pbar = tqdm(train_loader, desc=f"SFT Epoch {epoch}", mininterval=3)
 
         for batch_idx, (input_ids, labels) in enumerate(pbar):
+            win.start()
             input_ids = input_ids.to(device)
             labels = labels.to(device)
 
@@ -368,6 +362,8 @@ def main():
             )
             loss = loss / denom
             scaler.scale(loss).backward()
+            # 本微批 token = batch × seq（满长，与 pretrain 同式）
+            win.stop(batch_size * max_seq_len)
             if is_accum_step:
                 if lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
@@ -380,7 +376,7 @@ def main():
                 step_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=model.parameters(), clip_grad=clip_grad
                 )
-                log_grad_norm_max = window_max(log_grad_norm_max, step_grad_norm)
+                win.add_grad_norm(step_grad_norm)
                 global_step += 1
                 # K8: per-step 模式 val 评估（eval_interval 为正数时）；epoch 末模式见循环外
                 if (
@@ -398,8 +394,7 @@ def main():
             batch_loss = loss.item() * denom  # 还原 /denom 缩放, 微批原始 loss
             epoch_loss += batch_loss
             n_batches += 1
-            log_loss_sum += batch_loss
-            log_batches += 1
+            win.add_loss(batch_loss)
 
             if batch_idx % log_interval == log_interval - 1:
                 if lr_scheduler == "wsd":
@@ -409,40 +404,35 @@ def main():
                 else:
                     lr_mult = get_lr_cosine(global_step, decay_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
-                window_loss = log_loss_sum / log_batches
+                window_loss = win.loss
                 pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
                 # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）。
-                # loss 记窗口均值（自上次记录至今的全部微批平均）
+                win.refresh_gpu()  # 显存按上报节奏采样（查询较重，不逐步查）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=total_steps,
-                    loss=window_loss,
                     lr=cur_lr,
-                    grad_norm=log_grad_norm_max,
+                    **win.emit_kwargs(),
                 )
-                log_loss_sum = 0.0
-                log_grad_norm_max = None
-                log_batches = 0
+                win.reset()
 
-        if log_batches:
+        if win.batches:
             # 尾部残窗（本 epoch 末不足 log_interval 的微批）补记一点后清零,
             # 避免记录窗口跨 epoch 混合
             cur_lr = optimizer.param_groups[0]["lr"]
-            window_loss = log_loss_sum / log_batches
+            window_loss = win.loss
             pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
+            win.refresh_gpu()
             emit_metric(
                 split="train",
                 step=global_step,
                 total=total_steps,
-                loss=window_loss,
                 lr=cur_lr,
-                grad_norm=log_grad_norm_max,
+                **win.emit_kwargs(),
             )
-            log_loss_sum = 0.0
-            log_grad_norm_max = None
-            log_batches = 0
+            win.reset()
 
         epoch_loss /= max(n_batches, 1)
 

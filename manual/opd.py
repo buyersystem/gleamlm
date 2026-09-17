@@ -91,13 +91,13 @@ from torch.utils.data import DataLoader, Dataset
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.base_trainer import window_max
 from gleamlm.utils.chatml import format_chatml
 from gleamlm.utils.config import (
     DEFAULT_TOKENIZER_PATH,
     extract_checkpoint_config,
     load_config,
 )
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
@@ -315,15 +315,10 @@ def train(args):
     # 与 batch_size（prompt 数）无整除关系约束。打分失败导致组不完整时，
     # Stage 3 会回退到 batch mean baseline，无需在此限制合法配置。
     global_step = 0
-    # 记录窗口: 自上次指标行（log_interval step）以来的 loss 累计。
-    # 曲线记窗口均值而非瞬时单 step 值 —— 单 step 采样噪声大, 直接记锯齿化
-    log_loss_sum = 0.0
-    log_steps = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    log_grad_norm_max: float | None = None
+    # 监控累积器（生成吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max）——
+    # 口径与实现见 gleamlm/utils/meter.py，7 个训练脚本共用同一份。
+    # 生成型的 tok/s = 本迭代**新生成**的 token ÷ 整个迭代耗时（含 rollout）。
+    win = MetricWindow(device)
     start_epoch = 0
     last_batch_idx = -1  # 当前 epoch 内最后已遍历的 batch index（含打分失败），resume 从 +1 继续
     resume_path = os.path.join(args.output_dir, "opd_checkpoint.pt")
@@ -357,6 +352,7 @@ def train(args):
             # 跳过已遍历的 batch（含打分失败的），从下一个继续
             batch_iter = itertools.islice(batch_iter, last_batch_idx + 1, None)
         for batch_idx, batch_prompts in batch_iter:
+            win.start()
             # ── Stage 1: 学生 on-policy 采样，按 prompt 显式分组 ──
             # 每组恰 n_samples 条（组结构对 LOO baseline 是硬约束，不能依赖
             # "过短被跳过后的连续排列"——那会跨 prompt 错位成假组）。
@@ -447,6 +443,8 @@ def train(args):
             # 为使梯度尺度一致（不被生成长度隐式缩放），优势归一化为 per-token
             # 平均；师生 tokenizer 切分不同（BBPE vs Qwen），各除己方 token 数。
             lengths = torch.tensor([v[3] for v in valid], device=device, dtype=torch.float)
+            # 本步新生成 token 数（学生 tokenizer 计数；取 clamp 前的原始长度）
+            gen_tokens = float(lengths.sum())
             lengths_T = torch.tensor(teacher_len, device=device, dtype=torch.float)
             lengths = lengths.clamp(min=4.0)  # 长度下限: 极短序列的 logprob 噪声被放大
             lengths_T = lengths_T.clamp(min=4.0)
@@ -515,14 +513,14 @@ def train(args):
             loss.backward()
             # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
             grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip))
-            log_grad_norm_max = window_max(log_grad_norm_max, grad_norm)
+            win.add_grad_norm(grad_norm)
             optimizer.step()
             optimizer.zero_grad()
-            log_loss_sum += loss.item()
-            log_steps += 1
+            win.stop(gen_tokens)  # 一个训练迭代（含 rollout）的生成吞吐
+            win.add_loss(loss.item())
 
             if (global_step + 1) % args.log_interval == 0:
-                window_loss = log_loss_sum / max(log_steps, 1)
+                window_loss = win.loss
                 # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构): loss/lr 帧后跟
                 # 诊断字段, 面板解析器只吃 loss=.., lr=.. 帧; flush 保证管道下实时
                 print(
@@ -535,17 +533,15 @@ def train(args):
                 )
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费。
                 # loss 记窗口均值（自上次记录至今的全部 step 平均）
+                win.refresh_gpu()  # 显存按上报节奏采样（查询较重，不逐步查）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=len(loader) * args.epochs,
-                    loss=window_loss,
                     lr=args.lr,
-                    grad_norm=log_grad_norm_max,
+                    **win.emit_kwargs(),
                 )
-                log_loss_sum = 0.0
-                log_grad_norm_max = None
-                log_steps = 0
+                win.reset()
             global_step += 1
 
             # 周期保存: 中途崩溃可 resume (含完整训练状态 + 数据位置 + 随机状态)

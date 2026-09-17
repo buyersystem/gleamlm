@@ -25,9 +25,9 @@ from torch.utils.data import DataLoader
 from gleamlm.data.rl_data import RLHFDataset, tokenize_prompts
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.base_trainer import window_max
 from gleamlm.trainer.rl_trainer import ValueHead, compute_reward, ppo_loss
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
@@ -85,17 +85,13 @@ def train(args):
         os.makedirs(args.output_dir, exist_ok=True)
 
     global_step = 0
-    # 记录窗口: 自上次指标行（log_interval step）以来的 loss 累计。
-    # 曲线记窗口均值而非瞬时单 step 值 —— 单 step 采样噪声大, 直接记锯齿化
-    log_loss_sum = 0.0
-    log_steps = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    log_grad_norm_max: float | None = None
+    # 监控累积器（生成吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max）——
+    # 口径与实现见 gleamlm/utils/meter.py，7 个训练脚本共用同一份。
+    # 生成型的 tok/s = 本迭代**新生成**的 token ÷ 整个迭代耗时（含 rollout）。
+    win = MetricWindow(device)
     for _ in range(args.epochs):
         for batch_items in loader:
+            win.start()
             # batch_items: list[{"prompt", "ground_truth"}]（RLHFDataset 返回 dict）
             batch_prompts = [it["prompt"] for it in batch_items]
             batch_ground_truth = [it.get("ground_truth") for it in batch_items]
@@ -115,6 +111,8 @@ def train(args):
                         break
                 gen_ids = ids
 
+            # 本步新生成 token = (总长 − prompt 长) × batch
+            gen_tokens = (int(gen_ids.size(1)) - prompt_len) * len(batch_prompts)
             decoded = [
                 tokenizer.decode(gen_ids[i, prompt_len:].tolist(), skip_special=True)
                 for i in range(len(batch_prompts))
@@ -142,19 +140,19 @@ def train(args):
                 float(torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.clip)),
                 float(torch.nn.utils.clip_grad_norm_(value_head.parameters(), args.clip)),
             )
-            log_grad_norm_max = window_max(log_grad_norm_max, grad_norm)
+            win.add_grad_norm(grad_norm)
             policy_optimizer.step()
             policy_optimizer.zero_grad()
             value_optimizer.step()
             value_optimizer.zero_grad()
-            log_loss_sum += loss.item()
-            log_steps += 1
+            win.stop(gen_tokens)  # 一个训练迭代（含 rollout）的生成吞吐
+            win.add_loss(loss.item())
 
             for p, old_p in zip(policy_model.parameters(), old_model.parameters(), strict=True):
                 old_p.data.copy_(p.data)
 
             if rank == 0 and (global_step + 1) % args.log_interval == 0:
-                window_loss = log_loss_sum / max(log_steps, 1)
+                window_loss = win.loss
                 # WebUI 面板可解析进度行 (与 sft.py tqdm postfix 同构); flush 保证实时
                 print(
                     f"{global_step}/{len(loader) * args.epochs} [loss={window_loss:.4f}, lr={args.lr:.2e}]",
@@ -162,17 +160,15 @@ def train(args):
                 )
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费。
                 # loss 记窗口均值（自上次记录至今的全部 step 平均）
+                win.refresh_gpu()  # 显存按上报节奏采样（查询较重，不逐步查）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=len(loader) * args.epochs,
-                    loss=window_loss,
                     lr=args.lr,
-                    grad_norm=log_grad_norm_max,
+                    **win.emit_kwargs(),
                 )
-                log_loss_sum = 0.0
-                log_grad_norm_max = None
-                log_steps = 0
+                win.reset()
             global_step += 1
 
     if rank == 0:

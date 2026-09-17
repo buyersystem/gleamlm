@@ -97,6 +97,17 @@ def sample_responses(
     return gen_seqs, truncated
 
 
+def count_generated_tokens(gen_seqs: list[torch.Tensor], prompt_len: int) -> int:
+    """一轮 rollout 新生成的 token 数 (生成型 tok/s 的分母, 见 utils/meter.py 契约)。
+
+    gen_seqs 为 `sample_responses` 的 [group_size] 个 [B, S]: S 是组内最长回答
+    序列长 (短答行 pad 占位, 同步 batch 等最慢样本), 逐组按 (S − prompt_len) × B 计
+    —— 生成型统一记「推理预算口径」而非逐样本精确长度 (opd 走精确 gen_len, 属同族
+    另一实现)。**必须乘 B**: 漏掉它面板吞吐恰少 batch_size 倍 (GRPO 回归点)。
+    """
+    return sum((int(s.size(1)) - prompt_len) * int(s.size(0)) for s in gen_seqs)
+
+
 # GRPO: 无 value network，用 group 内归一化奖励做优势估计 (MC baseline)；
 # loss = -E[log π_θ(y|x)·A] + β·KL(π_θ || π_ref)，β=0.01-0.1。
 

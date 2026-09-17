@@ -7,7 +7,7 @@ import torch
 from gleamlm.data.rl_data import tokenize_prompts
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.rl_trainer import compute_reward, sample_responses
+from gleamlm.trainer.rl_trainer import compute_reward, count_generated_tokens, sample_responses
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
 
 VOCAB_SIZE = 12002
@@ -170,6 +170,25 @@ class TestSampleResponses:
             )
         assert torch.equal(gen[0], gen[1])
         assert len(trunc) == 2
+
+
+class TestCountGeneratedTokens:
+    """生成型 tok/s 的 token 口径: [group_size] 个 [B, S] → Σ (S − prompt_len) × B。
+
+    回归点: GRPO 曾只累加 Σ (S − prompt_len)，漏乘 batch 维度 —— 面板吞吐
+    恰少 batch_size 倍，与 PPO/OPD 同族口径不可比。
+    """
+
+    def test_counts_full_batch_per_group(self):
+        prompt_len, batch, steps, group = 7, 4, 5, 3
+        gen_seqs = [torch.zeros(batch, prompt_len + steps) for _ in range(group)]
+        assert count_generated_tokens(gen_seqs, prompt_len) == group * batch * steps
+
+    def test_ragged_group_lengths_sum_per_member(self):
+        """组间回答长度可不同（各组等自己的最慢样本）→ 逐组求和，不取齐。"""
+        prompt_len, batch = 7, 4
+        gen_seqs = [torch.zeros(batch, prompt_len + 5), torch.zeros(batch, prompt_len + 3)]
+        assert count_generated_tokens(gen_seqs, prompt_len) == batch * (5 + 3)
 
 
 class TestComputeReward:

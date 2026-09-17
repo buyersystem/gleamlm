@@ -21,7 +21,6 @@ from gleamlm.trainer.base_trainer import (
     evaluate_generations,
     optimizer_step,
     set_seed,
-    window_max,
 )
 from gleamlm.trainer.dpo_loss import (
     compute_log_probs,
@@ -35,6 +34,7 @@ from gleamlm.utils.config import (
     extract_checkpoint_config,
     load_config,
 )
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import clean_state_dict, safe_autocast
 
@@ -291,18 +291,14 @@ def main() -> None:
 
     global_step = 0
     log_interval = 50
-    # 记录窗口: 自上次指标行（log_interval 批）以来的微批 loss 与 DPO 监控量累计。
-    # 曲线记窗口均值而非瞬时单批值 —— 单批采样噪声大, 直接记会让曲线锯齿化
-    log_loss_sum = 0.0
-    log_batches = 0
+    # 监控累积器（吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max）——
+    # 口径与实现见 gleamlm/utils/meter.py，7 个训练脚本共用同一份。
+    win = MetricWindow(device)
+    # DPO 专属的窗口监控量（margin/acc）：MetricWindow 不认识任务语义，故留在本脚本。
+    # 分母是 log_pairs（配对总数）而非批数 —— 与 loss 的分母刻意不同。
     log_term_sum = 0.0
     log_term_pos = 0
     log_pairs = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（替代原 last_grad_norm 末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    log_grad_norm_max: float | None = None
 
     for epoch in range(epochs):
         policy_model.train()
@@ -312,6 +308,7 @@ def main() -> None:
         pbar = tqdm(dataloader, desc=f"DPO Epoch {epoch}", mininterval=3)
 
         for batch_idx, batch in enumerate(pbar):
+            win.start()
             chosen_ids = batch["chosen_ids"].to(device)
             rejected_ids = batch["rejected_ids"].to(device)
             chosen_mask = batch["chosen_mask"].to(device)
@@ -339,6 +336,8 @@ def main() -> None:
             )
             loss = loss / denom
             scaler.scale(loss).backward()
+            # 本微批 token = 2 × batch × seq —— 一个微批含 chosen / rejected 两次前向
+            win.stop(2 * batch_size * max_seq_len)
             if is_accum_step:
                 if lr_scheduler == "wsd":
                     lr_mult = get_lr_wsd(
@@ -351,7 +350,7 @@ def main() -> None:
                 step_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=policy_model.parameters(), clip_grad=clip_grad
                 )
-                log_grad_norm_max = window_max(log_grad_norm_max, step_grad_norm)
+                win.add_grad_norm(step_grad_norm)
                 global_step += 1
                 # K8: per-step 模式 val 评估（eval_interval 为正数时）；epoch 末模式见循环外
                 if (
@@ -380,8 +379,7 @@ def main() -> None:
             batch_loss = loss.item() * denom  # 还原 /denom 缩放, 微批原始 loss
             epoch_loss += batch_loss
             n_batches += 1
-            log_loss_sum += batch_loss
-            log_batches += 1
+            win.add_loss(batch_loss)
             # DPO 专属监控量（设计文档 §7.3）。定义与 dpo_loss 自洽, 不另发明量:
             #   term   = (logπ_c - logπ_ref_c) - (logπ_r - logπ_ref_r)
             #   margin = β · mean(term)     ← loss = -logsigmoid(β·term) 的 pre-sigmoid 值,
@@ -402,7 +400,7 @@ def main() -> None:
                 else:
                     lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
                 cur_lr = lr * lr_mult
-                window_loss = log_loss_sum / log_batches
+                window_loss = win.loss
                 pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
                 # margin/acc 与 loss 同口径取窗口均值。
                 # **不放进 set_postfix**: tqdm 帧的 N/M 是 dataloader 位置而非 global_step,
@@ -411,20 +409,17 @@ def main() -> None:
                 dpo_acc = log_term_pos / max(log_pairs, 1)
                 # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板优先消费,
                 # 不再依赖 tqdm 帧格式; step 用 global_step（跨 epoch 单调递增）。
-                # loss 记窗口均值（自上次记录至今的全部批平均）
+                win.refresh_gpu()  # 显存按上报节奏采样（查询较重，不逐步查）
                 emit_metric(
                     split="train",
                     step=global_step,
                     total=total_steps,
-                    loss=window_loss,
                     lr=cur_lr,
                     margin=dpo_margin,
                     acc=dpo_acc,
-                    grad_norm=log_grad_norm_max,
+                    **win.emit_kwargs(),
                 )
-                log_loss_sum = 0.0
-                log_grad_norm_max = None
-                log_batches = 0
+                win.reset()
                 log_term_sum = 0.0
                 log_term_pos = 0
                 log_pairs = 0
@@ -432,25 +427,23 @@ def main() -> None:
         epoch_loss /= max(n_batches, 1)
         avg_loss = epoch_loss
 
-        if log_batches:
+        if win.batches:
             # 尾部残窗（本 epoch 末不足 log_interval 的批）补记一点后清零,
             # 避免记录窗口跨 epoch 混合
             cur_lr = optimizer.param_groups[0]["lr"]
-            window_loss = log_loss_sum / log_batches
+            window_loss = win.loss
             pbar.set_postfix({"loss": f"{window_loss:.4f}", "lr": f"{cur_lr:.2e}"})
+            win.refresh_gpu()
             emit_metric(
                 split="train",
                 step=global_step,
                 total=total_steps,
-                loss=window_loss,
                 lr=cur_lr,
                 margin=beta * log_term_sum / max(log_pairs, 1),
                 acc=log_term_pos / max(log_pairs, 1),
-                grad_norm=log_grad_norm_max,
+                **win.emit_kwargs(),
             )
-            log_loss_sum = 0.0
-            log_grad_norm_max = None
-            log_batches = 0
+            win.reset()
             log_term_sum = 0.0
             log_term_pos = 0
             log_pairs = 0

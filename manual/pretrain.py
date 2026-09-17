@@ -43,7 +43,6 @@
 import argparse
 import math
 import os
-import subprocess
 import sys
 import time
 from contextlib import nullcontext
@@ -80,10 +79,10 @@ from gleamlm.trainer.base_trainer import (
     evaluate,
     is_main_process,
     set_seed,
-    window_max,
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, ModelConfig, load_config
+from gleamlm.utils.meter import MetricWindow
 from gleamlm.utils.metrics import emit_metric
 from gleamlm.utils.torch_utils import safe_autocast
 
@@ -93,50 +92,6 @@ FFN_REGISTRY = {"mlp": MLP, "moe": MoE}
 
 
 # ddp_setup / ddp_cleanup / is_main_process 见 gleamlm/trainer/base_trainer.py。
-
-
-def _gpu_stats(device, local_rank):
-    """GPU 占用 (util%, 进程显存 GiB, 峰值 GiB, 总显存 GiB) — 对齐 nvidia-smi。
-
-    Windows 上 torch.cuda.utilization 因 pynvml 缺失抛异常（实测），若直接
-    fallback 0 会误导监控（GPU 满载却显示 0%）；此处回退 nvidia-smi 子进程
-    查询（每 log_interval 步一次，毫秒级开销）。显存取 memory.used（进程
-    占用）而非 PyTorch 缓存分配器视图 allocated（只含活跃张量，远小于真实）。
-    显存统一 GiB 口径（bytes/2**30 或 MiB/1024），与 nvidia-smi 读数一致。
-    """
-    if device.type != "cuda":
-        return 0.0, 0.0, 0.0, 0.0
-    try:
-        util = float(torch.cuda.utilization(device))
-        mem = torch.cuda.memory_allocated(device) / 2**30
-        mem_max = torch.cuda.max_memory_allocated(device) / 2**30
-        mem_total = torch.cuda.get_device_properties(device).total_memory / 2**30
-        return util, mem, mem_max, mem_total
-    except Exception:
-        pass
-    try:
-        kwargs = {}
-        if os.name == "nt":
-            # Ctrl+C 隔离: 子进程默认与主进程同 console 前台组，用户 Ctrl+C 会
-            # 同时中断 nvidia-smi（其挂起不退出会拖住下方 check_output 等待，
-            # 表现为退出卡住）；新进程组使其不受 SIGINT 影响，正常跑完即退。
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        out = subprocess.check_output(
-            [
-                "nvidia-smi",
-                "--query-gpu=utilization.gpu,memory.used,memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            text=True,
-            timeout=3,
-            **kwargs,
-        )
-        lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
-        # 多卡按 local_rank 取对应 GPU 行
-        u, mem_mib, total_mib = lines[min(local_rank, len(lines) - 1)].split(",")
-        return float(u), float(mem_mib) / 1024, 0.0, float(total_mib) / 1024
-    except Exception:
-        return 0.0, 0.0, 0.0, 0.0
 
 
 def train(args, model_cfg: ModelConfig):
@@ -319,16 +274,10 @@ def train(args, model_cfg: ModelConfig):
     total_steps = args.epochs * math.ceil(len(loader) / args.accumulate)
     step = start_step
     acc_steps = start_acc
-    # 记录窗口: 自上次指标行（log_interval 步）以来的微批 loss 累计。
-    # 曲线/wandb/TensorBoard 记窗口均值而非瞬时单批值 —— 单批采样噪声大,
-    # 直接记会让曲线锯齿化、趋势不可读
-    log_loss_sum = 0.0
-    log_batches = 0
-    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
-    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
-    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
-    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
-    log_grad_norm_max: float | None = None
+    # 监控累积器: 吞吐 / 显存 / 窗口 loss 均值 / 窗口 grad_norm max。
+    # 口径与实现见 gleamlm/utils/meter.py —— 7 个训练脚本共用同一份,
+    # 不再各自内联（此前各写一遍，口径只能靠人工对齐）。
+    win = MetricWindow(device, local_rank)
     # 全局已消费样本数: 每处理一个 micro-batch += batch_size；
     # 断点续训按它定位（与 DP 规模解耦，对齐 nanotron consumed_train_samples）
     consumed_train_samples = start_consumed
@@ -343,11 +292,9 @@ def train(args, model_cfg: ModelConfig):
     # GPU 显存缓存: set_postfix 每步引用，但查询较重（NVML 缺失时起
     # nvidia-smi 子进程）→ 每 log_interval 步刷新一次；此处先查一次让
     # 第 1 步即有真实值
-    gpu_util, gpu_mem, gpu_mem_max, gpu_mem_total = 0.0, 0.0, 0.0, 0.0
     if args.pbar and is_main_process():
         pbar = tqdm(total=total_steps, initial=step, desc="pretrain", mininterval=5, unit="step")
-        if device.type == "cuda":
-            gpu_util, gpu_mem, gpu_mem_max, gpu_mem_total = _gpu_stats(device, local_rank)
+        win.refresh_gpu()  # 非 CUDA 设备内部直接返回 0，不会起子进程
 
     if is_main_process():
         os.makedirs(args.output_dir, exist_ok=True)
@@ -371,7 +318,7 @@ def train(args, model_cfg: ModelConfig):
             if skip_batches > 0:
                 batch_iter = islice(batch_iter, skip_batches, None)
         for batch_idx, batch in batch_iter:
-            step_start = time.perf_counter()
+            win.start()
             x = batch["input_ids"].to(device)
             y = batch["labels"].to(device)
 
@@ -435,17 +382,17 @@ def train(args, model_cfg: ModelConfig):
             # clip 必须 unscale 后 (阈值作用于 ×scale 梯度会失准)；
             # 梯度 inf/nan 时 scaler 跳过 step 并减半 scale。
             scaler.scale(loss / denom).backward()
-            log_loss_sum += loss.item()
-            log_batches += 1
+            win.add_loss(loss.item())
             acc_steps += 1
             consumed_train_samples += args.batch_size
-            dt = time.perf_counter() - step_start
+            # 本微批 token = batch × seq（满长，与 sft/sft_lora 同式）
+            win.stop(args.batch_size * model_cfg.max_seq_len)
 
             if is_last_acc:
                 scaler.unscale_(optimizer)
-                # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
+                # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线（窗口内 max）
                 grad_norm = float(torch.nn.utils.clip_grad_norm_(raw_model.parameters(), args.clip))
-                log_grad_norm_max = window_max(log_grad_norm_max, grad_norm)
+                win.add_grad_norm(grad_norm)
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -461,13 +408,12 @@ def train(args, model_cfg: ModelConfig):
                 if args.pbar:
                     pbar.update(1)
                 if step % args.log_interval == 0:
-                    gpu_util, gpu_mem, gpu_mem_max, gpu_mem_total = _gpu_stats(device, local_rank)
-                    tok_per_sec = args.batch_size * model_cfg.max_seq_len / dt
+                    win.refresh_gpu()
                     progress_pct = 100.0 * step / max(1, total_steps)
-                    window_loss = log_loss_sum / max(log_batches, 1)
+                    window_loss = win.loss  # 窗口里至少有一个微批（is_last_acc 保证）
                     if not args.pbar:
                         print(
-                            f"step {step}/{total_steps} ({progress_pct:.1f}%)  loss={window_loss:.4f}  lr={lr:.6f}  {tok_per_sec / 1e3:.1f}k tok/s  GPU:{gpu_mem:.1f}/{gpu_mem_total:.1f}G"
+                            f"step {step}/{total_steps} ({progress_pct:.1f}%)  loss={window_loss:.4f}  lr={lr:.6f}  {win.tok_per_s / 1e3:.1f}k tok/s  GPU:{win.gpu_mem:.1f}/{win.gpu_mem_total:.1f}G"
                         )
                     # 哨兵指标行（契约见 gleamlm/utils/metrics.py）: 面板解析侧优先
                     # 消费结构化行, 人类可读行的格式变化不再静默断曲线;
@@ -477,11 +423,8 @@ def train(args, model_cfg: ModelConfig):
                         split="train",
                         step=step,
                         total=total_steps,
-                        loss=window_loss,
                         lr=lr,
-                        tok_per_s=tok_per_sec,
-                        gpu_mem=gpu_mem,
-                        grad_norm=log_grad_norm_max,
+                        **win.emit_kwargs(),
                     )
                     if wandb is not None:
                         wandb.log(
@@ -491,11 +434,11 @@ def train(args, model_cfg: ModelConfig):
                                 "step": step,
                                 "epoch": epoch,
                                 "progress_pct": progress_pct,
-                                "tok_per_sec": tok_per_sec,
-                                "time_per_step_ms": dt * 1000,
-                                "gpu_util": gpu_util,
-                                "gpu_mem_gb": gpu_mem,
-                                "gpu_mem_peak_gb": gpu_mem_max,
+                                "tok_per_sec": win.tok_per_s,
+                                "time_per_step_ms": win.last_dt * 1000,
+                                "gpu_util": win.gpu_util,
+                                "gpu_mem_gb": win.gpu_mem,
+                                "gpu_mem_peak_gb": win.gpu_mem_peak,
                             },
                             step=step,
                         )
@@ -504,20 +447,17 @@ def train(args, model_cfg: ModelConfig):
                     if writer is not None:
                         writer.add_scalar("Train/Loss", window_loss, step)
                         writer.add_scalar("Train/LR", optimizer.param_groups[0]["lr"], step)
-                        writer.add_scalar("Train/TokPerSec", tok_per_sec, step)
-                    log_loss_sum = 0.0
-                    log_grad_norm_max = None
-                    log_batches = 0
+                        writer.add_scalar("Train/TokPerSec", win.tok_per_s, step)
+                    win.reset()
                 if args.pbar:
                     # 每步刷新（旧 base_trainer 组末 set_postfix 同款），
                     # 数值连续变化；重绘频率由 mininterval=5 节流
-                    tok_per_sec = args.batch_size * model_cfg.max_seq_len / dt
                     pbar.set_postfix(
                         {
                             "loss": f"{loss.item():.4f}",
                             "lr": f"{lr:.6f}",
-                            "tok/s": f"{tok_per_sec / 1e3:.1f}k",
-                            "GPU": f"{gpu_mem:.1f}/{gpu_mem_total:.1f}G",
+                            "tok/s": f"{win.tok_per_s / 1e3:.1f}k",
+                            "GPU": f"{win.gpu_mem:.1f}/{win.gpu_mem_total:.1f}G",
                         }
                     )
 
