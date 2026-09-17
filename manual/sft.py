@@ -20,8 +20,10 @@ from gleamlm.tokenizer.tokenizer import BBPETokenizer
 from gleamlm.trainer.base_trainer import (
     create_scaler,
     evaluate_generations,
+    evaluate_sft_loss,
     optimizer_step,
     set_seed,
+    window_max,
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, load_config
@@ -52,6 +54,18 @@ def main():
     parser.add_argument("--accumulate_grad", type=int, default=None, help="覆写梯度累积步数")
     parser.add_argument("--max_seq_len", type=int, default=None, help="覆写序列长度")
     parser.add_argument("--data_path", type=str, default=None, help="覆写 SFT 数据路径")
+    parser.add_argument(
+        "--val_data",
+        type=str,
+        default=None,
+        help="验证数据路径 (JSONL; 未传回落 YAML sft.val_data; 空则不评估)",
+    )
+    parser.add_argument(
+        "--eval_interval",
+        type=int,
+        default=None,
+        help="val 评估间隔 (optimizer step; 未传回落 YAML sft.eval_interval; 空 = 每 epoch 末一次)",
+    )
     parser.add_argument(
         "--model_path",
         type=str,
@@ -129,6 +143,11 @@ def main():
             # 两个候选都不存在: 仍指向 final.pt, 让加载处报出明确 FileNotFoundError
             model_path = os.path.join(cfg.data.checkpoint_dir, "final.pt")
     data_path = cli_args.data_path or cfg.sft.data_path
+    # K8 val 裁决链（与 pretrain.py 同模式）: CLI 未传 → 回落 YAML sft.val_data（空 = 不评估）
+    val_data = cli_args.val_data if cli_args.val_data is not None else (cfg.sft.val_data or None)
+    eval_interval = (
+        cli_args.eval_interval if cli_args.eval_interval is not None else cfg.sft.eval_interval
+    )
     save_dir = cli_args.save_dir or os.path.join(cfg.data.checkpoint_dir, "sft")
 
     lr = cli_args.lr if cli_args.lr is not None else cfg.sft.lr
@@ -170,6 +189,8 @@ def main():
     print("=" * 60)
     print(f"Device: {device}")
     print(f"Data: {data_path}")
+    if val_data:
+        print(f"Val: {val_data}")
     print(f"Model: {model_path}")
     print(f"LR: {lr:.1e}, Epochs: {epochs}, Batch: {batch_size}, Seq: {max_seq_len}")
 
@@ -210,6 +231,25 @@ def main():
         num_workers=0,
         pin_memory=True,
     )
+
+    # K8: held-out val（与 train 同 mask CE 口径）→ 面板 val 曲线；空则不评估
+    val_loader = None
+    if val_data:
+        val_dataset = SFTDataset(
+            data_path=val_data,
+            tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
+            inject_system_ratio=inject_system_ratio,
+        )
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=val_dataset.collate_fn,
+            num_workers=0,
+            pin_memory=True,
+        )
+        print(f"Val dataset: {len(val_dataset)} samples, {len(val_loader)} batches")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -287,9 +327,11 @@ def main():
     # 直接记会让曲线锯齿化、趋势不可读
     log_loss_sum = 0.0
     log_batches = 0
-    # K4: 窗口内最近一次 optimizer_step 的裁剪前梯度范数（面板 grad_norm 曲线）。
-    # 未启用裁剪时恒为 None —— 哨兵行记 null，解析侧跳过、不产曲线点。
-    last_grad_norm = None
+    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
+    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
+    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
+    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
+    log_grad_norm_max: float | None = None
     for epoch in range(start_epoch, epochs):
         model.train()
         epoch_loss = 0.0
@@ -335,10 +377,23 @@ def main():
                     lr_mult = get_lr_cosine(global_step, decay_steps, warmup_ratio, min_lr_ratio)
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr * lr_mult
-                last_grad_norm = optimizer_step(
+                step_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=model.parameters(), clip_grad=clip_grad
                 )
+                log_grad_norm_max = window_max(log_grad_norm_max, step_grad_norm)
                 global_step += 1
+                # K8: per-step 模式 val 评估（eval_interval 为正数时）；epoch 末模式见循环外
+                if (
+                    val_loader is not None
+                    and eval_interval
+                    and eval_interval > 0
+                    and global_step % eval_interval == 0
+                ):
+                    model.eval()
+                    val_loss, val_ppl = evaluate_sft_loss(model, val_loader, device, shift=False)
+                    model.train()
+                    print(f"  Val step {global_step}: loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+                    emit_metric(split="val", step=global_step, loss=val_loss, ppl=val_ppl)
 
             batch_loss = loss.item() * denom  # 还原 /denom 缩放, 微批原始 loss
             epoch_loss += batch_loss
@@ -365,9 +420,10 @@ def main():
                     total=total_steps,
                     loss=window_loss,
                     lr=cur_lr,
-                    grad_norm=last_grad_norm,
+                    grad_norm=log_grad_norm_max,
                 )
                 log_loss_sum = 0.0
+                log_grad_norm_max = None
                 log_batches = 0
 
         if log_batches:
@@ -382,9 +438,10 @@ def main():
                 total=total_steps,
                 loss=window_loss,
                 lr=cur_lr,
-                grad_norm=last_grad_norm,
+                grad_norm=log_grad_norm_max,
             )
             log_loss_sum = 0.0
+            log_grad_norm_max = None
             log_batches = 0
 
         epoch_loss /= max(n_batches, 1)
@@ -392,6 +449,12 @@ def main():
         print(f"\n--- SFT Epoch {epoch} 生成评估 ---")
         model.eval()
         evaluate_generations(model, tokenizer, eval_prompts, "SFT 生成评估")
+        # K8: per-epoch 模式 val 评估(仅 eval_interval=None 时每 epoch 末一次);
+        # 正数走训练内 per-step 通道(此处跳过以免同 step 双点), ≤0 关闭评估
+        if val_loader is not None and eval_interval is None:
+            val_loss, val_ppl = evaluate_sft_loss(model, val_loader, device, shift=False)
+            print(f"  Val epoch {epoch}: loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+            emit_metric(split="val", step=global_step, loss=val_loss, ppl=val_ppl)
         model.train()
 
         cur_lr = optimizer.param_groups[0]["lr"]

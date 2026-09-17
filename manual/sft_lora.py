@@ -24,7 +24,12 @@ from torch.utils.data import DataLoader, Dataset
 
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.base_trainer import create_scaler, optimizer_step
+from gleamlm.trainer.base_trainer import (
+    create_scaler,
+    evaluate_sft_loss,
+    optimizer_step,
+    window_max,
+)
 from gleamlm.trainer.lora import LoraConfig, apply_lora_to_model, merge_lora_weights
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.chatml import format_chatml
@@ -144,6 +149,18 @@ def train(args):
         collate_fn=lambda b: collate_fn(b, tokenizer, args.seq_len),
     )
 
+    # K8: held-out val（与 train 同 mask CE 口径；collate 复用）→ 面板 val 曲线
+    val_loader = None
+    if args.val_data:
+        val_dataset = SFTDataset(args.val_data, max_seq_len=args.seq_len, tokenizer=tokenizer)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=lambda b: collate_fn(b, tokenizer, args.seq_len),
+        )
+        print(f"Val dataset: {len(val_dataset)} samples, {len(val_loader)} batches")
+
     ckpt = torch.load(args.model, map_location="cpu", weights_only=False)
     cfg = extract_checkpoint_config(ckpt)
     model = GleamLMModel(
@@ -205,6 +222,11 @@ def train(args):
     # 记窗口均值而非瞬时单批值 —— 单批采样噪声大, 曲线会锯齿化
     win_loss_sum = 0.0
     win_batches = 0
+    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（替代原 last_grad_norm 末值）——
+    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
+    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
+    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
+    win_grad_norm_max: float | None = None
     for _ in range(args.epochs):
         for batch_idx, (input_ids, labels) in enumerate(loader):
             input_ids, labels = input_ids.to(device), labels.to(device)
@@ -254,10 +276,24 @@ def train(args):
                 cur_lr = args.lr * lr_mult
                 for pg in optimizer.param_groups:
                     pg["lr"] = cur_lr
-                last_grad_norm = optimizer_step(
+                step_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=lora_params, clip_grad=args.clip
                 )
+                win_grad_norm_max = window_max(win_grad_norm_max, step_grad_norm)
                 global_step += 1
+                # K8: per-step 模式 val 评估（eval_interval 为正数时）；epoch 末模式见循环外。
+                # val 为裸 mask CE（不含 aux 项，同 pretrain 裸 CE 口径先例）
+                if (
+                    val_loader is not None
+                    and args.eval_interval
+                    and args.eval_interval > 0
+                    and global_step % args.eval_interval == 0
+                ):
+                    model.eval()
+                    val_loss, val_ppl = evaluate_sft_loss(model, val_loader, device, shift=True)
+                    model.train()
+                    print(f"  Val step {global_step}: loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+                    emit_metric(split="val", step=global_step, loss=val_loss, ppl=val_ppl)
 
                 if global_step == 1 or global_step % args.log_interval == 0:
                     window_loss = win_loss_sum / win_batches
@@ -273,10 +309,20 @@ def train(args):
                         total=total_steps,
                         loss=window_loss,
                         lr=cur_lr,
-                        grad_norm=last_grad_norm,
+                        grad_norm=win_grad_norm_max,
                     )
                     win_loss_sum = 0.0
+                    win_grad_norm_max = None
                     win_batches = 0
+
+        # K8: per-epoch 模式 val 评估（仅 eval_interval=None 时每 epoch 末一次）;
+        # 正数走训练内 per-step 通道, ≤0 关闭评估
+        if val_loader is not None and args.eval_interval is None:
+            model.eval()
+            val_loss, val_ppl = evaluate_sft_loss(model, val_loader, device, shift=True)
+            model.train()
+            print(f"  Val epoch: loss={val_loss:.4f}  ppl={val_ppl:.2f}")
+            emit_metric(split="val", step=global_step, loss=val_loss, ppl=val_ppl)
 
     if skipped_batches:
         print(f"跳过 {skipped_batches} 个全 mask 批 (无监督 token)")
@@ -376,6 +422,18 @@ def parse_args():
     p.add_argument(
         "--data", type=str, default=None, help="JSONL SFT 数据 (未传回落 YAML lora.data_path)"
     )
+    p.add_argument(
+        "--val_data",
+        type=str,
+        default=None,
+        help="验证数据 JSONL (未传回落 YAML lora.val_data; 空则不评估)",
+    )
+    p.add_argument(
+        "--eval_interval",
+        type=int,
+        default=None,
+        help="val 评估间隔 (optimizer step; 未传回落 YAML lora.eval_interval; 空 = 每 epoch 末一次)",
+    )
     p.add_argument("--tokenizer_path", type=str, default="")
     p.add_argument("--merge", action="store_true", help="训练后合并 LoRA 权重到 base")
     args = p.parse_args()
@@ -405,6 +463,8 @@ def parse_args():
         "lora_r",
         "lora_alpha",
         "log_interval",
+        "val_data",
+        "eval_interval",
     ):
         if getattr(args, _key) is None:
             setattr(args, _key, getattr(cfg.lora, _key))

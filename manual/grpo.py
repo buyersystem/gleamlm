@@ -40,6 +40,7 @@ from torch.utils.data import DataLoader
 from gleamlm.data.rl_data import RLHFDataset, tokenize_prompts
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.trainer.base_trainer import window_max
 from gleamlm.trainer.rl_trainer import compute_reward, grpo_loss, sample_responses
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, extract_checkpoint_config
 from gleamlm.utils.metrics import emit_metric
@@ -124,6 +125,11 @@ def train(args):
     log_loss_sum = 0.0
     log_reward_sum = 0.0
     log_steps = 0
+    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
+    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
+    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
+    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
+    log_grad_norm_max: float | None = None
 
     for global_step in range(total_steps):
         batch_items = [next_item() for _ in range(args.batch_size)]
@@ -240,6 +246,7 @@ def train(args):
         total_loss.backward()
         # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
         grad_norm = float(torch.nn.utils.clip_grad_norm_(policy_model.parameters(), args.clip))
+        log_grad_norm_max = window_max(log_grad_norm_max, grad_norm)
         optimizer.step()
         optimizer.zero_grad()
         log_loss_sum += total_loss.item()
@@ -265,9 +272,10 @@ def train(args):
                 loss=window_loss,
                 lr=args.lr,
                 reward=window_reward,
-                grad_norm=grad_norm,
+                grad_norm=log_grad_norm_max,
             )
             log_loss_sum = 0.0
+            log_grad_norm_max = None
             log_reward_sum = 0.0
             log_steps = 0
 

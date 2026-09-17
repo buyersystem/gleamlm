@@ -547,11 +547,25 @@ function drawPt2() {
   }
   if (main) {
     loss.push({ name: shortPt2Id(pt2.mainId), color: C.loss, points: main.loss || [] });
+    // K8: held-out val 序列（稀疏: 每 eval_interval 步一点）叠在主 loss 图上;
+    // 未启用验证的 run 没有 val_loss 键, 不 push 空序列
+    if ((main.val_loss || []).length) {
+      loss.push({
+        name: shortPt2Id(pt2.mainId) + " · val", color: C.val, points: main.val_loss || [],
+      });
+    }
     if (xk.length) {
       // 专属指标模式：副图只画主 run（提案图如此），跨 run 的数值比较交给差异条
       xk.forEach((k, i) =>
         sub.push({ name: k, color: i === 0 ? C.x1 : C.x2, points: main[k] || [] })
       );
+      // K8: DPO val 的 held-out margin/acc（同 loss 图单色 val 语言）
+      if (xk.includes("margin") && (main.val_margin || []).length) {
+        sub.push({ name: "margin · val", color: C.val, points: main.val_margin || [] });
+      }
+      if (xk.includes("acc") && (main.val_acc || []).length) {
+        sub.push({ name: "acc · val", color: C.val, points: main.val_acc || [] });
+      }
     } else {
       sub.push({ name: shortPt2Id(pt2.mainId), color: C.lr, points: main.lr || [] });
     }
@@ -571,6 +585,10 @@ function drawPt2() {
     const s = pt2.hist.get(id);
     if (!s) return;
     loss.push({ name: shortPt2Id(id), color: C.loss, points: s.loss || [], cmp: i });
+    // K8: 对比 run 的 val 叠加（同预训练页约定: 虚线随 cmp 线型）
+    if ((s.val_loss || []).length) {
+      loss.push({ name: shortPt2Id(id) + " · val", color: C.val, points: s.val_loss || [], cmp: i });
+    }
     // lr 模式保留对比线（与改动前一致）；专属指标模式不加，避免副图图例被撑爆
     if (!xk.length) sub.push({ name: shortPt2Id(id), color: C.lr, points: s.lr || [], cmp: i });
     if ((s.grad_norm || []).length) {

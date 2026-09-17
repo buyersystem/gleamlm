@@ -1,6 +1,7 @@
 """SFT + DPO 全链路快速冒烟测试。"""
 
 import json
+import math
 import os
 import tempfile
 
@@ -11,10 +12,12 @@ from gleamlm.data.dpo_data import DPODataset, dpad_collate
 from gleamlm.data.sft_data import SFTDataset
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
-from gleamlm.trainer.base_trainer import evaluate_generations, set_seed
+from gleamlm.trainer.base_trainer import evaluate_generations, evaluate_sft_loss, set_seed
 from gleamlm.trainer.dpo_loss import compute_log_probs, dpo_loss
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH
+from gleamlm.utils.torch_utils import safe_autocast
 from manual.sft_lora import SFTDataset as LoraSFTDataset
+from manual.sft_lora import collate_fn as lora_collate
 
 VOCAB_SIZE = 12002
 D_MODEL = 256
@@ -245,3 +248,90 @@ class TestDPO:
             loss = dpo_loss(p_cho, p_rej, r_cho, r_rej, beta=0.1)
             assert not torch.isnan(loss)
             assert loss.item() > 0
+
+
+class TestEvaluateSftLoss:
+    """K8 val 评估口径守卫: 两条 SFT 轨位移约定相反, val 必须与各自训练同式。
+
+    core SFT: 数据集内位移 (sft_data.py: input_ids=full[:-1], labels=full[1:]),
+    训练同位对齐 → shift=False;
+    LoRA: collate 同位对齐, 训练循环内位移 (sft_lora.py) → shift=True。
+    每条轨用真数据集 batch 断言 val loss == 训练公式的 CE (±1e-6),
+    并用错误 shift 值反证测试数据能区分两套约定。
+    """
+
+    @staticmethod
+    def _write_rows(path):
+        rows = [
+            {"instruction": "什么是AI", "output": "人工智能是计算机科学的分支"},
+            {"instruction": "你好", "output": "你好！有什么可以帮助你的？"},
+            {"instruction": "推荐一道菜", "output": "西红柿炒鸡蛋简单好做"},
+            {"instruction": "什么是机器学习", "output": "让计算机从数据中学习规律"},
+        ]
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    @staticmethod
+    def _manual_ce(loader, model, device, *, shift):
+        """训练脚本同款 mask CE (sft.py: 同位; sft_lora.py: 位移), sum/总 token 聚合。"""
+        total, tokens = 0.0, 0
+        with torch.no_grad():
+            for input_ids, labels in loader:
+                input_ids, labels = input_ids.to(device), labels.to(device)
+                with safe_autocast():
+                    logits, _, _, _ = model(input_ids)
+                    if shift:
+                        logits = logits[:, :-1, :].reshape(-1, logits.size(-1))
+                        labels = labels[:, 1:].reshape(-1)
+                    else:
+                        logits = logits.reshape(-1, logits.size(-1))
+                        labels = labels.reshape(-1)
+                    total += torch.nn.functional.cross_entropy(
+                        logits, labels, ignore_index=-100, reduction="sum"
+                    ).item()
+                tokens += int((labels != -100).sum())
+        return total / tokens
+
+    def test_core_aligned_matches_train(self):
+        set_seed(42)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        tokenizer = BBPETokenizer.load(DEFAULT_TOKENIZER_PATH)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "core.jsonl")
+            self._write_rows(path)
+            ds = SFTDataset(path, tokenizer, max_seq_len=MAX_SEQ_LEN)
+            loader = DataLoader(ds, batch_size=2, collate_fn=ds.collate_fn)
+            model = _make_model(device, tokenizer)
+
+            avg_loss, ppl = evaluate_sft_loss(model, loader, device, shift=False)
+            expected = self._manual_ce(loader, model, device, shift=False)
+
+            assert abs(avg_loss - expected) < 1e-6
+            assert abs(ppl - math.exp(expected)) < 1e-6
+            # 反证: 数据确实区分两套约定 (用错 shift 会偏离训练口径)
+            wrong, _ = evaluate_sft_loss(model, loader, device, shift=True)
+            assert abs(wrong - expected) > 1e-3
+
+    def test_lora_shifted_matches_train(self):
+        set_seed(42)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        tokenizer = BBPETokenizer.load(DEFAULT_TOKENIZER_PATH)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "lora.jsonl")
+            self._write_rows(path)
+            ds = LoraSFTDataset(path, max_seq_len=MAX_SEQ_LEN, tokenizer=tokenizer)
+            loader = DataLoader(
+                ds,
+                batch_size=2,
+                collate_fn=lambda b: lora_collate(b, tokenizer, MAX_SEQ_LEN),
+            )
+            model = _make_model(device, tokenizer)
+
+            avg_loss, ppl = evaluate_sft_loss(model, loader, device, shift=True)
+            expected = self._manual_ce(loader, model, device, shift=True)
+
+            assert abs(avg_loss - expected) < 1e-6
+            assert abs(ppl - math.exp(expected)) < 1e-6
+            wrong, _ = evaluate_sft_loss(model, loader, device, shift=False)
+            assert abs(wrong - expected) > 1e-3

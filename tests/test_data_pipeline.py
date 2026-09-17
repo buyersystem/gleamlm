@@ -341,3 +341,33 @@ def test_pipeline_e2e(tmp_path, monkeypatch):
     pl.main()
     assert len(_read_lines(str(raw / "wiki_dedup.txt"))) == 2
     assert len(_read_lines(str(raw / "news_dedup.txt"))) == 4
+
+
+# ── K8: SFT/DPO 数据切分（split_val）─────────────────────────────────
+def test_split_val_conservation_and_disjoint(tmp_path, monkeypatch):
+    """K8: split_val 行级守恒 + train/val 无交集 + 同 seed 可复现。"""
+    src = tmp_path / "mix.jsonl"
+    lines = [f'{{"instruction":"q{i}","output":"a{i}"}}' for i in range(100)]
+    src.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    args = ["split_val", "--input", str(src), "--ratio", "0.1", "--seed", "42"]
+    monkeypatch.setattr(sys, "argv", args)
+    import data_tools.sft.split_val as sv
+
+    sv.main()
+
+    train, val = tmp_path / "mix_train.jsonl", tmp_path / "mix_val.jsonl"
+    t_lines = _read_lines(str(train))
+    v_lines = _read_lines(str(val))
+    assert len(v_lines) == 10 and len(t_lines) == 90
+    assert not (set(t_lines) & set(v_lines)), "train/val 不得有交集（泄漏）"
+    assert set(t_lines) | set(v_lines) == set(lines), "并集须守恒"
+    assert len(_read_lines(str(src))) == 100, "原文件保留不动"
+
+    # 同 seed 重跑：产物字节级一致（可复现）
+    t_before = train.read_text(encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", args)
+    sv.main()
+    assert train.read_text(encoding="utf-8") == t_before
+    assert (tmp_path / "mix_train.jsonl.manifest.json").exists()
+    assert (tmp_path / "mix_val.jsonl.manifest.json").exists()

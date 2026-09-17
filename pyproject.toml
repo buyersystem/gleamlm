@@ -144,6 +144,7 @@ ignore = [
 "data_tools/sft/mix_sft.py" = ["E402"]  # sys.path before data_tools imports
 "data_tools/sft/dedup.py" = ["E402"]  # sys.path before data_tools imports
 "data_tools/sft/lint_sft.py" = ["E402"]  # sys.path before data_tools imports
+"data_tools/sft/split_val.py" = ["E402"]  # sys.path before data_tools imports
 "data_tools/dpo/merge_dpo_data.py" = ["E402"]  # sys.path before data_tools imports
 "data_tools/rl/filter_by_difficulty.py" = ["E402"]  # sys.path before gleamlm imports
 "data_tools/pretrain/score.py" = ["E402"]  # sys.path before data_tools imports

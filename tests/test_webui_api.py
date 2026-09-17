@@ -315,7 +315,8 @@ def test_train_defaults(api):
     assert f["save_dir"]["path"] == "checkpoints/nano/sft" and "exists" not in f["save_dir"]
     assert f["model_path"]["path"].startswith("checkpoints/nano/")
     assert isinstance(f["model_path"]["exists"], bool)
-    assert f["data_path"]["path"] == "data/nano/sft/sft_mix.jsonl"
+    assert f["data_path"]["path"] == "data/nano/sft/sft_mix_train.jsonl"
+    assert f["val_data"]["path"] == "data/nano/sft/sft_mix_val.jsonl"  # K8: held-out 预填
     # 推导目录 + 目录内同类条目候选（前端渲染为「目录固定 + 文件可选」下拉）
     assert f["model_path"]["dir"] == "checkpoints/nano"
     assert f["data_path"]["dir"] == "data/nano/sft"
@@ -326,6 +327,7 @@ def test_train_defaults(api):
     assert f["model_path"]["path"] == "checkpoints/nano/sft/sft_best.pt"
     assert f["model_path"]["dir"] == "checkpoints/nano/sft"
     assert f["output_dir"]["path"] == "checkpoints/nano/dpo"
+    assert f["val_data"]["path"] == "data/nano/dpo/dpo_data_val.jsonl"  # K8: held-out 预填
     # opd: 学生模型 = 上游 DPO 产物 + 数据 + 教师目录 + 输出
     f = api.get("/api/train/defaults", params={"task": "opd", "variant": "nano"}).json()["fields"]
     assert f["model"]["path"] == "checkpoints/nano/dpo/dpo_best.pt"
@@ -769,6 +771,67 @@ def test_epoch_summary_line_not_parsed_as_frame():
     pts = T._parse_metric_lines(run, lines)
     assert [p for p in pts if p[0] == "loss"] == [("loss", 4, 1.5)]
     assert [p for p in pts if p[0] == "lr"] == [("lr", 4, 5e-07)]
+
+
+# ── K8: val 哨兵泛化与 --val_data 拼接 ─────────────────────────────
+def test_val_metric_records_generalized():
+    """K8: SFT(loss+ppl) 与 DPO(loss+margin+acc, 无 ppl) 的 val 记录都须入列。
+
+    回归点: 旧实现硬取 rec["ppl"] —— DPO val 缺 ppl 键时 KeyError 被
+    except 吞掉整行, val 曲线静默缺失。
+    """
+    run = T.TrainRun(T.TrainStartRequest(task="probe"), ["echo"], "t_k8val")
+    lines = [
+        '@@GLEAM_METRIC {"split":"val","step":150,"loss":2.34,"ppl":10.4}',
+        '@@GLEAM_METRIC {"split":"val","step":100,"loss":0.6931,"margin":0.021,"acc":0.55}',
+    ]
+    pts = T._parse_metric_lines(run, lines)
+    assert ("val_loss", 150, 2.34) in pts and ("val_ppl", 150, 10.4) in pts
+    assert ("val_loss", 100, 0.6931) in pts
+    assert ("val_margin", 100, 0.021) in pts and ("val_acc", 100, 0.55) in pts
+    assert not [p for p in pts if p[0] == "val_ppl" and p[1] == 100]
+
+
+def test_sft_command_passes_val_data():
+    """K8: 表单 val_data / eval_interval 非空 → 拼对应 CLI; 留空 → 不传（脚本走 YAML 裁决）。"""
+    cmd, _ = T._build_command(
+        T.TrainStartRequest(
+            task="sft",
+            variant="nano",
+            # fields 是 dict[str, str]（前端 <input>.value 本就是字符串）
+            fields={"val_data": "data/nano/sft/sft_mix_val.jsonl", "eval_interval": "150"},
+        )
+    )
+    i = cmd.index("--val_data")
+    assert cmd[i + 1] == "data/nano/sft/sft_mix_val.jsonl"
+    assert cmd[cmd.index("--eval_interval") + 1] == "150"
+    cmd, _ = T._build_command(T.TrainStartRequest(task="sft", variant="nano"))
+    assert "--val_data" not in cmd
+    assert "--eval_interval" not in cmd  # 留空 → YAML 裁决（铁律 2）
+    # 0 是合法值（= 关闭评估），不能被当成空值静默丢弃
+    cmd, _ = T._build_command(
+        T.TrainStartRequest(task="sft", variant="nano", fields={"eval_interval": "0"})
+    )
+    assert cmd[cmd.index("--eval_interval") + 1] == "0"
+    # pretrain 没有 --eval_interval 这个 CLI（只走 YAML），表单必须没有它 —— 否则
+    # argparse 会因未知参数直接 SystemExit（pretrain.py:771 parse_args(remaining)）
+    assert all(f["name"] != "eval_interval" for f in T._TASKS["pretrain"]["fields"])
+
+
+def test_pid_probe_survives_utf8_mode():
+    """控制台调用必须显式声明编码（2026-09-17 实测的潜在崩溃）。
+
+    UTF-8 模式（PYTHONUTF8=1）下 text=True 的默认编码就是 UTF-8，而 tasklist /
+    控制台工具按 **ANSI 代码页**（中文机 cp936）输出 → reader 线程抛
+    UnicodeDecodeError → stdout 变成 **None 且 run 本身不抛异常** →
+    下一行才炸：`_pid_alive` → TypeError、`_pid_cmdline` → AttributeError。
+    两者的 except 都只兜 OSError/SubprocessError，于是异常一路上抛到
+    startup_recovery（面板启动自愈路径）。触发点很常见：查"已退出/无匹配"的 pid 时
+    tasklist 回的是中文提示语。修复 = 显式 encoding="mbcs" + errors="replace"。
+    """
+    assert T._pid_alive(999_999) is False  # 不存在的 pid：返回 False，不得抛
+    assert T._pid_cmdline(999_999) is None
+    assert T._pid_alive(0) is False  # 非法 pid 的早退分支
 
 
 # ── 推理 ─────────────────────────────────────────────────────────────

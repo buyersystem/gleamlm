@@ -80,6 +80,7 @@ from gleamlm.trainer.base_trainer import (
     evaluate,
     is_main_process,
     set_seed,
+    window_max,
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
 from gleamlm.utils.config import DEFAULT_TOKENIZER_PATH, ModelConfig, load_config
@@ -323,6 +324,11 @@ def train(args, model_cfg: ModelConfig):
     # 直接记会让曲线锯齿化、趋势不可读
     log_loss_sum = 0.0
     log_batches = 0
+    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（不是末值）——
+    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
+    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
+    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
+    log_grad_norm_max: float | None = None
     # 全局已消费样本数: 每处理一个 micro-batch += batch_size；
     # 断点续训按它定位（与 DP 规模解耦，对齐 nanotron consumed_train_samples）
     consumed_train_samples = start_consumed
@@ -439,6 +445,7 @@ def train(args, model_cfg: ModelConfig):
                 scaler.unscale_(optimizer)
                 # K4: 接住 clip 返回值（裁剪前总范数）→ 面板 grad_norm 曲线
                 grad_norm = float(torch.nn.utils.clip_grad_norm_(raw_model.parameters(), args.clip))
+                log_grad_norm_max = window_max(log_grad_norm_max, grad_norm)
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -474,7 +481,7 @@ def train(args, model_cfg: ModelConfig):
                         lr=lr,
                         tok_per_s=tok_per_sec,
                         gpu_mem=gpu_mem,
-                        grad_norm=grad_norm,
+                        grad_norm=log_grad_norm_max,
                     )
                     if wandb is not None:
                         wandb.log(
@@ -499,6 +506,7 @@ def train(args, model_cfg: ModelConfig):
                         writer.add_scalar("Train/LR", optimizer.param_groups[0]["lr"], step)
                         writer.add_scalar("Train/TokPerSec", tok_per_sec, step)
                     log_loss_sum = 0.0
+                    log_grad_norm_max = None
                     log_batches = 0
                 if args.pbar:
                     # 每步刷新（旧 base_trainer 组末 set_postfix 同款），

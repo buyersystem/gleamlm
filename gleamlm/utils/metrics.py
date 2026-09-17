@@ -5,14 +5,15 @@
     @@GLEAM_METRIC {"split":"train","step":100,"total":34054,"loss":3.19,"lr":0.00004}
 
 字段（除 split 外均可选，缺失即不产出对应曲线）:
-  split     "train" | "val"（val 独有 ppl）
+  split     "train" | "val"（val 指标随任务: SFT/预训练带 ppl; DPO 带 margin/acc）
   step      int — 训练步（面板 x 轴；跨 epoch 单调递增）
   total     int — 总步数（面板进度用）
-  loss      float — 训练/验证损失（val 为裸 CE，可直接取 exp 当 PPL）
+  loss      float — 训练/验证损失（SFT/预训练 val 为裸 CE 口径, 取 exp 即 PPL）
   lr        float — 当前学习率
   tok_per_s float — 吞吐（tok/s）
   gpu_mem   float — 进程显存占用（GiB）
-  grad_norm float — 裁剪前梯度总范数（clip_grad_norm_ 返回值；面板 grad_norm 曲线）
+  grad_norm float — 裁剪前梯度总范数（clip_grad_norm_ 返回值）
+                    **记窗口内 max，不记末值**（K4/Q10）—— 见文末「窗口口径」
   margin    float — DPO 隐式奖励间隔 β·mean((logπc−logπref_c)−(logπr−logπref_r))
   acc       float — 上式的排序正确率（term>0 的配对占比）
   reward    float — GRPO/PPO 的平均奖励（GRPO 已产出；PPO 尚未）
@@ -27,6 +28,13 @@ WebUI 解析侧（webui/routers/training.py::_parse_metric_lines）优先消费�
 （结构化、零正则），未命中时回退旧格式正则 —— 哨兵行之前的老日志重放不受影响。
 哨兵行常粘连在 tqdm 帧尾（帧以 \r 分帧、无换行），解析按行内标记定位而非行首。
 从此人类可读行的格式不再承担机器接口职责，改格式不会静默断掉面板曲线。
+
+**窗口口径**（`log_interval` 一个窗口内会做多次 optimizer step，各键取法刻意不同）：
+  - `loss` / `margin` / `acc` / `reward` 记**窗口均值** —— 它们关心趋势，
+    单步/单批采样噪声大，记瞬时值会让曲线锯齿化、趋势不可读。
+  - `grad_norm` 记**窗口内 max** —— 它的用途是**预警发散**，靠的是**尖峰**；
+    只留末值会把窗口内其它 step 的尖峰无声丢掉（`log_interval=50` 时丢掉 49 个）。
+    累加用 `gleamlm.trainer.base_trainer.window_max`（None 安全：未启用裁剪时整窗为 null）。
 """
 
 import json

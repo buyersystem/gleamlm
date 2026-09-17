@@ -172,6 +172,18 @@ _TASKS: dict[str, dict[str, Any]] = {
             {"name": "lr_decay_steps", "type": "int", "label": "lr_decay_steps"},
             {"name": "weight_decay", "type": "float", "label": "weight_decay"},
             {"name": "seed", "type": "int", "label": "seed"},
+            {
+                "name": "val_data",
+                "type": "path",
+                "label": "验证数据",
+            },
+            {
+                # 留空 = 不传 CLI → 脚本回落 YAML（铁律 2）；填 0 = 关闭评估
+                "name": "eval_interval",
+                "type": "int",
+                "label": "val 评估间隔",
+                "help": "留空用 YAML（每 N 步；0 关闭）",
+            },
         ],
     },
     "dpo": {
@@ -214,6 +226,18 @@ _TASKS: dict[str, dict[str, Any]] = {
             {"name": "stable_ratio", "type": "float", "label": "stable_ratio"},
             {"name": "min_lr_ratio", "type": "float", "label": "min_lr_ratio"},
             {"name": "weight_decay", "type": "float", "label": "weight_decay"},
+            {
+                "name": "val_data",
+                "type": "path",
+                "label": "验证数据",
+            },
+            {
+                # 留空 = 不传 CLI → 脚本回落 YAML（铁律 2）；填 0 = 关闭评估
+                "name": "eval_interval",
+                "type": "int",
+                "label": "val 评估间隔",
+                "help": "留空用 YAML（每 N 步；0 关闭）",
+            },
         ],
     },
     "opd": {
@@ -296,6 +320,18 @@ _TASKS: dict[str, dict[str, Any]] = {
             {"name": "lora_alpha", "type": "int", "label": "lora_alpha"},
             {"name": "log_interval", "type": "int", "label": "log_interval"},
             {"name": "merge", "type": "bool", "label": "训练后合并 LoRA 权重"},
+            {
+                "name": "val_data",
+                "type": "path",
+                "label": "验证数据",
+            },
+            {
+                # 留空 = 不传 CLI → 脚本回落 YAML（铁律 2）；填 0 = 关闭评估
+                "name": "eval_interval",
+                "type": "int",
+                "label": "val 评估间隔",
+                "help": "留空用 YAML（每 N 步；0 关闭）",
+            },
         ],
     },
     "grpo": {
@@ -861,10 +897,15 @@ def _parse_metric_lines(run: TrainRun, lines: list[str]) -> list[tuple[str, int,
                 run._sentinel_seen = True  # H19: 帧回退从此对该 run 关闭（见 _TQDM_RE 分支）
                 step = int(rec["step"])
                 if rec.get("split") == "val":
-                    out += [
-                        ("val_loss", step, float(rec["loss"])),
-                        ("val_ppl", step, float(rec["ppl"])),
-                    ]
+                    # K8: val 记录泛化 —— loss 必有; ppl/margin/acc 均可选
+                    # （SFT val: loss+ppl; DPO val: loss+margin+acc, 无 ppl）
+                    out.append(("val_loss", step, float(rec["loss"])))
+                    if rec.get("ppl") is not None:
+                        out.append(("val_ppl", step, float(rec["ppl"])))
+                    if rec.get("margin") is not None:
+                        out.append(("val_margin", step, float(rec["margin"])))
+                    if rec.get("acc") is not None:
+                        out.append(("val_acc", step, float(rec["acc"])))
                 else:
                     out += [
                         ("loss", step, float(rec["loss"])),
@@ -1072,6 +1113,13 @@ def _pid_alive(pid: int) -> bool:
                 ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
                 capture_output=True,
                 text=True,
+                # 控制台工具按 **ANSI 代码页**（中文机 cp936）输出，不是 UTF-8。
+                # 若按 text=True 的默认编码解（UTF-8 模式 / PYTHONUTF8=1 时就是 UTF-8）：
+                # reader 线程抛 UnicodeDecodeError → stdout 变成 **None 且 run 不抛异常** →
+                # 下一行 `in out` 才 TypeError（本 except 只兜 OSError/SubprocessError）。
+                # 而且触发点很常见：查"已退出/无匹配"的 pid 时 tasklist 回的是中文提示语。
+                encoding="mbcs",
+                errors="replace",
                 timeout=15,
             ).stdout
         except (OSError, subprocess.SubprocessError):
@@ -1097,6 +1145,11 @@ def _pid_cmdline(pid: int) -> str | None:
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 capture_output=True,
                 text=True,
+                # 同 _pid_alive：控制台按 ANSI 代码页输出，默认编码解会在 reader 线程炸 →
+                # stdout=None → 下面的 .strip() 抛 AttributeError（本 except 也不兜）。
+                # 命令行里出现中文路径时必现。
+                encoding="mbcs",
+                errors="replace",
                 timeout=15,
             )
             line = r.stdout.strip()
@@ -1205,16 +1258,32 @@ class TrainManager:
                 )
             self._run = run
             model_rel = req.fields.get("model", "") or req.fields.get("model_path", "")
-            # val_data 表单留空时回落 model YAML data.val_data（与 manual/pretrain.py
-            # 裁决一致: --val_data None → YAML 值）。注入 run.fields 使 summary/状态行/
-            # DB 快照三处同源 —— 都与真实进程参数一致（状态行 hasValData 判断依赖它）
-            if req.task == "pretrain" and not run.fields.get("val_data") and model_rel:
-                try:
-                    yaml_cfg = load_config(_abs(model_rel), scope="training")
-                except Exception:
-                    yaml_cfg = None  # YAML 不可读: 静默（进程侧会暴露真实错误）
-                if yaml_cfg is not None and yaml_cfg.data.val_data:
-                    run.fields["val_data"] = yaml_cfg.data.val_data
+            # val_data 表单留空时回落 YAML 对应段的 val_data（与训练脚本裁决一致:
+            # --val_data None → YAML 值）。注入 run.fields 使 summary/状态行/DB 快照
+            # 三处同源 —— 都与真实进程参数一致（状态行 hasValData 判断依赖它）。
+            # YAML 来源: pretrain = model 字段（配置模板）; 后训练三段 = variant 解析出的
+            # 模板（_config_path, manual/my_configs 同名副本优先 —— 与 _build_command 同源）
+            if not run.fields.get("val_data"):
+                if req.task == "pretrain":
+                    yaml_abs = _abs(model_rel) if model_rel else ""
+                elif req.task in ("sft", "dpo", "sft_lora") and req.variant:
+                    yaml_abs = _config_path(req.variant)
+                else:
+                    yaml_abs = ""
+                if yaml_abs:
+                    try:
+                        yaml_cfg = load_config(yaml_abs, scope="training")
+                    except Exception:
+                        yaml_cfg = None  # YAML 不可读: 静默（进程侧会暴露真实错误）
+                    if yaml_cfg is not None:
+                        _yv = {
+                            "pretrain": yaml_cfg.data.val_data,
+                            "sft": yaml_cfg.sft.val_data,
+                            "dpo": yaml_cfg.dpo.val_data,
+                            "sft_lora": yaml_cfg.lora.val_data,
+                        }.get(req.task, "")
+                        if _yv:
+                            run.fields["val_data"] = _yv
             cfg: dict[str, Any] = {
                 "task": req.task,
                 "variant": req.variant,
@@ -1482,6 +1551,9 @@ def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
             data_file = str(cfg.sft.data_path)
             out["data_path"] = _entry(data_file, "file", os.path.dirname(data_file))
         out["save_dir"] = _entry(os.path.join(ck, _SFT_DIR))
+        if cfg.sft.val_data:
+            val_file = str(cfg.sft.val_data)
+            out["val_data"] = _entry(val_file, "file", os.path.dirname(val_file))
     elif task == "dpo":
         sft_dir = os.path.join(ck, _SFT_DIR)
         out["model_path"] = _entry(os.path.join(sft_dir, _SFT_BEST), "file", sft_dir)
@@ -1489,6 +1561,9 @@ def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
             data_file = str(cfg.dpo.data_path)
             out["data_path"] = _entry(data_file, "file", os.path.dirname(data_file))
         out["output_dir"] = _entry(os.path.join(ck, _DPO_DIR))
+        if cfg.dpo.val_data:
+            val_file = str(cfg.dpo.val_data)
+            out["val_data"] = _entry(val_file, "file", os.path.dirname(val_file))
     elif task == "opd":
         # 学生模型 = 上游 DPO 产物（dpo.py 落盘 dpo_best.pt）
         dpo_dir = os.path.join(ck, _DPO_DIR)
@@ -1508,6 +1583,9 @@ def _task_defaults(task: str, variant: str) -> tuple[dict[str, dict], str]:
             data_file = str(cfg.lora.data_path)
             out["data"] = _entry(data_file, "file", os.path.dirname(data_file))
         out["output_dir"] = _entry(os.path.join(ck, _LORA_DIR))
+        if cfg.lora.val_data:
+            val_file = str(cfg.lora.val_data)
+            out["val_data"] = _entry(val_file, "file", os.path.dirname(val_file))
     return out, (_rel(ck) if ck else "")
 
 

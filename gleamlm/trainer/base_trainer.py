@@ -9,7 +9,8 @@ Functions are grouped by concern:
   - Reproducibility: set_seed
   - AMP:            create_scaler, optimizer_step
   - Distributed:    ddp_setup, ddp_cleanup
-  - Eval:           evaluate
+  - Eval:           evaluate, evaluate_sft_loss
+  - Metrics:        window_max
   - Persistence:    save_checkpoint, load_checkpoint
 """
 
@@ -31,6 +32,7 @@ from torch.utils.data import DataLoader
 from gleamlm.inference.generate import generate_response
 from gleamlm.models.model import GleamLMModel
 from gleamlm.tokenizer.tokenizer import BBPETokenizer
+from gleamlm.utils.torch_utils import safe_autocast
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,22 @@ def optimizer_step(
     scaler.update()
     optimizer.zero_grad()
     return grad_norm
+
+
+def window_max(current: float | None, value: float | None) -> float | None:
+    """窗口内最大值累加（None 安全）—— K4/Q10 的 grad_norm 记录口径。
+
+    指标窗口 = "自上次哨兵行以来"，而一个 log_interval 窗口里会做多次 optimizer step。
+    grad_norm 记**窗口内 max 而非最后一个 step**：它的用途是预警发散，靠的是**尖峰**，
+    只留末值会把中间 log_interval-1 个 step 的尖峰无声丢掉（loss 记窗口均值是对的 ——
+    它关心趋势；两者口径刻意不同，见 gleamlm/utils/metrics.py 契约）。
+
+    `value=None`（未启用裁剪 / 该步未做 optimizer step）时保持 `current` 不变；
+    若整个窗口都没记录到，返回 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
+    """
+    if value is None:
+        return current
+    return value if current is None else max(current, value)
 
 
 # DDP: torchrun 设置 LOCAL_RANK/RANK/WORLD_SIZE 等环境变量；
@@ -295,6 +313,56 @@ def evaluate_generations(
         logger.info(f"[Assistant] {response}")
         logger.info("-" * 40)
     return results
+
+
+# SFT held-out 验证（K8）：面板 val 曲线的数据源
+
+
+@torch.no_grad()
+def evaluate_sft_loss(
+    model: nn.Module,
+    data_loader: DataLoader,
+    device: torch.device,
+    *,
+    shift: bool,
+) -> tuple[float, float]:
+    """SFT val：按监督 token 加权的 mask CE → (avg_loss, ppl)。
+
+    shift 显式声明位移约定——两条 SFT 轨相反, 用错会双重位移致 val 全错:
+    - shift=False: 数据集内已位移。core SFT（gleamlm/data/sft_data.py:
+      input_ids=full[:-1], labels=full[1:]），训练 loss 同位对齐同款。
+    - shift=True: 数据集未位移、循环内位移。LoRA（manual/sft_lora.py:
+      collate 同位对齐, 训练循环 logits[:, :-1] ↔ labels[:, 1:]）。
+    其余口径与训练一致（ignore_index=-100 的 mask CE、无 label smoothing、
+    bf16 autocast）—— train/val 同口径是硬约束（防 K1 类口径差被误读成
+    过拟合）。全 mask 批与训练侧同防线跳过。
+    """
+    criterion = nn.CrossEntropyLoss(reduction="sum", ignore_index=-100)
+    total_loss = 0.0
+    total_tokens = 0
+    for input_ids, labels in data_loader:
+        input_ids = input_ids.to(device)
+        labels = labels.to(device)
+        if int((labels != -100).sum()) == 0:
+            continue  # 无监督 token 的批：跳过（与训练循环同一防线）
+        with safe_autocast():
+            logits, _, _, _ = model(input_ids)
+            if shift:
+                pred_logits = logits[:, :-1, :].reshape(-1, logits.size(-1))
+                targets = labels[:, 1:].reshape(-1)
+            else:
+                pred_logits = logits.reshape(-1, logits.size(-1))
+                targets = labels.reshape(-1)
+            loss = criterion(pred_logits, targets)
+        total_loss += loss.item()
+        total_tokens += int((targets != -100).sum())
+    if total_tokens == 0:
+        # 空 val 集（val_data 为空文件 / 全部批被 precheck 剔除）若不报错,
+        # 会返回 (0.0, 1.0) —— 面板上显示成「完美模型」而不是「取数失败」,
+        # 属 J1 同族静默失败。与 evaluate_dpo_loss 的守卫对齐。
+        raise ValueError("SFT val 集为空（无监督 token）: 检查 val_data 与数据集 precheck")
+    avg_loss = total_loss / total_tokens
+    return avg_loss, math.exp(avg_loss)
 
 
 # 显存: 参数 2B + 梯度 2B + Adam 状态 12B (每参数 bytes)；

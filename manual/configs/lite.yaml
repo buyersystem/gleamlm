@@ -78,7 +78,8 @@ advanced:
 sft:
   # 显式锁定（batch_size 按 12G 卡显存下调）；Lite 重训时按实测调整
   # 数据与 nano 同源（data/<variant>/sft 为同一 sft_mix 拷贝，模型无关文本）;
-  # sft_mix = 基础集 3,415 + QA→SFT 10,000（13,413 条）→ nano 基线 loss 2.6283
+  # sft_mix = 基础集 3,415 + QA→SFT 10,000（13,413 条）→ nano 基线 loss 2.6283;
+  # split_val 切 5% held-out 后 train 12,742 / val 671（基线为旧全量口径, 不完全可比）
   epochs: 3
   batch_size: 4
   accumulate_grad: 8
@@ -91,7 +92,9 @@ sft:
   weight_decay: 0.01
   max_seq_len: 2048
   inject_system_ratio: 0.2
-  data_path: data/lite/sft/sft_mix.jsonl
+  data_path: data/lite/sft/sft_mix_train.jsonl
+  val_data: data/lite/sft/sft_mix_val.jsonl
+  eval_interval: 150           # val 评估间隔 (optimizer step): None = 每 epoch 末一次; 正数 = 每 N 步; ≤0 = 关闭
 
 # ---- DPO 偏好对齐 ----
 dpo:
@@ -106,7 +109,9 @@ dpo:
   max_seq_len: 2048
   warmup_ratio: 0.02
   min_lr_ratio: 0.05
-  data_path: data/lite/dpo/dpo_data.jsonl
+  data_path: data/lite/dpo/dpo_data_train.jsonl
+  val_data: data/lite/dpo/dpo_data_val.jsonl
+  eval_interval: 100           # val 评估间隔 (optimizer step): None = 每 epoch 末一次; 正数 = 每 N 步; ≤0 = 关闭
 
 # ---- OPD 在线策略蒸馏 ----
 opd:
@@ -146,7 +151,9 @@ lora:
   lora_r: 16
   lora_alpha: 32
   log_interval: 10
-  data_path: data/lite/sft/sft_mix.jsonl
+  data_path: data/lite/sft/sft_mix_train.jsonl
+  val_data: data/lite/sft/sft_mix_val.jsonl
+  eval_interval: 150           # val 评估间隔 (optimizer step): None = 每 epoch 末一次; 正数 = 每 N 步; ≤0 = 关闭
 
 # ---- 分布式 ----
 distributed:

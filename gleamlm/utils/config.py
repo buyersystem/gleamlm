@@ -480,6 +480,10 @@ class SFTConfig(BaseModel):
     max_seq_len: int = 1024
     inject_system_ratio: float = 0.2
     data_path: str = ""
+    # K8: held-out 验证集（split_val.py 产物 {stem}_val.jsonl）；空 = 不评估
+    val_data: str = ""
+    # val 评估间隔（optimizer step）: None = 每 epoch 末一次; 正数 = 每 N 步; ≤0 = 关闭
+    eval_interval: int | None = None
 
 
 class DPOConfig(BaseModel):
@@ -498,6 +502,10 @@ class DPOConfig(BaseModel):
     warmup_ratio: float = 0.02
     min_lr_ratio: float = 0.05
     data_path: str = ""
+    # K8: held-out 验证集（split_val.py 产物 {stem}_val.jsonl）；空 = 不评估
+    val_data: str = ""
+    # val 评估间隔（optimizer step）: None = 每 epoch 末一次; 正数 = 每 N 步; ≤0 = 关闭
+    eval_interval: int | None = None
 
 
 class OpdConfig(BaseModel):
@@ -548,6 +556,10 @@ class LoraConfig(BaseModel):
     lora_alpha: int = 16
     log_interval: int = 10
     data_path: str = ""
+    # K8: held-out 验证集（split_val.py 产物 {stem}_val.jsonl）；空 = 不评估
+    val_data: str = ""
+    # val 评估间隔（optimizer step）: None = 每 epoch 末一次; 正数 = 每 N 步; ≤0 = 关闭
+    eval_interval: int | None = None
 
 
 class DistributedConfig(BaseModel):

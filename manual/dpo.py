@@ -21,10 +21,12 @@ from gleamlm.trainer.base_trainer import (
     evaluate_generations,
     optimizer_step,
     set_seed,
+    window_max,
 )
 from gleamlm.trainer.dpo_loss import (
     compute_log_probs,
     dpo_loss,
+    evaluate_dpo_loss,
     get_reference_logps,
 )
 from gleamlm.trainer.schedulers import get_lr_cosine, get_lr_wsd
@@ -61,6 +63,18 @@ def main() -> None:
     parser.add_argument("--accumulate_grad", type=int, default=None, help="覆写梯度累积步数")
     parser.add_argument("--max_seq_len", type=int, default=None, help="覆写序列长度")
     parser.add_argument("--data_path", type=str, default=None, help="覆写 DPO 数据路径")
+    parser.add_argument(
+        "--val_data",
+        type=str,
+        default=None,
+        help="验证数据路径 (JSONL; 未传回落 YAML dpo.val_data; 空则不评估)",
+    )
+    parser.add_argument(
+        "--eval_interval",
+        type=int,
+        default=None,
+        help="val 评估间隔 (optimizer step; 未传回落 YAML dpo.eval_interval; 空 = 每 epoch 末一次)",
+    )
     parser.add_argument(
         "--model_path",
         type=str,
@@ -113,6 +127,11 @@ def main() -> None:
 
     model_path = cli_args.model_path or os.path.join(cfg.data.checkpoint_dir, "sft", "sft_best.pt")
     data_path = cli_args.data_path or cfg.dpo.data_path
+    # K8 val 裁决链（与 pretrain.py 同模式）: CLI 未传 → 回落 YAML dpo.val_data（空 = 不评估）
+    val_data = cli_args.val_data if cli_args.val_data is not None else (cfg.dpo.val_data or None)
+    eval_interval = (
+        cli_args.eval_interval if cli_args.eval_interval is not None else cfg.dpo.eval_interval
+    )
     output_dir = cli_args.output_dir or os.path.join(cfg.data.checkpoint_dir, "dpo")
 
     lr = cli_args.lr if cli_args.lr is not None else cfg.dpo.lr
@@ -199,6 +218,9 @@ def main() -> None:
     ref_model.load_state_dict(sft_state)
     for p in ref_model.parameters():
         p.requires_grad = False
+    # 参考模型恒 eval（get_reference_logps 内每次调用也会重申; 此处显式声明意图）——
+    # 训练循环只切 policy 的 mode, 若 ref 残留 train 且开 dropout, reference logps 会随机
+    ref_model.eval()
     print("Reference model: frozen")
 
     dataset = DPODataset(data_path, tokenizer, max_seq_len=max_seq_len)
@@ -215,6 +237,20 @@ def main() -> None:
         num_workers=0,
         pin_memory=True,
     )
+
+    # K8: held-out val（与 train 同 dpo_loss 口径；collate 复用）→ 面板 val 曲线
+    val_loader = None
+    if val_data:
+        val_dataset = DPODataset(val_data, tokenizer, max_seq_len=max_seq_len)
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=dpad_collate,
+            num_workers=0,
+            pin_memory=True,
+        )
+        print(f"Val pairs: {len(val_dataset)}")
 
     optimizer = torch.optim.AdamW(
         policy_model.parameters(),
@@ -262,9 +298,11 @@ def main() -> None:
     log_term_sum = 0.0
     log_term_pos = 0
     log_pairs = 0
-    # K4: 窗口内最近一次 optimizer_step 的裁剪前梯度范数（面板 grad_norm 曲线）。
-    # 未启用裁剪时恒为 None —— 哨兵行记 null，解析侧跳过、不产曲线点。
-    last_grad_norm = None
+    # K4/Q10: 窗口内各 optimizer step 的裁剪前总范数**最大值**（替代原 last_grad_norm 末值）——
+    # 预警发散靠尖峰：log_interval 窗口里只留末值会把中间 step 的尖峰无声丢掉
+    # （loss 记窗口均值是对的，它关心趋势；两者口径刻意不同）。
+    # 未启用裁剪时恒为 None → 哨兵行记 null → 解析侧跳过、不产曲线点。
+    log_grad_norm_max: float | None = None
 
     for epoch in range(epochs):
         policy_model.train()
@@ -310,10 +348,34 @@ def main() -> None:
                     lr_mult = get_lr_cosine(global_step, total_steps, warmup_ratio, min_lr_ratio)
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr * lr_mult
-                last_grad_norm = optimizer_step(
+                step_grad_norm = optimizer_step(
                     optimizer, scaler, parameters=policy_model.parameters(), clip_grad=clip_grad
                 )
+                log_grad_norm_max = window_max(log_grad_norm_max, step_grad_norm)
                 global_step += 1
+                # K8: per-step 模式 val 评估（eval_interval 为正数时）；epoch 末模式见循环外
+                if (
+                    val_loader is not None
+                    and eval_interval
+                    and eval_interval > 0
+                    and global_step % eval_interval == 0
+                ):
+                    policy_model.eval()
+                    val_loss, val_margin, val_acc = evaluate_dpo_loss(
+                        policy_model, ref_model, val_loader, beta, device
+                    )
+                    policy_model.train()
+                    print(
+                        f"  Val step {global_step}: loss={val_loss:.4f}  "
+                        f"margin={val_margin:.4f}  acc={val_acc:.3f}"
+                    )
+                    emit_metric(
+                        split="val",
+                        step=global_step,
+                        loss=val_loss,
+                        margin=val_margin,
+                        acc=val_acc,
+                    )
 
             batch_loss = loss.item() * denom  # 还原 /denom 缩放, 微批原始 loss
             epoch_loss += batch_loss
@@ -358,9 +420,10 @@ def main() -> None:
                     lr=cur_lr,
                     margin=dpo_margin,
                     acc=dpo_acc,
-                    grad_norm=last_grad_norm,
+                    grad_norm=log_grad_norm_max,
                 )
                 log_loss_sum = 0.0
+                log_grad_norm_max = None
                 log_batches = 0
                 log_term_sum = 0.0
                 log_term_pos = 0
@@ -383,9 +446,10 @@ def main() -> None:
                 lr=cur_lr,
                 margin=beta * log_term_sum / max(log_pairs, 1),
                 acc=log_term_pos / max(log_pairs, 1),
-                grad_norm=last_grad_norm,
+                grad_norm=log_grad_norm_max,
             )
             log_loss_sum = 0.0
+            log_grad_norm_max = None
             log_batches = 0
             log_term_sum = 0.0
             log_term_pos = 0
@@ -394,6 +458,26 @@ def main() -> None:
         print(f"\n--- DPO Epoch {epoch} 生成评估 ---")
         evaluate_generations(policy_model, tokenizer, eval_prompts, "DPO 生成评估")
         policy_model.train()
+
+        # K8: per-epoch 模式 val 评估（仅 eval_interval=None 时每 epoch 末一次）;
+        # 正数走训练内 per-step 通道（此处跳过以免同 step 双点）, ≤0 关闭评估
+        if val_loader is not None and eval_interval is None:
+            policy_model.eval()
+            val_loss, val_margin, val_acc = evaluate_dpo_loss(
+                policy_model, ref_model, val_loader, beta, device
+            )
+            policy_model.train()
+            print(
+                f"  Val epoch {epoch}: loss={val_loss:.4f}  "
+                f"margin={val_margin:.4f}  acc={val_acc:.3f}"
+            )
+            emit_metric(
+                split="val",
+                step=global_step,
+                loss=val_loss,
+                margin=val_margin,
+                acc=val_acc,
+            )
 
         cur_lr = optimizer.param_groups[0]["lr"]
         print(f"\nEpoch {epoch}: dpo_loss={avg_loss:.4f}, lr={cur_lr:.2e}")

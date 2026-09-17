@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 from gleamlm.utils.torch_utils import safe_autocast
 
@@ -47,3 +48,50 @@ def get_reference_logps(
     ref_cho = compute_log_probs(c_logits.float(), chosen_ids, chosen_mask)
     ref_rej = compute_log_probs(r_logits.float(), rejected_ids, rejected_mask)
     return ref_cho, ref_rej
+
+
+# DPO held-out 验证（K8）：面板 val 曲线的数据源
+
+
+@torch.no_grad()
+def evaluate_dpo_loss(
+    policy_model: torch.nn.Module,
+    ref_model: torch.nn.Module,
+    data_loader: DataLoader,
+    beta: float,
+    device: torch.device,
+) -> tuple[float, float, float]:
+    """DPO val：与训练同式的 dpo_loss / margin / acc → (loss, margin, acc)。
+
+    口径与 dpo.py 训练循环严格一致（get_reference_logps + compute_log_probs +
+    dpo_loss, bf16 autocast）—— train/val 同口径是硬约束。按 pair 数加权聚合
+    （各批对数不等时防小批权重被放大）；margin=β·mean(term)、acc=mean(term>0)
+    与训练侧监控量定义同源。模型模式由调用方管理（前后自行 eval/train）。
+    """
+    total_loss = 0.0
+    total_term = 0.0
+    total_pos = 0
+    total_pairs = 0
+    for batch in data_loader:
+        chosen_ids = batch["chosen_ids"].to(device)
+        rejected_ids = batch["rejected_ids"].to(device)
+        chosen_mask = batch["chosen_mask"].to(device)
+        rejected_mask = batch["rejected_mask"].to(device)
+        ref_cho, ref_rej = get_reference_logps(
+            ref_model, chosen_ids, rejected_ids, chosen_mask, rejected_mask
+        )
+        with safe_autocast():
+            c_logits, _, _, _ = policy_model(chosen_ids)
+            r_logits, _, _, _ = policy_model(rejected_ids)
+            policy_cho = compute_log_probs(c_logits.float(), chosen_ids, chosen_mask)
+            policy_rej = compute_log_probs(r_logits.float(), rejected_ids, rejected_mask)
+            loss = dpo_loss(policy_cho, policy_rej, ref_cho, ref_rej, beta)
+        term = (policy_cho - ref_cho) - (policy_rej - ref_rej)
+        n = term.numel()
+        total_loss += loss.item() * n
+        total_term += term.sum().item()
+        total_pos += int((term > 0).sum().item())
+        total_pairs += n
+    if total_pairs == 0:
+        raise ValueError("DPO val 集为空: 检查 val_data 与 dpad_collate")
+    return total_loss / total_pairs, beta * total_term / total_pairs, total_pos / total_pairs
