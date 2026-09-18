@@ -569,7 +569,12 @@ def test_train_orphan_adopt_and_stop(api):
     script_abs = os.path.join(T.ROOT_DIR, script_rel)
     with open(script_abs, "w", encoding="utf-8") as f:
         f.write("import time\ntime.sleep(120)\n")
-    proc = subprocess.Popen([sys.executable, script_abs])
+    # 与面板 spawn 时同一姿势新开进程组（面板用 start_new_session/
+    # CREATE_NEW_PROCESS_GROUP）。否则这个「遗留进程」留在 pytest 自己的
+    # 进程组里，Linux 上 /api/train/stop 的 killpg 会把 pytest 一并
+    # SIGTERM —— 正是 CI Ubuntu job 报 cancelled 的形态。
+    # start_new_session 在 Windows 被忽略，故可无条件传。
+    proc = subprocess.Popen([sys.executable, script_abs], start_new_session=True)
     log_path = os.path.join(T.LOGS_DIR, "run_ft_orphan.log")
     try:
         # 历史行（上一代面板已解析入库）—— 接管后不得重放（metrics 无唯一约束）

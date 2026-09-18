@@ -1246,6 +1246,16 @@ class TrainManager:
                     "PYTHONUNBUFFERED": "1",
                 }
             )
+            # 进程组隔离: 子进程必须自成一组。否则它留在面板自身的进程组里，
+            # stop() 的 os.killpg(os.getpgid(pid)) 杀的就是「同一个组」——
+            # 连面板自己（CI 里则是 pytest）一起 SIGTERM。
+            # Windows 靠 CREATE_NEW_PROCESS_GROUP，POSIX 对应的是
+            # start_new_session(setsid)；start_new_session 在 Windows 被忽略，
+            # 故可无条件传。
+            # 2026-09-18 查明: 此前 POSIX 恒为 0，即「杀自己」——
+            # CI 的 Ubuntu 三个 job 自 2026-09-07 起每轮 "The operation was
+            # canceled." 就是 pytest 被自己触发的 stop 杀掉所致
+            # （Windows 走 taskkill /T 只杀子进程树，不误伤，所以一直绿）。
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             with open(run.log_path, "wb") as logf:
                 run.proc = subprocess.Popen(
@@ -1255,6 +1265,7 @@ class TrainManager:
                     stderr=subprocess.STDOUT,
                     env=env,
                     creationflags=creationflags,
+                    start_new_session=True,
                 )
             self._run = run
             model_rel = req.fields.get("model", "") or req.fields.get("model_path", "")
