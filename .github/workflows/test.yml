@@ -3,6 +3,20 @@ name: Test
 on:
   push:
     branches: [main, master]
+    # 纯文档/资源改动不触发测试。每次 push 的 job 数 = 整个 matrix 各 checkout
+    # 一次，改 README 也跑全套测试，既白占排队时间也污染 Insights 的 clone 统计
+    #（2026-09 实测：近 14 天 1,072 次 clone 里约 44% 是自家 CI 的 checkout）。
+    # pull_request 有意不过滤 —— 外部 PR 是别人写的代码，宁可多跑。
+    # ⚠️ 若将来给 main 加分支保护并要求 test 必过，paths-ignore 会让被跳过的
+    # push 停在 "Expected — Waiting for status"，届时须改成 paths 白名单。
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - "assets/**"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".gitignore"
+
   pull_request:
     branches: [main, master]
 
@@ -11,9 +25,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # 组合数 = 每次 push 的 checkout 次数。原为 2 OS × 3 Python = 6 个 job，
+      # 收敛到 3 个：两个 OS 各验一次主力版本，Python 下限（requires-python
+      # 声明 >=3.10）在 Linux 上单独验一次。
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
 
     steps:
       - uses: actions/checkout@v4
