@@ -1,8 +1,8 @@
-"""GleamLM 手工轨 checkpoint → HF Qwen3 格式（供 vLLM 原生加载）。
+"""GleamLM 手写轨 checkpoint → HF Qwen3 格式（供 vLLM 原生加载）。
 
 背景:
-  手工轨模型（GleamLMModel，RMSNorm/RoPE/GQA/QK-Norm/SwiGLU/weight tying）
-  与 Qwen3 架构逐项同构。把手工轨 checkpoint（sft_best.pt / dpo_best.pt）
+  手写轨模型（GleamLMModel，RMSNorm/RoPE/GQA/QK-Norm/SwiGLU/weight tying）
+  与 Qwen3 架构逐项同构。把手写轨 checkpoint（sft_best.pt / dpo_best.pt）
   映射为 Qwen3 HF 键，输出 config.json + model.safetensors + tokenizer，
   vLLM 原生支持 Qwen3ForCausalLM，无需 trust_remote_code。
 
@@ -26,9 +26,9 @@ import torch
 
 
 def convert(gleamlm_ckpt: str, output_dir: str, tokenizer_dir: str | None) -> str:
-    """手工轨 checkpoint → Qwen3 HF 目录。
+    """手写轨 checkpoint → Qwen3 HF 目录。
 
-    键映射（手工轨分离键 → HF Qwen3）:
+    键映射（手写轨分离键 → HF Qwen3）:
       model.token_embed.weight          → model.embed_tokens.weight
       model.layers.N.attn_norm.weight   → model.layers.N.input_layernorm.weight
       model.layers.N.ffn_norm.weight    → model.layers.N.post_attention_layernorm.weight
@@ -111,7 +111,7 @@ def convert(gleamlm_ckpt: str, output_dir: str, tokenizer_dir: str | None) -> st
 
         BBPETokenizer.load(tokenizer_dir).export_to_hf_format(output_dir)
 
-    print(f"手工轨 → Qwen3 HF 导出完成: {gleamlm_ckpt} → {output_dir}")
+    print(f"手写轨 → Qwen3 HF 导出完成: {gleamlm_ckpt} → {output_dir}")
     print(
         f"  {cfg['num_layers']}L × {cfg['d_model']}d, "
         f"GQA {cfg['num_heads']}/{cfg['num_kv_heads']}, "
@@ -125,9 +125,9 @@ if __name__ == "__main__":
     from gleamlm.utils.logging_utils import setup_cli_logging
 
     setup_cli_logging()
-    p = argparse.ArgumentParser(description="手工轨 checkpoint → Qwen3 HF (vLLM)")
+    p = argparse.ArgumentParser(description="手写轨 checkpoint → Qwen3 HF (vLLM)")
     p.add_argument(
-        "--input", required=True, help="手工轨 checkpoint .pt (sft_best.pt / dpo_best.pt)"
+        "--input", required=True, help="手写轨 checkpoint .pt (sft_best.pt / dpo_best.pt)"
     )
     p.add_argument("--output", required=True, help="输出目录")
     p.add_argument("--tokenizer-path", default=None, help="BBPE tokenizer 目录")

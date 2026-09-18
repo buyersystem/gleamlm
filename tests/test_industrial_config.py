@@ -1,7 +1,7 @@
-"""工业轨配置护栏测试 — pretrain 配置必读键齐全 + 与手动轨关键值对齐。
+"""工业轨配置护栏测试 — pretrain 配置必读键齐全 + 与手写轨关键值对齐。
 
 背景: 工业轨 industrial/configs/*.yaml 是 Megatron 键名语义的自包含配置,
-其与手动轨 manual/configs/nano.yaml 的对齐承诺 (lr / z-loss / 有效 batch /
+其与手写轨 manual/configs/nano.yaml 的对齐承诺 (lr / z-loss / 有效 batch /
 架构维度) 此前只活在注释里; 本文件用断言锁死: 任一轨被单独改动让对齐
 断裂, 用例先红, 必须显式决定哪边为真再同步另一边。
 """
@@ -68,7 +68,7 @@ def test_industrial_nano_aligns_with_manual_nano() -> None:
     with open(_MAN / "nano.yaml", encoding="utf-8") as f:
         man = yaml.safe_load(f)
 
-    # 架构: Megatron 键名 ↔ 手动轨键名
+    # 架构: Megatron 键名 ↔ 手写轨键名
     mi, mm = ind["model"], man["model"]
     assert mi["hidden_size"] == mm["d_model"]
     assert mi["num_layers"] == mm["num_layers"]

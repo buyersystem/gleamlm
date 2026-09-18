@@ -1,15 +1,15 @@
-"""TRL 奖励守卫 — 工业轨 GRPO/RLOO 与 manual 轨同口径的 1a/1b 防御。
+"""TRL 奖励守卫 — 工业轨 GRPO/RLOO 与 手写轨同口径的 1a/1b 防御。
 
 背景（对齐 manual/grpo.py 的 1a/1b 守门）:
   1a 截断奖励守卫: 未以 eos 收尾的截断回答 clamp(max=0) —— 半截文本碰巧
      包含 ground_truth 不再拿 +1.0, 只惩罚不受益。
-  1b 零方差审计: TRL 的 rollout 在 trainer 内部, 无法像 manual 轨那样动态
+  1b 零方差审计: TRL 的 rollout 在 trainer 内部, 无法像 手写轨那样动态
      重采样替换; 本模块按组统计零方差组数（训练结束打印 summary）。TRL
-     内部零方差组优势≈0 —— 无梯度贡献（等价 manual 轨"末轮仍零方差的行
+     内部零方差组优势≈0 —— 无梯度贡献（等价 手写轨"末轮仍零方差的行
      不进 loss"）, 只浪费采样预算、不破坏训练; 数据侧根治走
      data_tools/rl/filter_by_difficulty.py（pass_rate>0.9 的过易题预剔除）。
 
-奖励口径与 manual 轨共用 gleamlm.trainer.rl_trainer.compute_reward
+奖励口径与 手写轨共用 gleamlm.trainer.rl_trainer.compute_reward
 （有 gt 规则匹配 / 无 gt 启发式分级）, 替换原来"无 gt 时非空全 +1.0"的
 长度兜底 —— 常数奖励组内零方差、无优势梯度, 训练实为纯 KL 拉扯。
 
@@ -101,7 +101,7 @@ def build_reward_fn(eos_token_id: int | None, num_generations: int) -> tuple[Any
         ground_truth: list[Any] | None = None,
         **kwargs: Any,
     ) -> list[float]:
-        """规则 + 启发式奖励（口径同 manual 轨 compute_reward）+ 1a 截断守卫。
+        """规则 + 启发式奖励（口径同 手写轨 compute_reward）+ 1a 截断守卫。
 
         TRL 传入 completions（str 列表）、completion_ids（list[list[int]],
         生成的实际 token, 含 eos 若已生成）与数据集各列（ground_truth）。

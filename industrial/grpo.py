@@ -35,9 +35,9 @@ GRPO 核心设计:
   - 1a 截断奖励守卫: 未以 eos 收尾的回答 clamp(max=0) —— 半截文本碰巧
     包含 ground_truth 不再拿 +1.0, 只惩罚不受益
   - 1b 零方差审计: 训练结束打印零方差组占比; TRL rollout 内嵌于 trainer,
-    无法像 manual 轨动态重采样 (组内全同 → 优势≈0, 只费采样预算)
+    无法像 手写轨动态重采样 (组内全同 → 优势≈0, 只费采样预算)
   - 奖励口径: 有 ground_truth 规则匹配 (+1/0/-1); 无 gt 启发式分级
-    (与 manual 轨 compute_reward 同口径), 不再是"非空全 +1.0"的常数兜底
+    (与 手写轨 compute_reward 同口径), 不再是"非空全 +1.0"的常数兜底
 
 注意:
   GRPOTrainer 自动为每个 prompt 采样 num_generations 个 response，

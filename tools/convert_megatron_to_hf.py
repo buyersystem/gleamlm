@@ -6,7 +6,7 @@
 权重映射依据（实测 megatron-core 0.16 mcore 布局）:
   - fused linear_qkv 按 [num_query_groups, (qpg+2)*head_dim] 排布:
     每组 = q(qpg 个 q head) | k(head_dim) | v(head_dim)
-    → 拆回 W_q/W_k/W_v（手工轨 head-major 布局）
+    → 拆回 W_q/W_k/W_v（手写轨 head-major 布局）
   - GLU linear_fc1 前半 = silu 门 (gate)、后半 = up → 拆回 W_gate/W_up
   - *._extra_state 为 TE/fsdp 占位 (None)，直接丢弃
 

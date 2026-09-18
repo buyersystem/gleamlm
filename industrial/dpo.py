@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=2)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=2)
     parser.add_argument("--max_seq_length", type=int, default=1024)
-    # beta 定稿 0.3 (与 manual 轨同步): 曾默认 0.1 致 KL 约束偏弱、输出漂移
+    # beta 定稿 0.3 (与手写轨同步): 曾默认 0.1 致 KL 约束偏弱、输出漂移
     # (manual/configs/nano.yaml 历史坑①), 工业轨不得重演
     parser.add_argument("--beta", type=float, default=0.3, help="DPO beta (KL penalty)")
     parser.add_argument(

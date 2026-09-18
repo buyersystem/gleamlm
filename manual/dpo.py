@@ -54,7 +54,7 @@ def main() -> None:
         "--config_dir",
         type=str,
         default=os.path.join(_ROOT_DIR, "manual", "configs"),
-        help="YAML 配置目录 (manual 轨专用)",
+        help="YAML 配置目录 (手写轨专用)",
     )
     parser.add_argument("--epochs", type=int, default=None, help="覆写训练轮数")
     parser.add_argument("--lr", type=float, default=None, help="覆写学习率")

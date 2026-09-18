@@ -1,12 +1,12 @@
 """工业轨 pretrain 配置校验 — Megatron 键名体系的轻量必读护栏。
 
-与手动轨 gleamlm/utils/config.py 的关系: 两套体系键名不同。手动轨是
+与手写轨 gleamlm/utils/config.py 的关系: 两套体系键名不同。手写轨是
 Pydantic 单轨 + scope 必读校验; 工业轨是 Megatron 语义自包含 YAML
 (model/parallel/training 三段), 这里只做消费端必读键校验, 不做建模。
 
 背景: industrial/pretrain.py 消费端曾用 .get(key, 默认值) 静默兜底
 (lr_decay_style 默认 cosine / z_loss_weight 默认 0 / save_interval 默认 0),
-yaml 忘写会静默跑错调度或丢 z-loss/checkpoint —— 与手动轨历史漂移
+yaml 忘写会静默跑错调度或丢 z-loss/checkpoint —— 与手写轨历史漂移
 (dpo.lr 1e-7、stable_ratio 0.0) 同型。现改为 load 即校验: 缺失列清单
 报错, 不再静默回退。注意本模块为纯 stdlib 轻量模块 (无 megatron/torch
 依赖), 供 pretrain.py 与 tests 双侧复用。

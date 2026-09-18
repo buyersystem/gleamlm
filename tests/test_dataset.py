@@ -260,9 +260,9 @@ class TestEstimateTokensPerRow:
 class TestMegatronCompat:
     """验证 pack.write_indexed_dataset 产物与 megatron.core IndexedDataset 兼容。
 
-    这是"手工数据对接工业"的格式契约测试：pack 写出的 .bin/.idx
+    这是"手写轨数据对接工业"的格式契约测试：pack 写出的 .bin/.idx
     必须能被 megatron 的 IndexedDataset 原样读回，逐文档 token 一致。
-    防止格式回归导致工业轨 (industrial/pretrain.py) 无法消费手工数据。
+    防止格式回归导致工业轨 (industrial/pretrain.py) 无法消费手写轨数据。
     """
 
     @staticmethod

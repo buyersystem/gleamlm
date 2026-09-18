@@ -595,7 +595,7 @@ def parse_args():
         "--config_dir",
         type=str,
         default=os.path.join(_ROOT_DIR, "manual", "configs"),
-        help="YAML 配置目录 (manual 轨专用)",
+        help="YAML 配置目录 (手写轨专用)",
     )
     p.add_argument("--model", type=str, required=True, help="Student checkpoint")
     p.add_argument(
